@@ -95,57 +95,55 @@ class animal {
 
 			if (this.currentTarget != null) {
 				let angle = Math.atan2(this.currentTarget.positionY - this.positionY, this.currentTarget.positionX - this.positionX);
-				let variantion_y = Math.abs(Math.sin(angle));
-				let variantion_x = Math.abs(Math.cos(angle));
+				let var_y = Math.abs(Math.sin(angle));
+				let var_x = Math.abs(Math.cos(angle));
 
 				if (this.positionX > this.currentTarget.positionX) {
-					this.positionX -= 0.5 * variantion_x;
+					this.positionX -= 0.5 * var_x;
 				} else {
-					this.positionX += 0.5 * variantion_x;
+					this.positionX += 0.5 * var_x;
 				}
 
 				if (this.positionY > this.currentTarget.positionY) {
-					this.positionY -= 0.5 * variantion_y;
+					this.positionY -= 0.5 * var_y;
 				} else {
-					this.positionY += 0.5 * variantion_y;
+					this.positionY += 0.5 * var_y;
 				}
 			}
 		}
 		if (this.walkStrategy == 'fleeing') {
-			var smallestDistance = 1000000;
-
+			// Calculate the total danger from nearby animals
+			let closestHunterDistance = 9999999;
+			let closestHunter = null;
 			for (let i = 0; i < window.animals.length; i++) {
-				const animal = window.animals[i];
-
-				if (this.consumes.includes(animal.kind) && this != animal && this.family != animal.family) {
-					var distance = this.getDistanceTo(animal);
-					if (distance < smallestDistance) {
-						smallestDistance = distance;
-						this.currentTarget = animal;
+				const hunter = window.animals[i];
+				if (this != hunter && hunter.consumes.includes(this.kind) && this.family != hunter.family) {
+					const distance = this.getDistanceTo(hunter);
+					if (distance < closestHunterDistance) {
+						closestHunterDistance = distance;
+						closestHunter = hunter;
 					}
-				} else {
-					continue;
-				}
-
-			}
-
-			if (this.currentTarget != null) {
-				let angle = Math.atan2(this.currentTarget.positionY - this.positionY, this.currentTarget.positionX - this.positionX);
-				let variantion_y = Math.abs(Math.sin(angle));
-				let variantion_x = Math.abs(Math.cos(angle));
-
-				if (this.positionX > this.currentTarget.positionX) {
-					this.positionX -= 0.5 * variantion_x;
-				} else {
-					this.positionX += 0.5 * variantion_x;
-				}
-
-				if (this.positionY > this.currentTarget.positionY) {
-					this.positionY -= 0.5 * variantion_y;
-				} else {
-					this.positionY += 0.5 * variantion_y;
 				}
 			}
+			
+			let angle = Math.atan2(this.positionY - closestHunter.positionY, this.positionX - closestHunter.positionX);
+			let var_y = Math.abs(Math.sin(angle));
+			let var_x = Math.abs(Math.cos(angle));
+
+			if (this.positionX > closestHunter.positionX) {
+				this.positionX += 0.5 * var_x;
+			} else {
+				this.positionX -= 0.5 * var_x;
+			}
+
+			if (this.positionY > closestHunter.positionY) {
+				this.positionY += 0.5 * var_y;
+			} else {
+				this.positionY -= 0.5 * var_y;
+			}
+		}
+		if (this.walkStrategy == 'relax') {
+			return;
 		}
 
 		this.clock = 0;
@@ -171,13 +169,33 @@ class animal {
 
 			if (this.consumes.includes(target.kind) && this != target && this.family != target.family) {
 				var distance = this.getDistanceTo(target);
-				if (distance < 5) {
-					this.consume(target);
-				}
+				if (distance < 5) this.consume(target);
 			} else {
 				continue;
 			}
 
+		}
+	}
+
+	analyze() {
+
+		// Calculate the total danger from nearby animals
+		let closestHunter = 9999999;
+		for (let i = 0; i < window.animals.length; i++) {
+			const hunter = window.animals[i];
+			if (this != hunter && hunter.consumes.includes(this.kind) && this.family != hunter.family) {
+				const distance = this.getDistanceTo(hunter);
+				if (distance < closestHunter) closestHunter = distance;
+			}
+		}
+
+		// Decide whether to flee or hunt based on the danger threshold
+		if (closestHunter < 50) {
+			this.walkStrategy = 'fleeing';
+		} else if (this.energy < 400) {
+			this.walkStrategy = 'seekFood';
+		} else {
+			this.walkStrategy = 'relax';
 		}
 	}
 
@@ -192,6 +210,8 @@ class animal {
 
 	live() {
 		if (!config.run) return;
+
+		if (this.walkStrategy != 'static') this.analyze();
 
 		this.walk();
 		this.feed();
@@ -217,8 +237,8 @@ class vegetarian extends animal {
 		this.kind = 'veg';
 		this.consumes = ['tree'];
 		this.walkStrategy = 'seekFood';
-		this.color = 'green';
-		this.clockAction = 0.5;
+		this.color = '#33aa00aa';
+		this.clockAction = 2;
 		this.energyGain = -0.25;
 
 		this.maxEnergy = 100000000;
@@ -232,11 +252,12 @@ class carnivore extends animal {
 		this.kind = 'carn';
 		this.consumes = ['veg', 'carn'];
 		this.walkStrategy = 'seekFood';
-		this.color = '#ff0033';
+		this.color = '#ff0033aa';
 		this.width = 2;
-		this.energyGain = -0.5;
+		this.energyGain = -0.1;
+		this.energy = 100;
 
-		this.clockAction = 0.9;
+		this.clockAction = 0.1;
 
 		this.maxEnergy = 100000000;
 		this.procriationChance = 0.001;
@@ -293,7 +314,7 @@ function draw() {
 
 		window.ctx.font ='8px Monaco';
 		window.ctx.fillStyle = '#000';
-		window.ctx.fillText(animal.family, animal.positionX, animal.positionY);
+		window.ctx.fillText(animal.family + "-" + animal.walkStrategy, animal.positionX, animal.positionY);
 
 		if (window.config.drawTargets && animal.currentTarget !== null) {
 			ctx.beginPath();
