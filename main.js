@@ -299,7 +299,12 @@ function init() {
 	window.requestAnimationFrame(draw);
 }
 
+const stats = new Stats();
+stats.showPanel(0); // 0: fps, 1: ms, 2: mb, 3+: custom
+
 function draw() {
+	stats.begin();
+
 	window.ctx.clearRect(0, 0, window.config.worldWidth, window.config.worldHeight); // clear canvas
 
 	animals.forEach(animal => {
@@ -326,9 +331,54 @@ function draw() {
 		removeDead();
 	});
 
+	stats.end();
+
 	window.requestAnimationFrame(draw);
 }
 
+// function draw() {
+//     const ctx = window.ctx;
+//     const config = window.config;
+//     const twoPi = 2 * Math.PI;
+//     const buffer = document.createElement('canvas');
+//     buffer.width = config.worldWidth;
+//     buffer.height = config.worldHeight;
+//     const bufferCtx = buffer.getContext('2d');
+
+//     bufferCtx.clearRect(0, 0, config.worldWidth, config.worldHeight); // clear buffer
+
+//     animals.forEach(animal => {
+//         animal.live();
+
+//         var width = animal.getWidth();
+
+//         bufferCtx.beginPath();
+//         bufferCtx.arc(animal.positionX, animal.positionY, width, 0, twoPi);
+//         bufferCtx.fillStyle = animal.color;
+//         bufferCtx.fill();
+
+//         bufferCtx.font ='8px Monaco';
+//         bufferCtx.fillStyle = '#000';
+//         bufferCtx.fillText(animal.family + "-" + animal.walkStrategy, animal.positionX, animal.positionY);
+
+//         if (config.drawTargets && animal.currentTarget !== null) {
+//             bufferCtx.beginPath();
+//             bufferCtx.moveTo(animal.positionX, animal.positionY);
+//             bufferCtx.lineTo(animal.currentTarget.positionX, animal.currentTarget.positionY);
+//             bufferCtx.stroke();
+//         }
+
+//         removeDead();
+//     });
+
+//     // Copy the image from the buffer to the visible canvas
+//     ctx.drawImage(buffer, 0, 0);
+
+//     window.requestAnimationFrame(draw);
+// }
+
 window.onload = function () {
+	document.body.appendChild( stats.dom );
+	
 	this.init();
 };
