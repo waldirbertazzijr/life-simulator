@@ -1,384 +1,335 @@
 // Simulation configuration
-var config = {
-	'drawTargets': true,
-	'worldWidth': 1200,
-	'worldHeight': 600,
+const config = {
+    drawTargets: false,
+    
+    energyBar: {
+        enabled: true,
+        width: 30,
+        height: 2,
+    },
 
-	'tree_population': [200, 300],
-	'herbivore_population': [20, 30],
-	'carnivore_poulation': [5, 10],
+    procreationAnimations: {
+        enabled: true,
+        radius: 10
+    },
 
-	'run': true
-}
+    worldWidth: 1200,
+    worldHeight: 600,
+    treePopulation: [200, 300],
+    herbivorePopulation: [20, 30],
+    carnivorePopulation: [5, 10],
+    run: true,
+};
 
-// Some helpers
-function randomInt(min, max) {
-	return min + Math.floor((max - min) * Math.random());
-}
-function removeDead() {
-	for (let i = 0; i < animals.length; i++) {
-		const element = animals[i];
-		if (element.energy <= 0) {
-			animals.splice(i, 1);
-		}
-	}
-}
+// Utility functions
+const randomInt = (min, max) => min + Math.floor((max - min) * Math.random());
 
+const removeDead = () => {
+    animals = animals.filter(animal => animal.energy > 0);
+};
 
 // Animal array
-var animals = [];
+let animals = [];
 
-class animal {
-	constructor() {
-		this.kind = 'animal'; // Kind (can be 3: tree, herbivore, carnivore)
+// Load images
+const treeImage = new Image();
+treeImage.src = './tree.png'; // Replace with actual path
 
-		this.positionX = randomInt(0, window.config.worldWidth);
-		this.positionY = randomInt(0, window.config.worldHeight);
+const herbivoreImage = new Image();
+herbivoreImage.src = './herbivore.png'; // Replace with actual path
 
-		// Clock stuff
-		this.clockAction = 1; // Clocks until action is done.
-		this.clock = 0; // Internal clock.
+const carnivoreImage = new Image();
+carnivoreImage.src = './carnivore.png'; // Replace with actual path
 
-		// Width and energy
-		this.width = 5;
-		this.energy = 100;
-		this.maxEnergy = 500;
-		this.energyGain = -1; // Energy expenditure rate
-		this.procriationChance = 0.0001;
+class Animal {
+    constructor(kind, energyGain, procriationChance, walkStrategy = 'static', image) {
+        this.kind = kind;
+        this.positionX = randomInt(0, config.worldWidth);
+        this.positionY = randomInt(0, config.worldHeight);
+        this.clockAction = 1;
+        this.clock = 0;
+        this.energy = 100;
+        this.maxEnergy = 500;
+        this.energyGain = energyGain;
+        this.procriationChance = procriationChance;
+        this.walkStrategy = walkStrategy;
+        this.currentTarget = null;
+        this.consumes = [];
+        this.family = `_${Math.random().toString(36).substring(2, 9)}`;
+        this.image = image;
+    }
 
-		// Follow target
-		this.walkStrategy = 'static'; // Current survival strategy
-		this.currentTarget = null;
-		this.consumes = [];
+    getDistanceTo(animal) {
+        return Math.hypot(this.positionX - animal.positionX, this.positionY - animal.positionY);
+    }
 
-		// Heritage
-		this.family = '_' + Math.random().toString(36).substring(2, 9);
-	}
+    walk() {
+        this.clock++;
+        if (this.clock < this.clockAction) return;
 
-	getDistanceTo(animal) {
-		return Math.sqrt(
-			Math.pow(this.positionX - animal.positionX, 2) + Math.pow(this.positionY - animal.positionY, 2)
-		);
-	}
+        this.energy += this.energyGain;
+        this.energy = Math.min(this.energy, this.maxEnergy);
 
-	walk() {
+        if (this.walkStrategy === 'static') return;
 
-		this.clock++;
-		if (this.clock < (this.clockAction)) return;
+        if (this.walkStrategy === 'random') {
+            this.positionX += randomInt(-1, 2);
+            this.positionY += randomInt(-1, 2);
+        } else if (this.walkStrategy === 'seekFood') {
+            this.seekFood();
+        } else if (this.walkStrategy === 'fleeing') {
+            this.flee();
+        }
 
-		this.energy += this.energyGain;
-		this.energy = Math.min(this.energy, this.maxEnergy);
+        this.clock = 0;
+    }
 
-		if (this.walkStrategy == 'static') return;
-		if (this.walkStrategy == 'random') {
-			this.positionX += randomInt(-1, 2);
-			this.positionY += randomInt(-1, 2);
-			return;
-		}
-		if (this.walkStrategy == 'seekFood') {
-			var smallestDistance = 1000000;
+    seekFood() {
+        let smallestDistance = Infinity;
 
-			for (let i = 0; i < window.animals.length; i++) {
-				const animal = window.animals[i];
+        for (const animal of animals) {
+            if (this.consumes.includes(animal.kind) && this !== animal && this.family !== animal.family) {
+                const distance = this.getDistanceTo(animal);
+                if (distance < smallestDistance) {
+                    smallestDistance = distance;
+                    this.currentTarget = animal;
+                }
+            }
+        }
 
-				if (this.consumes.includes(animal.kind) && this != animal && this.family != animal.family) {
-					var distance = this.getDistanceTo(animal);
-					if (distance < smallestDistance) {
-						smallestDistance = distance;
-						this.currentTarget = animal;
-					}
-				} else {
-					continue;
-				}
+        if (this.currentTarget) {
+            this.moveToTarget(this.currentTarget);
+        }
+    }
 
-			}
+    flee() {
+        let closestHunter = null;
+        let closestHunterDistance = Infinity;
 
-			if (this.currentTarget != null) {
-				let angle = Math.atan2(this.currentTarget.positionY - this.positionY, this.currentTarget.positionX - this.positionX);
-				let var_y = Math.abs(Math.sin(angle));
-				let var_x = Math.abs(Math.cos(angle));
+        for (const hunter of animals) {
+            if (this !== hunter && hunter.consumes.includes(this.kind) && this.family !== hunter.family) {
+                const distance = this.getDistanceTo(hunter);
+                if (distance < closestHunterDistance) {
+                    closestHunterDistance = distance;
+                    closestHunter = hunter;
+                }
+            }
+        }
 
-				if (this.positionX > this.currentTarget.positionX) {
-					this.positionX -= 0.5 * var_x;
-				} else {
-					this.positionX += 0.5 * var_x;
-				}
+        if (closestHunter) {
+            this.moveAwayFromTarget(closestHunter);
+        }
+    }
 
-				if (this.positionY > this.currentTarget.positionY) {
-					this.positionY -= 0.5 * var_y;
-				} else {
-					this.positionY += 0.5 * var_y;
-				}
-			}
-		}
-		if (this.walkStrategy == 'fleeing') {
-			// Calculate the total danger from nearby animals
-			let closestHunterDistance = 9999999;
-			let closestHunter = null;
-			for (let i = 0; i < window.animals.length; i++) {
-				const hunter = window.animals[i];
-				if (this != hunter && hunter.consumes.includes(this.kind) && this.family != hunter.family) {
-					const distance = this.getDistanceTo(hunter);
-					if (distance < closestHunterDistance) {
-						closestHunterDistance = distance;
-						closestHunter = hunter;
-					}
-				}
-			}
-			
-			let angle = Math.atan2(this.positionY - closestHunter.positionY, this.positionX - closestHunter.positionX);
-			let var_y = Math.abs(Math.sin(angle));
-			let var_x = Math.abs(Math.cos(angle));
+    moveToTarget(target) {
+        const angle = Math.atan2(target.positionY - this.positionY, target.positionX - this.positionX);
+        this.positionX += 0.5 * Math.cos(angle);
+        this.positionY += 0.5 * Math.sin(angle);
+    }
 
-			if (this.positionX > closestHunter.positionX) {
-				this.positionX += 0.5 * var_x;
-			} else {
-				this.positionX -= 0.5 * var_x;
-			}
+    moveAwayFromTarget(target) {
+        const angle = Math.atan2(this.positionY - target.positionY, this.positionX - target.positionX);
+        this.positionX += 0.5 * Math.cos(angle);
+        this.positionY += 0.5 * Math.sin(angle);
+    }
 
-			if (this.positionY > closestHunter.positionY) {
-				this.positionY += 0.5 * var_y;
-			} else {
-				this.positionY -= 0.5 * var_y;
-			}
-		}
-		if (this.walkStrategy == 'relax') {
-			return;
-		}
+    procriate() {
+        if (Math.random() <= this.procriationChance) {
+            this.energy -= this.energy / 3;
+    
+            const child = AnimalFactory.getAnimal(this.kind);
+            child.positionX = this.positionX + randomInt(-10, 10);
+            child.positionY = this.positionY + randomInt(-10, 10);
+            child.family = this.family;
+    
+            animals.push(child);
+    
+            // Trigger the procreation animation
+            if(config.procreationAnimations.enabled) createProcreationAnimation(child.positionX, child.positionY);
+        }
+    }
 
-		this.clock = 0;
-	}
+    feed() {
+        for (const target of animals) {
+            if (this.consumes.includes(target.kind) && this !== target && this.family !== target.family) {
+                if (this.getDistanceTo(target) < 5) {
+                    this.consume(target);
+                }
+            }
+        }
+    }
 
-	procriate() {
-		if (Math.random() <= this.procriationChance) {
-			this.energy -= this.energy / 3;
+    analyze() {
+        let closestHunterDistance = Infinity;
 
-			let child = animalFactory.getAnimal(this.kind);
-			child.positionX = this.positionX + randomInt(-10, 10);
-			child.positionY = this.positionY + randomInt(-10, 10);
-			child.family = this.family;
+        for (const hunter of animals) {
+            if (this !== hunter && hunter.consumes.includes(this.kind) && this.family !== hunter.family) {
+                const distance = this.getDistanceTo(hunter);
+                if (distance < closestHunterDistance) closestHunterDistance = distance;
+            }
+        }
 
-			animals.push(child);
-		}
+        if (closestHunterDistance < 50) {
+            this.walkStrategy = 'fleeing';
+        } else if (this.energy / this.maxEnergy <= 0.5) {
+            this.walkStrategy = 'seekFood';
+        } else {
+            this.walkStrategy = 'relax';
+        }
+    }
 
-	}
+    consume(animal) {
+        this.energy += animal.energy;
+        animal.energy = 0;
+    }
 
-	feed() {
-		for (let i = 0; i < window.animals.length; i++) {
-			const target = window.animals[i];
+    live() {
+        if (!config.run) return;
 
-			if (this.consumes.includes(target.kind) && this != target && this.family != target.family) {
-				var distance = this.getDistanceTo(target);
-				if (distance < 5) this.consume(target);
-			} else {
-				continue;
-			}
+        if (this.walkStrategy !== 'static') this.analyze();
 
-		}
-	}
+        this.walk();
+        this.feed();
+        this.procriate();
+    }
 
-	analyze() {
+    draw(ctx) {
+        ctx.drawImage(this.image, this.positionX - 16, this.positionY - 16, 32, 32);
+        ctx.font = '8px Monaco';
+        ctx.fillStyle = '#000';
+        
+        if (this.walkStrategy !== 'static') ctx.fillText(`${this.walkStrategy}`, this.positionX - 16, this.positionY + 16);
 
-		// Calculate the total danger from nearby animals
-		let closestHunter = 9999999;
-		for (let i = 0; i < window.animals.length; i++) {
-			const hunter = window.animals[i];
-			if (this != hunter && hunter.consumes.includes(this.kind) && this.family != hunter.family) {
-				const distance = this.getDistanceTo(hunter);
-				if (distance < closestHunter) closestHunter = distance;
-			}
-		}
+        if (config.energyBar.enabled && this.walkStrategy !== 'static') {
+            const energyPercentage = this.energy / this.maxEnergy;
+            const barColor = energyPercentage > 0.2 ? 'green' : 'red';
+            ctx.fillStyle = barColor;
+            ctx.fillRect(this.positionX - config.energyBar.width / 2, this.positionY - 20, config.energyBar.width * energyPercentage, config.energyBar.height);
+            ctx.strokeStyle = '#000';
+            ctx.strokeRect(this.positionX - config.energyBar.width / 2, this.positionY - 20, config.energyBar.width, config.energyBar.height);
+        }
 
-		// Decide whether to flee or hunt based on the danger threshold
-		if (closestHunter < 50) {
-			this.walkStrategy = 'fleeing';
-		} else if (this.energy < 400) {
-			this.walkStrategy = 'seekFood';
-		} else {
-			this.walkStrategy = 'relax';
-		}
-	}
-
-	consume(animal) {
-		this.energy += animal.energy;
-		animal.energy = 0;
-	}
-
-	getWidth() {
-		return (this.energy / 100) + this.width;
-	}
-
-	live() {
-		if (!config.run) return;
-
-		if (this.walkStrategy != 'static') this.analyze();
-
-		this.walk();
-		this.feed();
-		this.procriate();
-	}
+        if (config.drawTargets && this.currentTarget) {
+            ctx.beginPath();
+            ctx.moveTo(this.positionX, this.positionY);
+            ctx.lineTo(this.currentTarget.positionX, this.currentTarget.positionY);
+            ctx.stroke();
+        }
+    }
 }
 
-class tree extends animal {
-	constructor() {
-		super();
-		this.kind = 'tree';
-		this.color = 'brown';
-		this.energyGain = 0.01;
-
-		this.maxEnergy = 100000000;
-		this.procriationChance = 0.0005;
-	}
+class Tree extends Animal {
+    constructor() {
+        super('tree', 0.01, 0.00005, 'static', treeImage);
+        this.energy = 1000;
+        this.maxEnergy = 1000;
+    }
 }
 
-class vegetarian extends animal {
-	constructor() {
-		super();
-		this.kind = 'veg';
-		this.consumes = ['tree'];
-		this.walkStrategy = 'seekFood';
-		this.color = '#33aa00aa';
-		this.clockAction = 2;
-		this.energyGain = -0.25;
-
-		this.maxEnergy = 100000000;
-		this.procriationChance = 0.00001;
-	}
+class Herbivore extends Animal {
+    constructor() {
+        super('herbivore', -0.25, 0.00001, 'seekFood', herbivoreImage);
+        this.consumes = ['tree'];
+        this.clockAction = 2;
+        this.energy = randomInt(100, 500);
+        this.maxEnergy = 500;
+    }
 }
 
-class carnivore extends animal {
-	constructor() {
-		super();
-		this.kind = 'carn';
-		this.consumes = ['veg', 'carn'];
-		this.walkStrategy = 'seekFood';
-		this.color = '#ff0033aa';
-		this.width = 2;
-		this.energyGain = -0.1;
-		this.energy = 100;
-
-		this.clockAction = 0.1;
-
-		this.maxEnergy = 100000000;
-		this.procriationChance = 0.001;
-	}
+class Carnivore extends Animal {
+    constructor() {
+        super('carnivore', -0.1, 0.001, 'seekFood', carnivoreImage);
+        this.consumes = ['herbivore', 'carnivore'];
+        this.clockAction = 0.1;
+        this.energy = randomInt(50, 100);
+        this.maxEnergy = 100;
+    }
 }
 
-class animalFactory {
-	static getAnimal(kind) {
-		switch (kind) {
-			case 'tree':
-				return new tree();
-			case 'veg':
-				return new vegetarian();
-			case 'carn':
-				return new carnivore();
-		}
-	}
+class AnimalFactory {
+    static getAnimal(kind) {
+        switch (kind) {
+            case 'tree':
+                return new Tree();
+            case 'herbivore':
+                return new Herbivore();
+            case 'carnivore':
+                return new Carnivore();
+        }
+    }
 }
 
-// Tree population
-for (let i = 0; i < randomInt(config.tree_population[0], config.tree_population[1]); i++) {
-	animals.push(animalFactory.getAnimal('tree'));
-}
+// Population initialization
+const populate = (kind, range) => {
+    const [min, max] = range;
+    const count = randomInt(min, max);
+    for (let i = 0; i < count; i++) {
+        animals.push(AnimalFactory.getAnimal(kind));
+    }
+};
 
-// Vegs population
-for (let i = 0; i < randomInt(config.herbivore_population[0], config.herbivore_population[1]); i++) {
-	animals.push(animalFactory.getAnimal('veg'));
-}
-
-// Carns population
-for (let i = 0; i < randomInt(config.carnivore_poulation[0], config.carnivore_poulation[1]); i++) {
-	animals.push(animalFactory.getAnimal('carn'));
-}
-
-function init() {
-	window.ctx = document.getElementById('canvas').getContext('2d');
-	window.ctx.globalCompositeOperation = 'destination-over';
-
-	window.requestAnimationFrame(draw);
-}
+populate('tree', config.treePopulation);
+populate('herbivore', config.herbivorePopulation);
+populate('carnivore', config.carnivorePopulation);
 
 const stats = new Stats();
-stats.showPanel(0); // 0: fps, 1: ms, 2: mb, 3+: custom
+stats.showPanel(0);
 
-function draw() {
-	stats.begin();
+const bg = new Image();
+bg.src = './grass.png';
 
-	window.ctx.clearRect(0, 0, window.config.worldWidth, window.config.worldHeight); // clear canvas
+const drawBackground = () => {
+    window.ctx.drawImage(bg, 0, 0);
+};
 
-	animals.forEach(animal => {
-		animal.live();
+let procreationAnimations = [];
+const createProcreationAnimation = (x, y) => {
+    const animation = {
+        x,
+        y,
+        frames: 30,
+    };
+    procreationAnimations.push(animation);
+};
 
-		var width = animal.getWidth();
+const draw = () => {
+    stats.begin();
+    window.ctx.clearRect(0, 0, config.worldWidth, config.worldHeight);
 
-		window.ctx.beginPath();
-		window.ctx.arc(animal.positionX, animal.positionY, width, 0, 2 * Math.PI);
-		window.ctx.fillStyle = animal.color;
-		window.ctx.fill();
+    animals.forEach(animal => {
+        animal.live();
+        animal.draw(window.ctx);
+    });
 
-		window.ctx.font ='8px Monaco';
-		window.ctx.fillStyle = '#000';
-		window.ctx.fillText(animal.family + "-" + animal.walkStrategy, animal.positionX, animal.positionY);
+    removeDead();
 
-		if (window.config.drawTargets && animal.currentTarget !== null) {
-			ctx.beginPath();
-			ctx.moveTo(animal.positionX, animal.positionY);
-			ctx.lineTo(animal.currentTarget.positionX, animal.currentTarget.positionY);
-			ctx.stroke();
-		}
+    // Draw the procreation animations
+    procreationAnimations.forEach((anim, index) => {
+        if (anim.frames > 0) {
+            window.ctx.beginPath();
+            window.ctx.arc(anim.x, anim.y, 30 * (anim.frames / 30), 0, 2 * Math.PI);
+            window.ctx.fillStyle = `rgba(255, 100, 0, ${anim.frames / 30})`;
+            window.ctx.fill();
+            anim.frames--;
+        } else {
+            procreationAnimations.splice(index, 1);
+        }
+    });
 
-		removeDead();
-	});
+    // Draw the background
+    drawBackground();
 
-	stats.end();
+    stats.end();
+    window.requestAnimationFrame(draw);
+};
 
-	window.requestAnimationFrame(draw);
-}
+const init = () => {
+    window.ctx = document.getElementById('canvas').getContext('2d');
+    window.ctx.globalCompositeOperation = 'destination-over';
+    window.requestAnimationFrame(draw);
+};
 
-// function draw() {
-//     const ctx = window.ctx;
-//     const config = window.config;
-//     const twoPi = 2 * Math.PI;
-//     const buffer = document.createElement('canvas');
-//     buffer.width = config.worldWidth;
-//     buffer.height = config.worldHeight;
-//     const bufferCtx = buffer.getContext('2d');
-
-//     bufferCtx.clearRect(0, 0, config.worldWidth, config.worldHeight); // clear buffer
-
-//     animals.forEach(animal => {
-//         animal.live();
-
-//         var width = animal.getWidth();
-
-//         bufferCtx.beginPath();
-//         bufferCtx.arc(animal.positionX, animal.positionY, width, 0, twoPi);
-//         bufferCtx.fillStyle = animal.color;
-//         bufferCtx.fill();
-
-//         bufferCtx.font ='8px Monaco';
-//         bufferCtx.fillStyle = '#000';
-//         bufferCtx.fillText(animal.family + "-" + animal.walkStrategy, animal.positionX, animal.positionY);
-
-//         if (config.drawTargets && animal.currentTarget !== null) {
-//             bufferCtx.beginPath();
-//             bufferCtx.moveTo(animal.positionX, animal.positionY);
-//             bufferCtx.lineTo(animal.currentTarget.positionX, animal.currentTarget.positionY);
-//             bufferCtx.stroke();
-//         }
-
-//         removeDead();
-//     });
-
-//     // Copy the image from the buffer to the visible canvas
-//     ctx.drawImage(buffer, 0, 0);
-
-//     window.requestAnimationFrame(draw);
-// }
-
-window.onload = function () {
-	document.body.appendChild( stats.dom );
-	
-	this.init();
+window.onload = () => {
+    document.body.appendChild(stats.dom);
+    init();
 };
