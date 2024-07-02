@@ -1,6 +1,6 @@
 // Simulation configuration
 const config = {
-    drawTargets: false,
+    drawTargets: true,
     
     energyBar: {
         enabled: true,
