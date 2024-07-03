@@ -33,13 +33,13 @@ let animals = [];
 
 // Load images
 const treeImage = new Image();
-treeImage.src = './tree.png'; // Replace with actual path
+treeImage.src = './tree.png';
 
 const herbivoreImage = new Image();
-herbivoreImage.src = './herbivore.png'; // Replace with actual path
+herbivoreImage.src = './herbivore.png';
 
 const carnivoreImage = new Image();
-carnivoreImage.src = './carnivore.png'; // Replace with actual path
+carnivoreImage.src = './carnivore.png';
 
 class Animal {
     constructor(kind, energyGain, procriationChance, walkStrategy = 'static', image) {
@@ -103,6 +103,8 @@ class Animal {
     }
 
     flee() {
+        this.currentTarget = null;
+        
         let closestHunter = null;
         let closestHunterDistance = Infinity;
 
