@@ -17,8 +17,8 @@ let config = {
     },
 
     world: {
-        width: window.innerWidth,
-        height: window.innerHeight
+        width: Math.max(window.innerWidth, document.documentElement.clientWidth),
+        height: Math.max(window.innerHeight, document.documentElement.clientHeight)
     },
 
     trees: {
@@ -373,8 +373,8 @@ const draw = () => {
 };
 
 const fixCanvasSize = () => {
-    config.world.width = window.innerWidth;
-    config.world.height = window.innerHeight;
+    config.world.width = Math.max(window.innerWidth, document.documentElement.clientWidth);
+    config.world.height = Math.max(window.innerHeight, document.documentElement.clientHeight);
 
     config.canvas.width = config.world.width;
     config.canvas.height = config.world.height;
