@@ -8,10 +8,26 @@
     <style>
         * { margin:0; padding:0; }
         html, body { width:100%; height:100%; }
+        .panel { background: rgba(255, 255, 255, 0.8); box-shadow: 0 5px 10px rgba(0, 0, 0, 0.5); border: 1px solid rgb(0,0,0,0.8); border-radius: 5px; padding: 5px; font: 12px Helvetica, Arial; }
         #canvas { display:block; }
+        #controls { position: absolute; top: 10px; right: 10px; z-index: 10;  }
+        /* Tooltip CSS */
+        #tooltip {
+            position: absolute;
+            display: none;
+            pointer-events: none; z-index: 1;
+        }
+        .add_animal { background: lightgreen; border-radius: 5px; border: 1px solid #000; padding: 5px 10px; }
+        .add_animal:hover { background: lightgoldenrodyellow; }
     </style>
 </head>
 <body>
+    <div class="panel" id="controls">
+        <button class="add_animal" animal="tree">Add Tree</button>
+        <button class="add_animal" animal="herbivore">Add Herbivore</button>
+        <button class="add_animal" animal="carnivore">Add Carnivore</button>
+    </div>
+    <div id="tooltip"></div>
     <canvas id="canvas"></canvas>
 </body>
 </html>
