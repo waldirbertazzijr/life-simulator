@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <title>Life Simulator</title>
     <script src="stats.js"></script>
-    <script src="main.js"></script>
+    <script type="module" src="main.js"></script>
     <style>
         * { margin:0; padding:0; }
         html, body { width:100%; height:100%; }
@@ -23,6 +23,21 @@
 </head>
 <body>
     <div class="panel" id="controls">
+        <div id="time-display" style="margin-bottom: 4px; font-weight: bold; text-align: center;">12:00 AM</div>
+        <div id="world-size-display" style="margin-bottom: 10px; font-size: 11px; text-align: center; color: #555;">world: —</div>
+        <div style="margin-bottom: 10px;">
+            <button id="pause-btn" style="padding: 5px 15px; background: #FFD700; border: 1px solid #000; border-radius: 5px; cursor: pointer;">⏸ Pause</button>
+        </div>
+        <div style="margin-bottom: 10px;">
+            <label style="font-size: 11px; font-weight: bold;">Speed:</label>
+            <div id="speed-controls" style="margin-top: 5px;">
+                <button class="speed-btn" data-speed="0.5" style="padding: 3px 8px; margin: 2px; background: #ddd; border: 1px solid #000; border-radius: 3px; cursor: pointer; font-size: 10px;">0.5x</button>
+                <button class="speed-btn" data-speed="1" style="padding: 3px 8px; margin: 2px; background: #90EE90; border: 1px solid #000; border-radius: 3px; cursor: pointer; font-size: 10px;">1x</button>
+                <button class="speed-btn" data-speed="2" style="padding: 3px 8px; margin: 2px; background: #ddd; border: 1px solid #000; border-radius: 3px; cursor: pointer; font-size: 10px;">2x</button>
+                <button class="speed-btn" data-speed="5" style="padding: 3px 8px; margin: 2px; background: #ddd; border: 1px solid #000; border-radius: 3px; cursor: pointer; font-size: 10px;">5x</button>
+            </div>
+        </div>
+        <hr style="margin: 10px 0;">
         <button class="add_animal" animal="tree">Add Tree</button>
         <button class="add_animal" animal="herbivore">Add Herbivore</button>
         <button class="add_animal" animal="carnivore">Add Carnivore</button>
