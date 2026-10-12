@@ -2,7 +2,7 @@
 // checked on hills and lakes before the engine has them. Turned on with
 // `?stubterrain` in the URL, and only when the world has no terrain of its own.
 //
-// It implements the documented `world.terrain` interface (docs/stage2/README.md)
+// It implements the documented `world.terrain` interface (planning/stage2/README.md)
 // but lives only inside the 3D view: the simulation knows nothing about it,
 // so animals will happily walk across its lakes. Delete it once the engine
 // provides world.terrain.

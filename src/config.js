@@ -3,7 +3,7 @@
 //   time     — steps (the browser runs 60 steps per second at 1×)
 //   energy   — arbitrary; 1 unit of grass is worth `grassEnergy`
 //
-// docs/THEORY.md explains which knobs stabilise the system and why.
+// planning/THEORY.md explains which knobs stabilise the system and why.
 export const params = {
     world: {
         // The world always has this AREA; its aspect ratio follows the screen.
@@ -80,7 +80,7 @@ export const params = {
     herbivore: {
         initial: 700,
         // Starting genes: near the optimum evolution settles on with these costs
-        // (found by evolving from 1.0 for 400k steps; docs/THEORY.md §9). Set
+        // (found by evolving from 1.0 for 400k steps; planning/THEORY.md §9). Set
         // them to 1 to watch evolution from scratch, with a rougher opening.
         genes: { speed: 1.3, sense: 0.55 },
         speed: 0.6,          // top speed (fleeing), units/step at speed gene 1.0

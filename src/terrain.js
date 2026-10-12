@@ -1,6 +1,6 @@
 // Terrain: a height field over the torus, and what it means for life on it.
 //
-// Interface shared with the renderers (docs/stage2/README.md):
+// Interface shared with the renderers (planning/stage2/README.md):
 //
 //   cols, rows       grid NODES; node (i, j) sits at world (i·cellW, j·cellH).
 //                    The grid wraps: node (cols, j) is node (0, j).
