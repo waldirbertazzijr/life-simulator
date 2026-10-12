@@ -28,6 +28,7 @@ const TAU = Math.PI * 2;
 const MAX_KEPT = 32;   // snapshots kept at most (normally 2–5: until the moment drawn has passed them)
 const SLACK_MS = 2;    // extra delay beyond the longest recent wait for a snapshot
 const BLENDED = ['x', 'y', 'heading'];
+const NO_EVENTS = Object.freeze([]);
 
 // Shortest signed difference on a ring of size `size`.
 const wrapDelta = (d, size) => (d > size / 2 ? d - size : d < -size / 2 ? d + size : d);
@@ -62,6 +63,9 @@ export class Mirror {
         this.fate = null;
         this.heir = 0;          // a living descendant of the followed animal, once it is dead
         this.startCheck = '';   // 'same' once the simulation's world is known to match ours
+        // What happened (World.events) at moments that came into view this
+        // frame, oldest first: read it each frame, it is replaced by the next.
+        this.events = NO_EVENTS;
 
         // Plumbing.
         this.pops = [this.herbivores, this.carnivores, this.humans];
@@ -69,6 +73,7 @@ export class Mirror {
         this.gen = 0;           // which world (snapshots from an older one are dropped)
         this.asked = 0;         // follow() calls so far: a snapshot's watch and fate count once it has seen the last one
         this.history = [];      // snapshots not yet drawn past, oldest first, each a different moment
+        this.pending = [];      // [time, events] from snapshots, until that moment is drawn
         this.spare = [];        // buffers of dropped snapshots, to hand back
         this.known = new Map(); // tribe id → tribe object (static fields sent once)
         this.base = null;       // the snapshot the populations and tribes currently show
@@ -167,6 +172,8 @@ export class Mirror {
         this.startCheck = 'pending';
         for (const s of this.history) this.spare.push(s.buffer);
         this.history = [];
+        this.pending = [];
+        this.events = NO_EVENTS;
         this.base = null;
         this.known = new Map();
         this.watch = 0;
@@ -241,6 +248,7 @@ export class Mirror {
             this.known.set(d.id, { ...d, store: 0, members: 0, adults: 0, births: 0, alive: true });
         }
         if (snap.samples.length && this.onSamples) this.onSamples(snap.samples);
+        if (snap.events?.length) this.pending.push(snap.time, snap.events);
 
         const hist = this.history;
         const latest = hist[hist.length - 1];
@@ -302,6 +310,15 @@ export class Mirror {
             const drawn = this.drawn;
             if (a !== drawn.a || b !== drawn.b || alpha !== drawn.alpha) this.blend(a, b, alpha);
             this.shown = a ? a.time + (b.time - a.time) * alpha : b.time; // the step being drawn, with its fraction
+        }
+        // Events come into view with the moment they happened at.
+        const pending = this.pending;
+        let k = 0;
+        while (k < pending.length && pending[k] <= this.shown) k += 2;
+        if (k === 0) this.events = NO_EVENTS;
+        else {
+            this.events = k === 2 ? pending[1] : pending.slice(0, k).filter((_, j) => j % 2 === 1).flat();
+            pending.splice(0, k);
         }
         // Ask for the next one now, so it is computed while we draw.
         if (!this.waiting) {

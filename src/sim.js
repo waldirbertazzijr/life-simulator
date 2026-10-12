@@ -14,7 +14,8 @@
 //        set {path, value}                   change a parameter, e.g. 'herbivore.speed'
 //        run {id, steps}                     test hook: step now, reply with a digest
 //   out  started {gen, hash}                 the new world's first moment, hashed
-//        snapshot {...}                      see pack() below
+//        snapshot {...}                      see pack() below; with `events`, everything that happened
+//                                            since the last one (World.events, oldest first)
 //        reply {id, value}
 //
 // Snapshots are pulled, not pushed: the main thread asks for one each frame
@@ -30,6 +31,7 @@ export const STEP_MS = 1000 / STEPS_PER_SECOND; // one step at 1×
 const SAMPLE_EVERY = 50;          // steps between sparkline samples
 export const FRAME_BUDGET_MS = 12; // ?noworker: most stepping per frame (the rest waits for the next)
 const MAX_BEHIND_MS = 100;        // a backlog longer than this (real time) is dropped: the world runs slower
+const MAX_EVENTS = 2000;          // events kept for the next snapshot at most (the oldest are let go)
 
 export const KINDS = ['herbivore', 'carnivore', 'human'];
 
@@ -60,6 +62,7 @@ export class Sim {
         this.wanted = false;
         this.dirty = false; // changed without a step (new world, follow): send it even if paused
         this.samples = [];
+        this.events = []; // World.events from every step since the last snapshot
         this.packer = new Packer();
     }
 
@@ -100,6 +103,7 @@ export class Sim {
         this.gen = gen;
         this.acc = 0;
         this.samples = [];
+        this.events = [];
         this.packer.reset();
         this.dirty = true;
         this.last = performance.now(); // building the world is not time to catch up on
@@ -143,6 +147,11 @@ export class Sim {
         const w = this.world;
         w.step();
         if (w.time % SAMPLE_EVERY === 0) this.samples.push(w.grass.mean(), w.herbivores.n, w.carnivores.n, w.humans.n);
+        if (w.events.length) {
+            const ev = this.events;
+            for (const e of w.events) ev.push(e);
+            if (ev.length > MAX_EVENTS) ev.splice(0, ev.length - MAX_EVENTS);
+        }
     }
 
     // Send a snapshot if one is wanted and there is something new in it.
@@ -164,6 +173,8 @@ export class Sim {
         snap.heir = w.fate && w.fate.id === w.watch ? w.descendant(w.watch) : 0;
         snap.samples = this.samples;
         this.samples = [];
+        snap.events = this.events;
+        this.events = [];
         this.post(snap, [snap.buffer]);
     }
 

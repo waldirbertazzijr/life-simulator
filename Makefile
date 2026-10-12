@@ -4,7 +4,7 @@ PLAYWRIGHT := mcr.microsoft.com/playwright@sha256:06a9939e57531807f8d5fd76ce44b5
 DOCKER     := docker run --rm -v "$(CURDIR)":/app:ro -w /app
 PORT       ?= 8000
 
-.PHONY: serve check shot fingerprint
+.PHONY: serve check shot fingerprint test
 
 # Serve the app at http://localhost:$(PORT)
 serve:
@@ -17,6 +17,10 @@ check:
 # Behaviour fingerprint (must not change for a pure refactor), e.g. make fingerprint ARGS="--set human.enabled=false"
 fingerprint:
 	$(DOCKER) $(NODE) node tools/fingerprint.mjs $(ARGS)
+
+# Unit tests (node:test), e.g. make test ARGS="test/events.test.mjs"
+test:
+	$(DOCKER) $(NODE) node --test $(or $(ARGS),'test/*.test.mjs')
 
 # Headless-browser screenshots into .shots/, e.g. make shot ARGS="--speed 16 --at 4000,20000"
 shot:

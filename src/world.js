@@ -45,6 +45,11 @@ export class World {
         this.watch = 0;    // id of an animal someone is following; its death is recorded in `fate`
         this.fate = null;
         this.deaths = { herbivore: {}, carnivore: {}, human: {} }; // running count by cause
+        // What happened during the last step, for the page to draw (a body
+        // falling, blood): plain objects such as { type: 'death', kind, id,
+        // x, y, heading, cause, by, time }. Cleared as each step begins; the
+        // simulation never reads it.
+        this.events = [];
 
         this.terrain = params.terrain.enabled ? new Terrain(width, height, params.terrain, this.rng) : null;
         // Biomes draw from a random stream of their own, so the land and the
@@ -121,8 +126,12 @@ export class World {
     // of how its story ended.
     die(pop, i, cause, by = 0) {
         pop.energy[i] = 0;
-        const tally = this.deaths[this.kindOf(pop)];
+        const kind = this.kindOf(pop);
+        const tally = this.deaths[kind];
         tally[cause] = (tally[cause] || 0) + 1;
+        this.events.push({
+            type: 'death', kind, id: pop.id[i], x: pop.x[i], y: pop.y[i], heading: pop.heading[i], cause, by, time: this.time,
+        });
         if (pop.id[i] !== this.watch) return;
         this.fate = {
             id: pop.id[i],
@@ -205,6 +214,7 @@ export class World {
 
     // Advance the world by one step.
     step() {
+        this.events.length = 0;
         this.carnivoreHash.build(this.carnivores);
         this.humanHash.build(this.humans);
         this.stepHerbivores();
