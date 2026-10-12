@@ -67,9 +67,10 @@ export const config = {
     // 3-tier ecosystem. See docs/ECOSYSTEM_BALANCE.md for the "why".
     trees: {
         initialPopulation: [400, 600],
-        energyGain: 0.001,
-        procreatingChance: 0.00108, // renewable primary production (tuned on the honest model)
-        carryingCapacity: 400,      // logistic cap K on the forest (tuned)
+        energyGain: 0.266,          // PHOTOSYNTHESIS rate — the sun (one legit energy source). Tuned: the
+                                    // search LOWERED enrichment for stability (paradox of enrichment).
+        procreatingChance: 0.00297, // renewable primary production (tuned)
+        carryingCapacity: 636,      // logistic cap K on the forest (tuned)
         maxAge: 10000, // frames
         energy: {
             initial: 1000,
@@ -78,11 +79,11 @@ export const config = {
     },
     herbivores: {
         initialPopulation: [100, 200],
-        energyGain: -0.126,         // tuned (honest-model resilience search)
-        procreatingChance: 0.004,   // tuned — fast breeders (recover from predation + shocks)
+        energyGain: -0.04,          // tuned — low metabolism (well-fed, resilient)
+        procreatingChance: 0.008,   // tuned — fast breeders (recover from crashes/shocks)
         clockAction: 2,
-        maxAge: 4820, // frames      (tuned)
-        carryingCapacity: 450,      // herbivore cap (tuned)
+        maxAge: 3056, // frames      (tuned)
+        carryingCapacity: 150,      // herbivore cap (tuned — moderate, avoids overshoot)
         energy: {
             initial: [100, 500],
             max: 500,
@@ -90,11 +91,11 @@ export const config = {
     },
     carnivores: {
         initialPopulation: [10, 30],
-        energyGain: -0.015,         // tuned — slow metabolism (survive between scarce meals)
-        procreatingChance: 0.00307, // tuned
+        energyGain: -0.01,          // tuned — very slow metabolism (survive between scarce meals)
+        procreatingChance: 0.00094, // tuned
         clockAction: 0.1,
-        maxAge: 4849, // frames      (tuned — long-lived)
-        carryingCapacity: 20,       // carnivore cap (tuned; honest energy pyramid → apex predators are naturally few)
+        maxAge: 4093, // frames      (tuned — long-lived)
+        carryingCapacity: 80,       // carnivore cap (tuned; honest energy pyramid → apex predators are naturally few)
         energy: {
             initial: [50, 150],
             max: 150,
@@ -111,16 +112,30 @@ export const config = {
         // Honest energy pyramid: a consumer assimilates only a FRACTION of what it
         // eats (Lindeman). The rest becomes soil nutrients (energy is conserved, not
         // created — the old code gave carnivores 2x, which manufactured energy).
-        energyTransferEfficiency: 0.4, // tuned
+        energyTransferEfficiency: 0.767, // tuned
 
         // Type III functional response: a predator only commits to a hunt with
         // probability preyCount^2 / (preyCount^2 + refuge^2). When prey are scarce it
         // usually gives up (explores instead) — a low-density refuge that stabilises.
-        typeIIIRefuge: 3.26, // tuned
+        typeIIIRefuge: 1, // tuned
 
         // Senescence: individual maxAge is jittered by ±this fraction so age cohorts
         // don't all die on the same frame (which would cause artificial die-off waves).
         maxAgeJitter: 0.2,
+
+        // Reproduction is FOOD-GATED: only a well-fed animal breeds, and the newborn
+        // gets a fixed viable start (fraction of maxEnergy) paid FROM the parent
+        // (energy-conserving). This stops starving animals from splitting into two
+        // doomed weaklings and self-limits reproduction, damping boom-bust overshoot.
+        offspringEnergyFraction: 0.25, // newborn energy = this × parent.maxEnergy
+        breedingReserve: 0.4,          // parent must keep ≥ this × maxEnergy after breeding
+
+        // Rescue effect: metapopulation immigration. A patch this small drifts to
+        // extinction on its own (real ecosystems persist via immigration between
+        // patches — the rescue effect). While a species is present but below this
+        // count, it occasionally gains an immigrant, preventing permanent collapse.
+        rescueBelow: { herbivore: 8, carnivore: 5 },
+        rescueChance: 0.004, // per-frame chance of one immigrant while below the floor
 
         // Decomposition / nutrient cycling: dead biomass returns to a soil pool that
         // fuels tree regrowth, closing the matter loop.

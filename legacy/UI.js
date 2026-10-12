@@ -132,23 +132,23 @@ export const initializeToolbar = (tooltip) => {
     if (pauseBtn) {
         pauseBtn.addEventListener('click', () => {
             config.run = !config.run;
-            pauseBtn.textContent = config.run ? '⏸ Pause' : '▶ Play';
-            pauseBtn.style.background = config.run ? '#FFD700' : '#90EE90';
+            pauseBtn.textContent = config.run ? '⏸' : '▶';
+            pauseBtn.style.background = config.run ? 'var(--amber)' : 'var(--tree)';
         });
     }
 
     // Speed control buttons
     const speedButtons = document.getElementsByClassName('speed-btn');
+    const highlightSpeed = (active) => {
+        Object.values(speedButtons).forEach(btn => {
+            btn.style.background = (parseFloat(btn.getAttribute('data-speed')) === active) ? 'var(--amber)' : 'var(--btn)';
+        });
+    };
     Object.keys(speedButtons).forEach(key => {
         speedButtons[key].addEventListener('click', (event) => {
-            const speed = parseFloat(event.target.getAttribute('data-speed'));
-            config.simulationSpeed = speed;
-
-            // Update button styles
-            Object.values(speedButtons).forEach(btn => {
-                btn.style.background = '#ddd';
-            });
-            event.target.style.background = '#90EE90';
+            config.simulationSpeed = parseFloat(event.target.getAttribute('data-speed'));
+            highlightSpeed(config.simulationSpeed);
         });
     });
+    highlightSpeed(config.simulationSpeed); // mark the default speed
 };

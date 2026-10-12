@@ -34,17 +34,18 @@ const FINAL_FRAMES = parseInt(flag('finalFrames', '60000'), 10);
 // ---- search space -------------------------------------------------------
 // Each knob has an ecological meaning; ranges are deliberately wide.
 const SPACE = [
-    { path: ['trees', 'procreatingChance'], min: 0.0002, max: 0.004, log: true },   // forest regrowth rate r
-    { path: ['trees', 'carryingCapacity'], min: 400, max: 900, int: true },         // forest cap K (moderate: paradox of enrichment)
-    { path: ['herbivores', 'procreatingChance'], min: 0.0002, max: 0.004, log: true },
-    { path: ['herbivores', 'energyGain'], min: -0.30, max: -0.08 },                 // metabolic drain
-    { path: ['herbivores', 'maxAge'], min: 3000, max: 7000, int: true },
-    { path: ['herbivores', 'carryingCapacity'], min: 200, max: 450, int: true },
-    { path: ['carnivores', 'procreatingChance'], min: 0.0005, max: 0.008, log: true },
-    { path: ['carnivores', 'energyGain'], min: -0.15, max: -0.015 },
-    { path: ['carnivores', 'maxAge'], min: 2000, max: 6000, int: true },
-    { path: ['carnivores', 'carryingCapacity'], min: 20, max: 200, int: true },
-    // Ecological-realism knobs (new): honest assimilation fraction + Type III refuge strength.
+    { path: ['trees', 'procreatingChance'], min: 0.0005, max: 0.005, log: true },   // forest regrowth rate r
+    { path: ['trees', 'carryingCapacity'], min: 400, max: 900, int: true },         // forest cap K
+    { path: ['trees', 'energyGain'], min: 0.05, max: 0.8 },                         // PHOTOSYNTHESIS = enrichment level (paradox of enrichment!)
+    { path: ['herbivores', 'procreatingChance'], min: 0.0005, max: 0.008, log: true },
+    { path: ['herbivores', 'energyGain'], min: -0.20, max: -0.04 },                 // metabolic drain
+    { path: ['herbivores', 'maxAge'], min: 3000, max: 8000, int: true },
+    { path: ['herbivores', 'carryingCapacity'], min: 150, max: 500, int: true },
+    { path: ['carnivores', 'procreatingChance'], min: 0.0005, max: 0.01, log: true },
+    { path: ['carnivores', 'energyGain'], min: -0.10, max: -0.01 },
+    { path: ['carnivores', 'maxAge'], min: 3000, max: 8000, int: true },
+    { path: ['carnivores', 'carryingCapacity'], min: 20, max: 150, int: true },
+    // Ecological-realism knobs: honest assimilation fraction + Type III refuge strength.
     { path: ['ecology', 'energyTransferEfficiency'], min: 0.4, max: 0.9 },
     { path: ['ecology', 'typeIIIRefuge'], min: 1, max: 8 },
 ];

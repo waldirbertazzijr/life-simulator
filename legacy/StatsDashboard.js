@@ -27,31 +27,42 @@ export class StatsDashboard {
         this.container.className = 'panel';
         this.container.style.cssText = `
             position: absolute;
-            bottom: 10px;
-            left: 10px;
-            width: 300px;
-            padding: 10px;
+            bottom: 12px;
+            left: 12px;
+            width: 232px;
             z-index: 10;
         `;
 
-        // Create title
+        // Header: title + collapse toggle
+        const header = document.createElement('div');
+        header.className = 'panel-header';
         const title = document.createElement('h3');
-        title.textContent = 'Population Statistics';
-        title.style.cssText = 'margin: 0 0 10px 0; font-size: 14px;';
-        this.container.appendChild(title);
+        title.textContent = 'Population';
+        const toggle = document.createElement('button');
+        toggle.className = 'panel-toggle';
+        toggle.textContent = '–';
+        header.appendChild(title);
+        header.appendChild(toggle);
+        this.container.appendChild(header);
 
-        // Create stats text container
+        // Collapsible body
+        const body = document.createElement('div');
         this.statsText = document.createElement('div');
-        this.statsText.style.cssText = 'margin-bottom: 10px; font-size: 11px;';
-        this.container.appendChild(this.statsText);
+        this.statsText.style.cssText = 'margin-bottom: 8px;';
+        body.appendChild(this.statsText);
 
-        // Create canvas for chart
         this.canvas = document.createElement('canvas');
-        this.canvas.width = 280;
-        this.canvas.height = 120;
-        this.canvas.style.cssText = 'border: 1px solid #333; background: white;';
-        this.container.appendChild(this.canvas);
+        this.canvas.width = 212;
+        this.canvas.height = 96;
+        body.appendChild(this.canvas);
+        this.container.appendChild(body);
         this.ctx = this.canvas.getContext('2d');
+
+        toggle.addEventListener('click', () => {
+            const hidden = body.style.display === 'none';
+            body.style.display = hidden ? '' : 'none';
+            toggle.textContent = hidden ? '–' : '+';
+        });
 
         document.body.appendChild(this.container);
     }
@@ -104,13 +115,10 @@ export class StatsDashboard {
     render(counts, total) {
         // Update stats text
         this.statsText.innerHTML = `
-            <div><span style="color: #228B22;">🌳 Trees:</span> ${counts.trees}</div>
-            <div><span style="color: #FF8C00;">🦌 Herbivores:</span> ${counts.herbivores}</div>
-            <div><span style="color: #DC143C;">🦁 Carnivores:</span> ${counts.carnivores}</div>
-            <div><strong>Total:</strong> ${total}</div>
-            <div style="margin-top: 5px; padding-top: 5px; border-top: 1px solid #ccc;">
-                <small>Births: ${this.totalBirths} | Deaths: ${this.totalDeaths}</small>
-            </div>
+            <div><span style="color:#7ee787;">🌳 ${counts.trees}</span>
+                 &nbsp;<span style="color:#ffa657;">🦌 ${counts.herbivores}</span>
+                 &nbsp;<span style="color:#ff7b72;">🦁 ${counts.carnivores}</span></div>
+            <div style="color:#8892b0;">total ${total} &middot; ▲${this.totalBirths} ▼${this.totalDeaths}</div>
         `;
 
         // Draw chart
@@ -137,7 +145,7 @@ export class StatsDashboard {
         if (maxValue === 0) return;
 
         // Draw grid lines
-        ctx.strokeStyle = '#e0e0e0';
+        ctx.strokeStyle = '#232a44';
         ctx.lineWidth = 1;
         for (let i = 0; i <= 4; i++) {
             const y = (height / 4) * i;
@@ -148,13 +156,13 @@ export class StatsDashboard {
         }
 
         // Draw lines for each species
-        this.drawLine(this.history.trees, maxValue, '#228B22', 2); // Green for trees
-        this.drawLine(this.history.herbivores, maxValue, '#FF8C00', 2); // Orange for herbivores
-        this.drawLine(this.history.carnivores, maxValue, '#DC143C', 2); // Red for carnivores
+        this.drawLine(this.history.trees, maxValue, '#7ee787', 2); // trees
+        this.drawLine(this.history.herbivores, maxValue, '#ffa657', 2); // herbivores
+        this.drawLine(this.history.carnivores, maxValue, '#ff7b72', 2); // carnivores
 
         // Draw scale labels
-        ctx.fillStyle = '#666';
-        ctx.font = '10px Arial';
+        ctx.fillStyle = '#8892b0';
+        ctx.font = '10px "VT323", monospace';
         ctx.fillText('0', 5, height - 5);
         ctx.fillText(Math.round(maxValue).toString(), 5, 12);
     }

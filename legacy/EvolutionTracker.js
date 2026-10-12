@@ -48,47 +48,69 @@ export class EvolutionTracker {
         this.container.className = 'panel';
         this.container.style.cssText = `
             position: absolute;
-            bottom: 10px;
-            right: 10px;
-            width: 320px;
-            padding: 10px;
+            bottom: 12px;
+            right: 12px;
+            width: 244px;
             z-index: 10;
-            max-height: 400px;
+            max-height: 62vh;
             overflow-y: auto;
         `;
 
-        // Create title
+        // Header: title + collapse toggle
+        const header = document.createElement('div');
+        header.className = 'panel-header';
         const title = document.createElement('h3');
-        title.textContent = '🧬 Evolution Tracker';
-        title.style.cssText = 'margin: 0 0 5px 0; font-size: 14px;';
-        this.container.appendChild(title);
+        title.textContent = '🧬 Evolution';
+        const toggle = document.createElement('button');
+        toggle.className = 'panel-toggle';
+        toggle.textContent = '–';
+        header.appendChild(title);
+        header.appendChild(toggle);
+        this.container.appendChild(header);
 
-        // Add trade-offs explanation
+        // Collapsible body
+        const body = document.createElement('div');
+
+        // Compact trait legend (was a verbose paragraph)
         const tradeoffs = document.createElement('div');
-        tradeoffs.style.cssText = 'font-size: 8px; color: #666; margin-bottom: 8px; line-height: 1.3;';
-        tradeoffs.innerHTML = `
-            <strong>Trade-offs:</strong>
-            ⚡Speed: Fast but burns energy |
-            📏Size: More capacity, costs energy<br>
-            💪Energy: Pure storage |
-            👁️Vision: See far, costs energy<br>
-            😠Aggression: Hunt earlier, stress cost |
-            🧠Intelligence: Smart decisions, big brain cost
-        `;
-        this.container.appendChild(tradeoffs);
+        tradeoffs.style.cssText = 'font-size: 13px; color: #8892b0; margin-bottom: 8px; line-height: 1.2;';
+        tradeoffs.innerHTML = `⚡spd 📏size 💪nrg 👁️vis 😠agr 🧠int &nbsp;<span style="opacity:.7">(all but 💪 cost energy)</span>`;
+        body.appendChild(tradeoffs);
 
-        // Create stats text container
+        // Stats text
         this.statsText = document.createElement('div');
-        this.statsText.style.cssText = 'margin-bottom: 10px; font-size: 11px;';
-        this.container.appendChild(this.statsText);
+        this.statsText.style.cssText = 'margin-bottom: 4px;';
+        body.appendChild(this.statsText);
 
-        // Create canvas for charts (6 charts now)
+        // Charts toggle (charts hidden by default to keep the panel compact)
+        this.chartsVisible = false;
+        const chartToggle = document.createElement('button');
+        chartToggle.className = 'chart-toggle';
+        chartToggle.textContent = '▸ show trait charts';
+        body.appendChild(chartToggle);
+
+        // Charts canvas (6 charts), hidden initially
         this.canvas = document.createElement('canvas');
-        this.canvas.width = 300;
-        this.canvas.height = 480; // Doubled height for 6 charts
-        this.canvas.style.cssText = 'border: 1px solid #333; background: white;';
-        this.container.appendChild(this.canvas);
+        this.canvas.width = 220;
+        this.canvas.height = 360;
+        this.canvas.style.display = 'none';
+        body.appendChild(this.canvas);
         this.ctx = this.canvas.getContext('2d');
+
+        this.container.appendChild(body);
+
+        chartToggle.addEventListener('click', () => {
+            this.chartsVisible = !this.chartsVisible;
+            this.canvas.style.display = this.chartsVisible ? '' : 'none';
+            chartToggle.textContent = this.chartsVisible ? '▾ hide trait charts' : '▸ show trait charts';
+            if (this.chartsVisible) this.drawCharts();
+        });
+
+        toggle.addEventListener('click', () => {
+            const hidden = body.style.display === 'none';
+            body.style.display = hidden ? '' : 'none';
+            toggle.textContent = hidden ? '–' : '+';
+        });
 
         document.body.appendChild(this.container);
     }
@@ -208,15 +230,15 @@ export class EvolutionTracker {
         // Format change with arrow
         const formatChange = (val) => {
             const num = parseFloat(val);
-            if (num > 0) return `<span style="color: #228B22;">↑${val}%</span>`;
-            if (num < 0) return `<span style="color: #DC143C;">↓${Math.abs(val)}%</span>`;
-            return `<span style="color: #666;">0%</span>`;
+            if (num > 0) return `<span style="color: #7ee787;">↑${val}%</span>`;
+            if (num < 0) return `<span style="color: #ff7b72;">↓${Math.abs(val)}%</span>`;
+            return `<span style="color: #8892b0;">0%</span>`;
         };
 
         // Build mutation stats HTML
         let mutationHTML = '';
         if (Object.keys(this.mutationCounts).length > 0) {
-            mutationHTML = '<div style="font-size: 9px; margin-top: 5px; color: #8B008B;"><strong>✨ Mutations:</strong> ';
+            mutationHTML = '<div style="font-size: 12px; margin-top: 5px; color: #c792ea;"><strong>✨ Mutations:</strong> ';
             const mutEntries = Object.entries(this.mutationCounts)
                 .map(([mut, count]) => `${mut.replace(/_/g, ' ')}: ${count}`)
                 .join(', ');
@@ -226,8 +248,8 @@ export class EvolutionTracker {
         // Update stats text
         this.statsText.innerHTML = `
             <div style="margin-bottom: 6px;">
-                <strong style="color: #FF8C00;">🦌 Herbivores</strong>
-                <div style="margin-left: 10px; font-size: 9px; line-height: 1.4;">
+                <strong style="color: #ffa657;">🦌 Herbivores</strong>
+                <div style="margin-left: 8px; font-size: 13px; line-height: 1.25;">
                     ⚡${herbStats.speed.toFixed(2)}x ${formatChange(herbChanges.speed)} |
                     📏${herbStats.size.toFixed(2)}x ${formatChange(herbChanges.size)} |
                     💪${herbStats.energy.toFixed(2)}x ${formatChange(herbChanges.energy)}<br>
@@ -237,8 +259,8 @@ export class EvolutionTracker {
                 </div>
             </div>
             <div style="margin-bottom: 6px;">
-                <strong style="color: #DC143C;">🦁 Carnivores</strong>
-                <div style="margin-left: 10px; font-size: 9px; line-height: 1.4;">
+                <strong style="color: #ff7b72;">🦁 Carnivores</strong>
+                <div style="margin-left: 8px; font-size: 13px; line-height: 1.25;">
                     ⚡${carnStats.speed.toFixed(2)}x ${formatChange(carnChanges.speed)} |
                     📏${carnStats.size.toFixed(2)}x ${formatChange(carnChanges.size)} |
                     💪${carnStats.energy.toFixed(2)}x ${formatChange(carnChanges.energy)}<br>
@@ -255,6 +277,7 @@ export class EvolutionTracker {
     }
 
     drawCharts() {
+        if (!this.chartsVisible) return; // charts hidden — skip the draw work
         const ctx = this.ctx;
         const width = this.canvas.width;
         const height = this.canvas.height;
@@ -277,12 +300,12 @@ export class EvolutionTracker {
         const width = this.canvas.width;
 
         // Draw label
-        ctx.fillStyle = '#000';
-        ctx.font = 'bold 11px Arial';
+        ctx.fillStyle = '#d7dce8';
+        ctx.font = '11px "VT323", monospace';
         ctx.fillText(label, 5, yOffset + 12);
 
         // Draw baseline (1.0)
-        ctx.strokeStyle = '#ccc';
+        ctx.strokeStyle = '#2a3350';
         ctx.lineWidth = 1;
         ctx.setLineDash([2, 2]);
         const baselineY = yOffset + chartHeight / 2;
@@ -293,8 +316,8 @@ export class EvolutionTracker {
         ctx.setLineDash([]);
 
         // Draw baseline label
-        ctx.fillStyle = '#666';
-        ctx.font = '9px Arial';
+        ctx.fillStyle = '#8892b0';
+        ctx.font = '10px "VT323", monospace';
         ctx.fillText('1.0', width - 20, baselineY - 2);
 
         // Find min/max for scaling
@@ -307,16 +330,16 @@ export class EvolutionTracker {
 
         // Draw herbivore data (orange)
         if (herbData.length > 1) {
-            this.drawLine(ctx, herbData, yOffset, chartHeight, minVal, range, '#FF8C00', 2);
+            this.drawLine(ctx, herbData, yOffset, chartHeight, minVal, range, '#ffa657', 2);
         }
 
         // Draw carnivore data (red)
         if (carnData.length > 1) {
-            this.drawLine(ctx, carnData, yOffset, chartHeight, minVal, range, '#DC143C', 2);
+            this.drawLine(ctx, carnData, yOffset, chartHeight, minVal, range, '#ff7b72', 2);
         }
 
         // Draw separator
-        ctx.strokeStyle = '#ddd';
+        ctx.strokeStyle = '#232a44';
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(0, yOffset + chartHeight);

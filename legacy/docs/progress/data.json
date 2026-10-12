@@ -1,0 +1,68 @@
+{
+  "title": "Life Simulator — autonomous game gauntlet",
+  "subtitle": "Builder/critic loop toward a world that plays itself. Bars are set by gauntlets/00-master-autonomous-game.md and are not negotiable by builders.",
+  "updated": "2026-08-10 02:25",
+  "bars": [
+    {
+      "key": "ALIVE",
+      "state": "fail",
+      "claim": "All three species persist 60,000 frames on critic-chosen seeds.",
+      "status": "Survives on paper, dies in practice. Seeds 41/42/43 all reach frame 60,000, but both animal tiers finish sitting on the immigration rescue floor (8/5, 6/12, 12/11). The herbivore curve terminal-crashes on every seed.",
+      "metric": "score 22.4 / 24.8 / 22.7 — against 20.0 for merely not going extinct"
+    },
+    {
+      "key": "HONEST",
+      "state": "pass",
+      "claim": "Evolved genetics stay diverse; no mutation sweep, no gene pinned at an extreme.",
+      "status": "Clean at baseline. Across three seeds every gene sits in 0.56–1.45x and all eight mutations are present in single/low-double digits. The multiplicative-metabolism fix from HANDOFF §3.4 is holding.",
+      "metric": "no mutation above 18 individuals in a ~120-animal population"
+    },
+    {
+      "key": "BEAUTIFUL",
+      "state": "fail",
+      "claim": "Wins or ties a blind A/B against The Bibites and Equilinox.",
+      "status": "Not close yet. Flat cropped grass texture, no resize handler so the canvas leaves a blank band, an energy bar and emoji stamped over all 758 entities reading as static, three HUD panels in three different design languages.",
+      "metric": "1 reference screenshot captured, full audit in flight"
+    },
+    {
+      "key": "SMOOTH",
+      "state": "hold",
+      "claim": "Playable at 1,000+ entities.",
+      "status": "Simulation throughput measured; browser render path not yet measured. The render half is the suspect — per-entity strokeText for emoji, a 3000x2000 background PNG blitted every frame.",
+      "metric": "2,616 steps/s headless at ~780 entities"
+    }
+  ],
+  "nextTarget": {
+    "headline": "Find out why the herbivores die.",
+    "body": "Ten read-only diagnostic agents are running four lenses on the ecology (demography, energetics, behaviour, stability theory), three on the visuals, and three on engineering. No builder touches a file until they report. The leading hypothesis is that the forest is pinned flat at its carrying capacity (611 ± 21, CV 0.03) — a constant food supply rather than a prey population — which collapses the food web to plain Lotka-Volterra between herbivores and carnivores, and that always dies in a finite stochastic world."
+  },
+  "rounds": [
+    {
+      "n": 0,
+      "phase": "Baseline",
+      "date": "2026-08-10",
+      "title": "Measure what is actually there",
+      "verdict": "fail",
+      "verdictLabel": "Baseline recorded — 2 of 4 bars failing",
+      "body": "Before any change, run the real thing on seeds no previous tuning has seen and look at the pixels. The working tree had already drifted well past docs/HANDOFF.md: it now has soil nutrients and decomposition, a metapopulation rescue effect, a Holling type III refuge, Lindeman energy-transfer efficiency, food-gated reproduction and senescence. The docs describe an earlier world.",
+      "receipts": [
+        { "label": "node headless/run.mjs --frames 60000 --seed 41", "value": "SURVIVED — final 625 / 8 / 5 — score 22.7" },
+        { "label": "node headless/run.mjs --frames 60000 --seed 42", "value": "SURVIVED — final 623 / 6 / 12 — score 24.8" },
+        { "label": "node headless/run.mjs --frames 60000 --seed 43", "value": "SURVIVED — final 623 / 12 / 11 — score 22.4" },
+        { "label": "node headless/bench.mjs", "value": "2616 steps/s @ 780 entities; fingerprint 613/133/29, 619/135/32, 616/135/42" },
+        { "label": "config.ecology.rescueBelow", "value": "{ herbivore: 8, carnivore: 5 } — every run ends at these numbers" }
+      ],
+      "series": {
+        "caption": "Seed 41, 60,000 frames. Trees hold flat. Herbivores fall off the end.",
+        "tree": [526,535,586,607,622,621,628,623,618,620,612,622,615,614,614,618,609,617,619,623,621,623,623,617,618,625,622,618,625,619,615,628,621,633,624,616,624,620,620,621,614,619,614,620,612,626,628,631,618,623,629,619,621,620,632,626,622,632,623,627],
+        "herbivore": [130,140,136,132,140,136,128,139,132,134,140,141,141,142,136,141,135,132,137,138,140,140,143,138,129,135,135,138,148,131,133,144,144,141,134,121,121,117,121,122,118,124,131,141,139,140,144,140,135,136,91,78,60,49,42,45,33,24,14,8],
+        "carnivore": [13,16,19,18,17,19,19,21,26,25,24,28,29,29,28,27,27,23,23,23,24,29,30,28,25,25,23,19,20,18,17,22,21,24,22,20,22,20,22,20,22,16,18,17,18,21,22,21,19,14,9,4,3,6,4,6,5,5,5,5]
+      },
+      "shot": { "file": "r0-1440x900.jpg", "caption": "1440x900, day 1, 01:13. Note the blank band along the bottom — the canvas is sized once at init and never again." },
+      "deadEnds": [
+        "Trusting docs/HANDOFF.md §0 as current state. It describes a search that has since finished and a model that has since gained five new subsystems. Its methodology sections (§5, §6) are still exactly right; its status sections are not.",
+        "Reading 'all three species survived 60k frames' as passing the ALIVE bar. With the rescue effect on, survival is nearly guaranteed and says almost nothing. The honest test is survival with ecology.rescueChance forced to 0."
+      ]
+    }
+  ]
+}

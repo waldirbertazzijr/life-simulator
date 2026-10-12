@@ -44,6 +44,39 @@ export const refreshCounts = () => {
     }
 };
 
+// Rescue effect (metapopulation immigration): a patch this small drifts to
+// extinction on its own; real ecosystems persist because individuals immigrate
+// from neighbouring patches (Levins; Brown & Kodric-Brown "rescue effect").
+// While a species is PRESENT but below its floor, it occasionally gains one
+// immigrant — enough to prevent permanent collapse, rare enough not to prop up
+// a healthy population. (The immigrant's energy is legitimate external input,
+// like the sun for trees.)
+export const maybeRescue = () => {
+    const cfg = config.ecology;
+    if (!cfg.rescueBelow) return;
+    for (const kind in cfg.rescueBelow) {
+        if (speciesCounts[kind] >= cfg.rescueBelow[kind]) continue;
+        // (Re)colonise from off-map — but only if there's food to sustain the
+        // immigrant (herbivores need trees, carnivores need herbivores). This lets
+        // a patch recover even from a total local extinction, as real metapopulations do.
+        const foodKind = kind === 'herbivore' ? 'tree' : 'herbivore';
+        if (speciesCounts[foodKind] < 1) continue;
+        if (Math.random() < cfg.rescueChance) {
+            const g = {
+                speedMultiplier: 0.7 + Math.random() * 0.6,
+                maxEnergyMultiplier: 0.7 + Math.random() * 0.6,
+                sizeMultiplier: 0.7 + Math.random() * 0.6,
+                visionRange: 0.7 + Math.random() * 0.6,
+                aggression: 0.7 + Math.random() * 0.6,
+                intelligence: 0.7 + Math.random() * 0.6,
+            };
+            const cfgS = kind === 'herbivore' ? config.herbivores : config.carnivores;
+            const age = Math.floor(cfgS.maxAge * (0.3 + Math.random() * 0.3)); // a breeding-age adult
+            animals.push(AnimalFactory.getAnimal(kind, g, age));
+        }
+    }
+};
+
 // Load images (guarded so the module can also load headlessly in Node, where
 // there is no `Image`. Images are only ever touched by draw(), never in a headless run).
 const loadImage = (src) => {
@@ -475,23 +508,27 @@ export class Animal {
         let bestTarget = null;
         let preyCount = 0; // edible prey perceived nearby (for the Type III response)
 
-        // Use the shared neighbour query (or fall back to a fresh one) filtered to range.
+        // Use the shared neighbour list (or fall back to a fresh query). When we
+        // reuse the shared list we re-check `range` inline instead of building a
+        // filtered copy — same subsequence, so behaviour is byte-identical.
         const searchRadius = 200;
         const range = new Circle(this.positionX, this.positionY, searchRadius);
-        const nearbyAnimals = nearby ? nearby.filter(a => range.contains(a)) : (quadtree ? quadtree.query(range) : animals);
+        const useShared = nearby !== null;
+        const nearbyAnimals = useShared ? nearby : (quadtree ? quadtree.query(range) : animals);
 
         // Intelligence: Look for family members to coordinate with
         let familyNearby = [];
         if (this.genetics.intelligence > 1.1) {
-            familyNearby = nearbyAnimals.filter(a =>
-                a.kind === this.kind &&
-                a.family === this.family &&
-                a !== this &&
-                this.getDistanceTo(a) < 100
-            );
+            for (const a of nearbyAnimals) {
+                if (useShared && !range.contains(a)) continue;
+                if (a.kind === this.kind && a.family === this.family && a !== this && this.getDistanceTo(a) < 100) {
+                    familyNearby.push(a);
+                }
+            }
         }
 
         for (const animal of nearbyAnimals) {
+            if (useShared && !range.contains(animal)) continue;
             if (this.consumes.includes(animal.kind) && this !== animal && this.family !== animal.family) {
                 // Vision system: Can only see animals in FOV cone
                 if (!this.isInVisionCone(animal)) {
@@ -557,11 +594,15 @@ export class Animal {
             // TYPE III FUNCTIONAL RESPONSE — commit to the hunt only with a
             // probability that rises with local prey density (a Hill function).
             // When prey are scarce the predator usually gives up and wanders off,
-            // giving rare prey a low-density REFUGE. This is a classic stabiliser
-            // (Holling): it stops predators from chasing the last few prey to
-            // extinction. Prey that are always abundant (trees) see commit ~ 1.
-            const refuge = config.ecology.typeIIIRefuge;
-            const commit = (preyCount * preyCount) / (preyCount * preyCount + refuge * refuge);
+            // giving rare prey a low-density REFUGE. Classic stabiliser (Holling).
+            // ONLY applies to hunting MOBILE prey (carnivores). Herbivores graze
+            // static, abundant trees — there's no "give up when scarce" there, and
+            // applying it just starves them, which collapses the whole web.
+            let commit = 1;
+            if (this.kind === 'carnivore') {
+                const refuge = config.ecology.typeIIIRefuge;
+                commit = (preyCount * preyCount) / (preyCount * preyCount + refuge * refuge);
+            }
             if (Math.random() < commit) {
                 this.moveToTarget(this.currentTarget);
                 this.explorationTimer = 0; // Reset exploration when we commit to food
@@ -612,7 +653,8 @@ export class Animal {
         if (!config.behavior.herdingEnabled) return;
 
         const range = new Circle(this.positionX, this.positionY, config.behavior.herdingRadius);
-        const nearbyAnimals = nearby ? nearby.filter(a => range.contains(a)) : (quadtree ? quadtree.query(range) : animals);
+        const useShared = nearby !== null;
+        const nearbyAnimals = useShared ? nearby : (quadtree ? quadtree.query(range) : animals);
 
         let herdCenterX = 0;
         let herdCenterY = 0;
@@ -620,6 +662,7 @@ export class Animal {
         let familyCount = 0;
 
         for (const animal of nearbyAnimals) {
+            if (useShared && !range.contains(animal)) continue;
             if (animal.kind === this.kind && this !== animal) {
                 herdCenterX += animal.positionX;
                 herdCenterY += animal.positionY;
@@ -654,12 +697,14 @@ export class Animal {
         let closestHunter = null;
         let closestHunterDistance = Infinity;
 
-        // Use the shared neighbour query (or fall back to a fresh one) filtered to range.
+        // Shared neighbour list, re-checked against `range` inline (no filtered copy).
         const searchRadius = 150;
         const range = new Circle(this.positionX, this.positionY, searchRadius);
-        const nearbyAnimals = nearby ? nearby.filter(a => range.contains(a)) : (quadtree ? quadtree.query(range) : animals);
+        const useShared = nearby !== null;
+        const nearbyAnimals = useShared ? nearby : (quadtree ? quadtree.query(range) : animals);
 
         for (const hunter of nearbyAnimals) {
+            if (useShared && !range.contains(hunter)) continue;
             if (this !== hunter && hunter.consumes.includes(this.kind) && this.family !== hunter.family) {
                 const distance = this.getDistanceTo(hunter);
                 if (distance < closestHunterDistance) {
@@ -741,13 +786,21 @@ export class Animal {
             : this.kind === 'herbivore' ? config.herbivores
             : this.kind === 'carnivore' ? config.carnivores : null;
         const areaScale = config.world.areaScale || 1; // scale the cap to the actual world size
-        if (speciesCfg && speciesCfg.carryingCapacity &&
-            speciesCounts[this.kind] >= speciesCfg.carryingCapacity * areaScale) {
-            return;
+        let densityFactor = 1;
+        if (speciesCfg && speciesCfg.carryingCapacity) {
+            const K = speciesCfg.carryingCapacity * areaScale;
+            if (speciesCounts[this.kind] >= K) return;
+            // SOFT logistic cap: reproduction slows smoothly as N → K, the real
+            // (1 − N/K) growth term — NOT a hard cutoff. A hard cutoff freezes
+            // reproduction the instant the population hits K, so the whole cohort
+            // ages together and mass-dies at senescence (a boom-bust crash, seen
+            // ~every 50k frames). The smooth term keeps young animals trickling in,
+            // so the age structure stays healthy and the population is steady.
+            densityFactor = 1 - speciesCounts[this.kind] / K;
         }
 
         // Adjust procreation chance based on time of day and species
-        let adjustedChance = this.procriationChance;
+        let adjustedChance = this.procriationChance * densityFactor;
 
         // Enhanced fertility mutation: 50% faster reproduction
         if (this.hasMutation('enhanced_fertility')) {
@@ -769,14 +822,16 @@ export class Animal {
             adjustedChance *= 1 + Math.min(soilNutrients / s.fertilityScale, s.maxFertilityBoost);
         }
 
+        // FOOD-GATED, ENERGY-CONSERVING reproduction: only a WELL-FED animal breeds,
+        // and the newborn's energy comes FROM the parent (nothing is created — this is
+        // what stopped carnivores self-funding by breeding + cannibalism). Gating on
+        // food self-limits the population and stops a starving animal from splitting
+        // into two doomed weaklings, which damps boom-bust overshoot collapse.
+        const offspringEnergy = this.maxEnergy * config.ecology.offspringEnergyFraction;
+        if (this.energy < offspringEnergy + this.maxEnergy * config.ecology.breedingReserve) return;
+
         if (Math.random() <= adjustedChance) {
-            // Reproduction is ENERGY-CONSERVING: the offspring starts with exactly the
-            // energy the parent invests — nothing is created. (Previously the child got
-            // a fresh 50-150 from config while the parent only lost a third, so breeding
-            // MANUFACTURED energy — which let carnivores self-sustain with no prey at
-            // all, purely by breeding and cannibalising each other.)
-            const investment = this.energy / 3;
-            this.energy -= investment;
+            this.energy -= offspringEnergy;
 
             // A new tree draws nutrients out of the soil as it grows.
             if (this.kind === 'tree') {
@@ -800,7 +855,7 @@ export class Animal {
             };
 
             const child = AnimalFactory.getAnimal(this.kind, childGenetics);
-            child.energy = investment; // offspring energy comes FROM the parent (conserved, not created)
+            child.energy = offspringEnergy; // viable start, paid from the parent (conserved, not created)
             child.positionX = this.positionX + randomInt(-10, 10);
             child.positionY = this.positionY + randomInt(-10, 10);
             child.family = this.family;
@@ -826,16 +881,21 @@ export class Animal {
         }
     }
 
-    feed(quadtree) {
+    feed(quadtree, nearby = null) {
         if (this.consumes.length === 0) return; // producers (trees) never eat — skip the query entirely
         if (this.isSleeping) return; // Can't feed while sleeping
 
-        // Use quadtree to find nearby animals
+        // The shared SENSE_RADIUS list is a superset of this tiny feed radius, so
+        // filter it inline rather than firing a second spatial query. Quadtree query
+        // order is "global tree order filtered by the circle", so the filtered
+        // subsequence matches a fresh feed-radius query exactly — byte-identical.
         const feedRadius = 10;
         const range = new Circle(this.positionX, this.positionY, feedRadius);
-        const nearbyAnimals = quadtree ? quadtree.query(range) : animals;
+        const useShared = nearby !== null;
+        const nearbyAnimals = useShared ? nearby : (quadtree ? quadtree.query(range) : animals);
 
         for (const target of nearbyAnimals) {
+            if (useShared && !range.contains(target)) continue;
             if (this.consumes.includes(target.kind) && this !== target && this.family !== target.family) {
                 const catchDistance = target.isSleeping ? 10 : 5; // Easier to catch sleeping prey
                 if (this.getDistanceTo(target) < catchDistance) {
@@ -871,12 +931,14 @@ export class Animal {
         let closestHunterDistance = Infinity;
         let closestHunter = null;
 
-        // Use the shared neighbour query (or fall back to a fresh one) filtered to range.
+        // Shared neighbour list, re-checked against `range` inline (no filtered copy).
         const searchRadius = stage === 'elderly' ? 200 : 150; // Elderly are more cautious
         const range = new Circle(this.positionX, this.positionY, searchRadius);
-        const nearbyAnimals = nearby ? nearby.filter(a => range.contains(a)) : (quadtree ? quadtree.query(range) : animals);
+        const useShared = nearby !== null;
+        const nearbyAnimals = useShared ? nearby : (quadtree ? quadtree.query(range) : animals);
 
         for (const hunter of nearbyAnimals) {
+            if (useShared && !range.contains(hunter)) continue;
             if (this !== hunter && hunter.consumes.includes(this.kind) && this.family !== hunter.family) {
                 // Vision system: Can only see predators in FOV cone
                 if (!this.isInVisionCone(hunter)) {
@@ -976,7 +1038,7 @@ export class Animal {
         }
 
         this.walk(quadtree, nearby);
-        this.feed(quadtree);
+        this.feed(quadtree, nearby);
         this.procriate(createProcreationAnimation, dayNightCycle);
     }
 
