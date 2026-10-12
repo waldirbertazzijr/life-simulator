@@ -9,6 +9,7 @@
 //   make shot ARGS="--speed 16 --at 4000,20000"       # 16x, shots at 4s and 20s
 //   make shot ARGS="--eval 'sim.follow(sim.world.humans.id[0])' --name follow"
 //   make shot ARGS="--query '?seed=3&2d'"
+//   make shot ARGS="--url https://waldirbertazzijr.github.io/life-simulator/?seed=7"
 import { spawn } from 'node:child_process';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -27,6 +28,7 @@ const SPEED = opt('speed', '');
 const MARKS = opt('at', '4000').split(',').map(Number);
 const EVAL = opt('eval', '');
 const NAME = opt('name', 'shot');
+const URL_ = opt('url', ''); // a full URL instead of the local repo, e.g. the live site
 const OUT = '/out';
 
 const out = (s) => fs.writeSync(1, `${s}\n`);
@@ -95,7 +97,7 @@ await send('Runtime.enable');
 await send('Log.enable');
 await send('Page.enable');
 await send('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: DPR, mobile: MOBILE });
-await send('Page.navigate', { url: `http://127.0.0.1:8080/${QUERY}` });
+await send('Page.navigate', { url: URL_ || `http://127.0.0.1:8080/${QUERY}` });
 await sleep(1000);
 if (SPEED) await evaluate(`document.querySelector('[data-speed="${SPEED}"]')?.click()`);
 if (EVAL) out(`EVAL: ${JSON.stringify(await evaluate(EVAL))}`);

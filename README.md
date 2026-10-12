@@ -8,6 +8,8 @@ Nothing is capped or scripted. The populations hold steady because of how the
 ecology works, and [docs/THEORY.md](docs/THEORY.md) explains why, one idea at
 a time. Where it's heading: [docs/ROADMAP.md](docs/ROADMAP.md).
 
+**Play it: <https://waldirbertazzijr.github.io/life-simulator/>**
+
 - **Grass** (green field): food that regrows on its own, fastest where it was grazed down.
 - **Herbivores** (light dots): graze, look for greener patches, run from predators and hunters.
 - **Carnivores** (red triangles): stalk, chase until out of stamina, crowd each other out.
@@ -45,6 +47,8 @@ Everything runs in containers (Docker via colima); nothing is installed on the h
 ```sh
 make serve          # → http://localhost:8000
 make check          # stability check: 8 seeds × 100k steps, in parallel
+make shot           # headless-browser screenshots into .shots/
+make fingerprint    # hash of the simulation's behaviour (unchanged by a pure refactor)
 ```
 
 `?seed=42` in the URL replays a specific world. In the browser console, `sim.world`
