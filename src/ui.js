@@ -76,7 +76,7 @@ class Sparkline {
 }
 
 export class Panel {
-    // actions: { togglePause, setSpeed(n), reset, setView(v), cycleView,
+    // actions: { togglePause, setSpeed(n), reset, start(seed), setView(v), cycleView,
     //            unfollow, followDescendant, followAnother, followTribe(id) }
     constructor(actions) {
         this.$ = (id) => document.getElementById(id);
@@ -107,8 +107,37 @@ export class Panel {
             b.addEventListener('click', () => actions.setView(b.dataset.view));
         }
 
+        // The seed field: type a number, Enter starts that world; Escape (or
+        // clicking away) puts back the current one. Keys typed here are the
+        // field's alone: they do not reach the shortcuts below, nor anyone
+        // else listening on the window (such as camera keys).
+        const seed = this.$('seed');
+        this.seedShown = '';
+        seed.addEventListener('keydown', (e) => {
+            e.stopPropagation();
+            if (e.key === 'Enter') {
+                const n = Number(seed.value.trim());
+                if (Number.isInteger(n) && n > 0) {
+                    seed.blur();
+                    actions.start(n);
+                } else {
+                    seed.select();
+                }
+            } else if (e.key === 'Escape') {
+                seed.blur();
+            }
+        });
+        seed.addEventListener('keyup', (e) => e.stopPropagation());
+        seed.addEventListener('input', () => this.fitSeed());
+        seed.addEventListener('focus', () => seed.select());
+        seed.addEventListener('blur', () => {
+            seed.value = this.seedShown;
+            this.fitSeed();
+        });
+
         window.addEventListener('keydown', (e) => {
             if (e.metaKey || e.ctrlKey || e.altKey) return;
+            if (e.target instanceof Element && e.target.closest('input, textarea, select, [contenteditable]')) return;
             if (e.key === ' ') {
                 e.preventDefault();
                 actions.togglePause();
@@ -123,6 +152,12 @@ export class Panel {
                 if (k >= 0 && k < speeds.length) actions.setSpeed(speeds[k]);
             }
         });
+    }
+
+    // The seed field is as wide as its digits, so it reads as part of the line.
+    fitSeed() {
+        const seed = this.$('seed');
+        seed.style.width = `${Math.max(1, seed.value.length)}ch`;
     }
 
     toggleCollapsed() {
@@ -271,10 +306,15 @@ export class Panel {
     }
 
     sample(world) {
-        this.lines.grass.push(world.grass.mean());
-        this.lines.herbivores.push(world.herbivores.n);
-        this.lines.carnivores.push(world.carnivores.n);
-        this.lines.humans.push(world.humans.n);
+        this.record(world.grass.mean(), world.herbivores.n, world.carnivores.n, world.humans.n);
+    }
+
+    // One point on each sparkline (the simulation sends these every 50 steps).
+    record(grass, herbivores, carnivores, humans) {
+        this.lines.grass.push(grass);
+        this.lines.herbivores.push(herbivores);
+        this.lines.carnivores.push(carnivores);
+        this.lines.humans.push(humans);
     }
 
     update(world) {
@@ -295,11 +335,17 @@ export class Panel {
 
         const t = world.time;
         const time = t < 1000 ? `${t}` : t < 1e6 ? `${(t / 1000).toFixed(1)}k` : `${(t / 1e6).toFixed(2)}M`;
-        let status = `step ${time} · seed ${world.seed}${world.watch ? '' : ' · click anyone to follow them'}`;
+        let status = `step ${time}${world.watch ? '' : ' · click anyone to follow them'}`;
         if (!world.herbivores.n || !world.carnivores.n) {
             status = `${world.herbivores.n ? 'carnivores' : 'herbivores'} went extinct · press R`;
         }
         $('status').textContent = status;
+        // The seed, unless someone is typing one.
+        this.seedShown = String(world.seed);
+        if (document.activeElement !== $('seed') && $('seed').value !== this.seedShown) {
+            $('seed').value = this.seedShown;
+            this.fitSeed();
+        }
 
         for (const l of Object.values(this.lines)) l.draw();
     }

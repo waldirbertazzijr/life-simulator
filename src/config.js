@@ -1,6 +1,6 @@
 // Every tunable number in the simulation lives here. Units:
 //   distance — world units (the world is ~1600 × 1000 of them)
-//   time     — steps (the browser runs 60 steps per second at 1×)
+//   time     — steps (the browser runs 15 steps per second at 1×)
 //   energy   — arbitrary; 1 unit of grass is worth `grassEnergy`
 //
 // planning/THEORY.md explains which knobs stabilise the system and why.

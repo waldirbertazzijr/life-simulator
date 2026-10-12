@@ -83,8 +83,16 @@
         th { color: var(--muted); font-size: 11px; padding-top: 8px; }
         td:first-child { color: var(--muted); }
 
-        footer { display: flex; align-items: center; margin-top: 8px; color: var(--muted); font-size: 11px; }
-        #status { margin-right: auto; }
+        footer { margin-top: 8px; color: var(--muted); font-size: 11px; line-height: 18px; }
+        /* The seed reads as part of the line until you click it; then it takes a
+           number, and Enter starts that world. Sized to its digits (ui.js). */
+        #seed {
+            width: 3ch; height: 17px; margin: 0 -3px; padding: 0 2px; box-sizing: content-box;
+            font: inherit; color: var(--muted); vertical-align: baseline;
+            background: none; border: 1px solid transparent; border-radius: 4px;
+        }
+        #seed:hover { color: var(--text); border-color: var(--line); }
+        #seed:focus { outline: none; color: var(--text); border-color: var(--muted); background: rgba(255, 255, 255, 0.05); }
 
         /* The animal being followed. */
         #follow { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
@@ -152,6 +160,7 @@
                     <button data-speed="4" title="4× (2)">4×</button>
                     <button data-speed="16" title="16× (3)">16×</button>
                     <button data-speed="64" title="64× (4)">64×</button>
+                    <button data-speed="256" title="256× (5)">256×</button>
                 </div>
                 <button id="pause" title="Pause (space)"></button>
                 <button id="reset" title="New world (R)"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.46-3.54"/><path d="M13 2.5v3h-3"/></svg></button>
@@ -210,7 +219,7 @@
                 <div id="tribes-empty" class="muted" hidden>no tribes left</div>
             </section>
 
-            <footer><span id="status"></span></footer>
+            <footer><label title="Type a seed and press Enter for that world">seed <input id="seed" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" aria-label="Seed"></label> · <span id="status"></span></footer>
         </div>
     </aside>
 
