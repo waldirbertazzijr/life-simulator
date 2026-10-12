@@ -5,6 +5,11 @@
 //   attach(world)  resize(world)  updateCamera(world, target, dt)
 //   draw(world, target, focus, senseRadius)  pick(world, px, py)  mode
 //
+// and, for what the page adds on top, only here: pose(id, code, seconds),
+// hold(id, code) and release(id) set anyone's pose (animate.js's POSE codes);
+// setBlood(on) and blood, the Blood setting; effects (effects.js): spray,
+// pool and carcass.
+//
 // Coordinates: world x → three.js X, world y → Z, height → Y; one world unit
 // is one three.js unit. The parts: the ground (terrain-mesh.js), the forests
 // (forest.js), the grass tufts near the camera (tufts.js), creatures, camps,
@@ -14,15 +19,18 @@
 //
 // Draw calls stay few: a handful of ground copies, two instanced meshes for
 // all the trees (one per kind), one for all the tufts, three more (one per
-// species), the water sheet, the sky, and two per visible camp.
+// species, the dead included), two for blood (droplets and pools), the water
+// sheet, the sky, two per visible camp, and two for all the camps' racks.
 import * as THREE from 'three';
 import { CameraRig } from './camera.js';
 import { Ground } from './terrain-mesh.js';
 import { Forest } from './forest.js';
 import { Tufts } from './tufts.js';
 import { Creatures } from './creatures.js';
+import { Effects } from './effects.js';
 import { Camps } from './camps.js';
 import { Marker } from './marker.js';
+import { Lineup } from './poses.js';
 import { groundOf } from './util.js';
 import { stubTerrain } from './terrain-stub.js';
 
@@ -72,6 +80,9 @@ function skyDome() {
 
 // DEV ONLY: `?stubterrain` shows a made-up terrain while the engine has none.
 const STUB = new URLSearchParams(location.search).has('stubterrain');
+// DEV ONLY: `?poses` (or `?poses=human`...) shows every pose lined up instead
+// of the world (poses.js).
+const LINEUP = new URLSearchParams(location.search).get('poses');
 
 export class View3D {
     constructor(canvas) {
@@ -97,8 +108,10 @@ export class View3D {
         this.forest = new Forest(this.scene);
         this.tufts = new Tufts(this.scene);
         this.creatures = new Creatures(this.scene);
+        this.effects = new Effects(this.scene, this.creatures.motion); // the dead, and blood
         this.camps = new Camps(this.scene, this.gl);
         this.marker = new Marker(this.scene);
+        this.lineup = LINEUP === null ? null : new Lineup(LINEUP);
         // JavaScript milliseconds per frame, for the last frame and smoothed:
         // our own updates (camera, ground, tufts, creatures, camps, marker),
         // and three.js's render call. The tufts keep their own finer numbers
@@ -122,6 +135,7 @@ export class View3D {
         this.forest.attach(world, this.terrain, this.ground);
         this.tufts.attach(world, this.terrain, this.ground);
         this.creatures.attach();
+        this.effects.attach(this.heightAt);
         this.camps.attach();
         this.rig.attach(world, this.terrain);
     }
@@ -132,6 +146,7 @@ export class View3D {
         this.gl.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
         this.gl.setSize(w, h);
         this.rig.resize(w, h);
+        this.lineup?.resize(w, h);
     }
 
     updateCamera(world, target, dt) {
@@ -141,6 +156,10 @@ export class View3D {
     }
 
     draw(world, target, focus, senseRadius) {
+        if (this.lineup) {
+            this.lineup.draw(this.gl);
+            return;
+        }
         const t0 = performance.now();
         const view = this.rig.view;
         this.scene.fog.far = view.fogFar;
@@ -154,7 +173,13 @@ export class View3D {
         // In first person we look out of the followed creature's eyes, so its
         // own body is not drawn (once the camera is close enough to be inside it).
         const inside = target && this.rig.mode === 'first' && this.rig.pose.dist < 6;
-        this.creatures.update(world, view, this.heightAt, inside ? target.pop.id[target.i] : 0);
+        // Strides, poses and the marks of death keep the moment drawn.
+        const shown = world.shown ?? world.time;
+        this.creatures.motion.tick(shown, t0);
+        this.effects.tick(this.creatures.motion.clock, shown);
+        this.effects.handle(world.events ?? []);
+        this.creatures.update(world, view, this.heightAt, inside ? target.pop.id[target.i] : 0, this.effects);
+        this.effects.update(view);
         this.camps.update(world, view, this.heightAt);
         this.marker.update(world, view, this.heightAt, target, focus, senseRadius);
         const t1 = performance.now();
@@ -170,5 +195,29 @@ export class View3D {
     // The id of whoever is drawn under pixel (px, py) (within 16 px), or 0.
     pick(world, px, py) {
         return this.creatures.pick(this.rig.camera, this.rig.w, this.rig.h, px, py);
+    }
+
+    // A one-shot pose on anyone (`seconds` at 1×; it defaults to the pose's own).
+    pose(id, code, seconds) {
+        this.creatures.motion.pose(id, code, seconds);
+    }
+
+    // A pose shown until release(id).
+    hold(id, code) {
+        this.creatures.motion.hold(id, code);
+    }
+
+    release(id) {
+        this.creatures.motion.release(id);
+    }
+
+    get blood() {
+        return this.effects.blood;
+    }
+
+    // Sprays and pools on or off (the dead fall either way). The panel's
+    // switch calls this; main.js remembers the choice.
+    setBlood(on) {
+        this.effects.setBlood(on);
     }
 }

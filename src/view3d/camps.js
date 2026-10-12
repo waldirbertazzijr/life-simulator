@@ -1,23 +1,66 @@
-// Camps: a dark patch of trodden ground, and a pole flying the tribe's flag.
+// Camps: a dark patch of trodden ground, a pole flying the tribe's flag, and
+// a rack where the tribe's food hangs to dry.
 //
 // The flag is the same drawing as in the panel (flag.js), painted once into a
 // small canvas that becomes a texture. Pole and flag are a single mesh that
 // turns to face the camera, so the flag is never seen edge-on, and in the map
 // view it grows with distance so it still reads from high above.
+//
+// The rack shows the tribe's store: a strip of meat for every MEAT_EACH of
+// food, up to MEAT_CAP, so a well-fed camp's rack is full, a hungry one's
+// bare, and a raid can be seen emptying it. All racks are one instanced mesh,
+// and all the meat another.
 import * as THREE from 'three';
 import { drawFlag } from '../flag.js';
-import { wrapDelta, TAU } from './util.js';
+import { rackShape, meatShape, RACK_RIDGE, RACK_HALF } from './shapes.js';
+import { wrapDelta, TAU, hash } from './util.js';
 
-const POLE = 10;          // pole height (people are ~5 tall)
-const FLAG_W = 6;
-const FLAG_H = 4;
-const FLAG_MIN_PX = 22;   // in the map view the flag stays at least this wide on screen
+// Near the ground the pole stands a little taller than a person (people are
+// about 4.8 tall); in the map view the flag grows with distance, so it stays
+// at least FLAG_MIN_PX wide on screen however small it is up close.
+const POLE = 6.2;         // pole height
+const FLAG_W = 3.3;
+const FLAG_H = 2.2;
+const FLAG_MIN_PX = 22;
 const POLE_COLOR = '#d9dcd6';
 // Texture layout: a strip of pole colour on the left, a gap, then the flag.
 const TEX_W = 72;
 const TEX_H = 40;
 const TEX_POLE = 6;
 const TEX_FLAG = 12;
+const RACK_AT = 8;          // the rack stands this far from the pole...
+export const MEAT_CAP = 10; // ...with at most this many strips of meat on it
+const MEAT_EACH = 75;       // food per strip (about what one grazer brings in)
+const RACK_MIN_PX = 4;      // a rack shorter than this on screen is not drawn...
+const MEAT_MIN_PX = 1;      // ...nor its meat when a strip (half a unit wide) is narrower than this
+const WOOD = '#6f604c';
+const MEAT = '#874233';
+// The place along the ridge the k-th strip takes: from the middle outward.
+const SLOTS = [4, 5, 3, 6, 2, 7, 1, 8, 0, 9];
+
+// Strips of meat on a rack for this much food in store: one as soon as there
+// is any, one more for each MEAT_EACH, up to MEAT_CAP.
+export function meatOnRack(store) {
+    if (!(store > 0)) return 0;
+    return Math.min(MEAT_CAP, Math.max(1, Math.round(store / MEAT_EACH)));
+}
+
+// Write a turn by `h` about the vertical, a scale and a move into a matrix
+// (model +X along (cos h, sin h) in world (x, y), as for the creatures).
+function place(te, o, h, sx, sy, x, y, z) {
+    const c = Math.cos(h);
+    const s = Math.sin(h);
+    te.fill(0, o, o + 16);
+    te[o] = sx * c;
+    te[o + 2] = sx * s;
+    te[o + 5] = sy;
+    te[o + 8] = -sx * s;
+    te[o + 10] = sx * c;
+    te[o + 12] = x;
+    te[o + 13] = y;
+    te[o + 14] = z;
+    te[o + 15] = 1;
+}
 
 // Pole (a thin square column) and flag (a quad off its top), sharing one
 // texture: the pole samples the strip, the flag the drawing.
@@ -86,9 +129,34 @@ export class Camps {
             color: '#101211', transparent: true, opacity: 0.35, depthWrite: false, side: THREE.DoubleSide,
             polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4,
         });
-        this.tribes = new Map(); // tribe id → { material, disc, h0, seen }
+        this.tribes = new Map(); // tribe id → { material, disc, h0, rack, seen }
         this.pool = [];          // drawn camps: { flag, disc } meshes, reused frame to frame
         this.frame = 0;
+        const lit = (color) => new THREE.MeshLambertMaterial({ color, vertexColors: true, flatShading: true });
+        this.racks = this.instanced(rackShape(), lit(WOOD), 32);
+        this.meat = this.instanced(meatShape(), lit(MEAT), 32 * MEAT_CAP);
+    }
+
+    // An instanced mesh with room for `cap`, or (given `old`) a bigger one in its place.
+    instanced(geometry, material, cap, old = null) {
+        const mesh = new THREE.InstancedMesh(geometry, material, cap);
+        mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+        mesh.frustumCulled = false; // camps are all over the world; only those in view are written
+        mesh.count = 0;
+        if (old) {
+            this.scene.remove(old);
+            old.dispose();
+        }
+        this.scene.add(mesh);
+        return mesh;
+    }
+
+    room(name, need) {
+        const mesh = this[name];
+        if (need > mesh.instanceMatrix.count) {
+            this[name] = this.instanced(mesh.geometry, mesh.material, Math.max(need, mesh.instanceMatrix.count * 2), mesh);
+        }
+        return this[name].instanceMatrix.array;
     }
 
     attach() {
@@ -126,6 +194,7 @@ export class Camps {
                 material,
                 disc: groundDisc(campRadius, ground, tribe.camp.x, tribe.camp.y),
                 h0: ground(tribe.camp.x, tribe.camp.y),
+                rack: (hash(tribe.id) / 2 ** 32) * TAU, // which way from the pole the rack stands
                 seen: 0,
             };
             this.tribes.set(tribe.id, t);
@@ -150,9 +219,19 @@ export class Camps {
         const campRadius = world.p.human.campRadius;
         const pad = campRadius + 40;
         let n = 0;
+        let racks = 0;
+        let strips = 0;
         for (const tribe of world.tribes) {
             const t = this.entry(tribe, ground, campRadius);
             t.seen = frame;
+            // The rack: beside the pole, its ridge across the line to it.
+            const ox = Math.cos(t.rack) * RACK_AT;
+            const oz = Math.sin(t.rack) * RACK_AT;
+            const ry = ground(tribe.camp.x + ox, tribe.camp.y + oz);
+            const along = t.rack + Math.PI / 2;
+            const ux = Math.cos(along);
+            const uz = Math.sin(along);
+            const meat = meatOnRack(tribe.store);
             const dx = wrapDelta(tribe.camp.x - fx, W);
             const dz = wrapDelta(tribe.camp.y - fz, H);
             const ax0 = Math.ceil((view.minX - pad - dx) / W);
@@ -177,12 +256,37 @@ export class Camps {
                     flag.scale.setScalar(s > 1 ? s : 1);
                     flag.visible = true;
                     disc.visible = true;
+
+                    // From high above a rack is a speck, and its meat less.
+                    const perUnit = Math.sqrt(ex * ex + ey * ey + ez * ez) * view.unitPx; // world units per pixel there
+                    if (perUnit * RACK_MIN_PX > 2 * RACK_HALF) continue;
+                    const x = rx + ox;
+                    const z = rz + oz;
+                    place(this.room('racks', racks + 1), racks++ * 16, along, 1, 1, x, ry, z);
+                    if (0.5 / perUnit < MEAT_MIN_PX) continue;
+                    const te = this.room('meat', strips + meat);
+                    for (let k = 0; k < meat; k++) {
+                        // Strips hang a little turned and of different lengths, the same each time.
+                        const slot = SLOTS[k];
+                        const h = hash(tribe.id * 16 + slot);
+                        const at = -RACK_HALF + (slot * 2 * RACK_HALF) / (MEAT_CAP - 1);
+                        const twist = ((h & 255) / 255 - 0.5) * 0.7;
+                        const long = 0.85 + 0.3 * (((h >>> 8) & 255) / 255);
+                        place(te, strips++ * 16, along + twist, 1, long, x + ux * at, ry + RACK_RIDGE - 0.06, z + uz * at);
+                    }
                 }
             }
         }
         for (let i = n; i < this.pool.length; i++) {
             this.pool[i].flag.visible = false;
             this.pool[i].disc.visible = false;
+        }
+        for (const [mesh, count] of [[this.racks, racks], [this.meat, strips]]) {
+            mesh.count = count;
+            if (!count) continue;
+            mesh.instanceMatrix.clearUpdateRanges();
+            mesh.instanceMatrix.addUpdateRange(0, count * 16);
+            mesh.instanceMatrix.needsUpdate = true;
         }
         // Now and then, let go of tribes that have died out.
         if (frame % 120 === 0) {

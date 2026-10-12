@@ -3,12 +3,18 @@
 // the ground, turned to its heading, scaled) is written straight into the
 // instance buffer; people also get their tribe's colour per instance.
 //
+// Bodies move (animate.js): each instance also gets its gait (how far through
+// a stride, how fast) and its pose (which, how far through, how much), and
+// the species' vertex shader moves the legs, head and arms from those.
+//
 // The world wraps, so an individual is drawn at each of its copies the camera
 // can see: usually just one, but from high above the map shows the world's
 // neighbouring copies too, and they are not empty.
 import * as THREE from 'three';
 import { COLORS } from '../render.js';
-import { herbivoreShape, carnivoreShape, personShape } from './shapes.js';
+import { STATE } from '../population.js';
+import { herbivoreShape, carnivoreShape, personShape, RIGS } from './shapes.js';
+import { GAIT, KINDS, POSE, POSES, Motion, VERTEX_PARS, VERTEX_MAIN, firstRow, poseTable } from './animate.js';
 import { wrapDelta } from './util.js';
 
 // size: rough length in world units; minPx: in the map view, bodies grow with
@@ -19,16 +25,53 @@ export const SPECIES = {
     carnivore: { size: 7, minPx: 11, center: 1.7, ring: 6 },
     human: { size: 4.8, minPx: 10, center: 2.4, ring: 4 },
 };
-const CHILD = 0.62; // a child's size, relative to an adult
+export const SHAPES = { herbivore: herbivoreShape, carnivore: carnivoreShape, human: personShape };
+export const CHILD = 0.62; // a child's size, relative to an adult
 
 // Is a ball of radius r at (x, y, z) wholly outside one of the view's planes?
-function offScreen(P, x, y, z, r) {
+export function offScreen(P, x, y, z, r) {
     for (let p = 0; p < 24; p += 4) if (P[p] * x + P[p + 1] * y + P[p + 2] * z + P[p + 3] < -r) return true;
     return false;
 }
 
+// The keyframes of every pose, for the vertex shaders: one small float
+// texture shared by all three species.
+let keyframes = null;
+function poseTexture() {
+    if (!keyframes) {
+        const { data, width, height } = poseTable();
+        keyframes = new THREE.DataTexture(data, width, height, THREE.RGBAFormat, THREE.FloatType);
+        keyframes.needsUpdate = true;
+    }
+    return keyframes;
+}
+
+// A species' material: flat-shaded and lit, with the animation in its vertex
+// shader. The three species share one shader program; what differs (joints,
+// gait) is in their uniforms.
+export function herdMaterial(kind, color) {
+    const g = GAIT[kind];
+    const uniforms = {
+        uPoses: { value: poseTexture() },
+        uRow: { value: firstRow(kind) },
+        uTorso: { value: new THREE.Vector3(...RIGS[kind].torso) },
+        uRoot: { value: new THREE.Vector3(...RIGS[kind].root) },
+        uGaitA: { value: new THREE.Vector4(g.swing, g.runSwing, g.leg, g.pitch) },
+        uGaitB: { value: new THREE.Vector4(g.lean, g.headLean, g.arms, g.quad) },
+    };
+    const material = new THREE.MeshLambertMaterial({ color, vertexColors: true, flatShading: true });
+    material.onBeforeCompile = (shader) => {
+        Object.assign(shader.uniforms, uniforms);
+        shader.vertexShader = shader.vertexShader
+            .replace('#include <common>', `#include <common>\n${VERTEX_PARS}`)
+            .replace('#include <begin_vertex>', VERTEX_MAIN);
+    };
+    material.customProgramCacheKey = () => 'creature';
+    return material;
+}
+
 // One species: an InstancedMesh that grows when it runs out of room.
-class Herd {
+export class Herd {
     constructor(scene, geometry, material, tinted) {
         this.scene = scene;
         this.geometry = geometry;
@@ -47,6 +90,8 @@ class Herd {
             mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(cap * 3), 3);
             mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
         }
+        const gait = new THREE.InstancedBufferAttribute(new Float32Array(cap * 2), 2).setUsage(THREE.DynamicDrawUsage);
+        const pose = new THREE.InstancedBufferAttribute(new Float32Array(cap * 3), 3).setUsage(THREE.DynamicDrawUsage);
         // Instances move every frame, so precomputed bounds would be stale;
         // instead each one is checked against the view as it is written.
         mesh.frustumCulled = false;
@@ -54,39 +99,48 @@ class Herd {
         if (this.mesh) {
             mesh.instanceMatrix.array.set(this.mesh.instanceMatrix.array);
             if (this.tinted) mesh.instanceColor.array.set(this.mesh.instanceColor.array);
+            gait.array.set(this.gait.array);
+            pose.array.set(this.pose.array);
             this.scene.remove(this.mesh);
             this.mesh.dispose();
         }
+        this.geometry.setAttribute('gait', gait);
+        this.geometry.setAttribute('pose', pose);
         this.scene.add(mesh);
         this.mesh = mesh;
         this.capacity = cap;
+        this.gait = gait;
+        this.pose = pose;
         this.matrices = mesh.instanceMatrix.array;
         this.colors = this.tinted ? mesh.instanceColor.array : null;
+        this.gaits = gait.array;
+        this.poses = pose.array;
     }
 
     commit(count) {
         const { mesh } = this;
         mesh.count = count;
         if (!count) return;
-        mesh.instanceMatrix.clearUpdateRanges();
-        mesh.instanceMatrix.addUpdateRange(0, count * 16);
-        mesh.instanceMatrix.needsUpdate = true;
-        if (this.tinted) {
-            mesh.instanceColor.clearUpdateRanges();
-            mesh.instanceColor.addUpdateRange(0, count * 3);
-            mesh.instanceColor.needsUpdate = true;
-        }
+        const update = (attribute, size) => {
+            attribute.clearUpdateRanges();
+            attribute.addUpdateRange(0, count * size);
+            attribute.needsUpdate = true;
+        };
+        update(mesh.instanceMatrix, 16);
+        if (this.tinted) update(mesh.instanceColor, 3);
+        update(this.gait, 2);
+        update(this.pose, 3);
     }
 }
 
 export class Creatures {
     constructor(scene) {
-        const mat = (color) => new THREE.MeshLambertMaterial({ color, vertexColors: true, flatShading: true });
         this.herds = {
-            herbivore: new Herd(scene, herbivoreShape(), mat(COLORS.herbivore), false),
-            carnivore: new Herd(scene, carnivoreShape(), mat(COLORS.carnivore), false),
-            human: new Herd(scene, personShape(), mat('#ffffff'), true),
+            herbivore: new Herd(scene, herbivoreShape(), herdMaterial('herbivore', COLORS.herbivore), false),
+            carnivore: new Herd(scene, carnivoreShape(), herdMaterial('carnivore', COLORS.carnivore), false),
+            human: new Herd(scene, personShape(), herdMaterial('human', '#ffffff'), true),
         };
+        this.motion = new Motion(); // everyone's stride and pose, by id
         this.tribeColors = new Map(); // tribe id → linear RGB
         this.color = new THREE.Color();
         // Where each drawn instance's body is, for clicks.
@@ -96,10 +150,12 @@ export class Creatures {
         this.vp = new THREE.Matrix4();
     }
 
-    // A new world: forget the tribes' colours (it reuses their ids).
+    // A new world: forget the tribes' colours (it reuses their ids), and
+    // everyone's strides.
     attach() {
         this.tribeColors.clear();
         this.pickN = 0;
+        this.motion.reset();
     }
 
     tribeColor(world, id) {
@@ -113,42 +169,60 @@ export class Creatures {
         return c;
     }
 
-    // Write all three species. `hideId`: someone not to draw (whoever the
-    // first-person camera is looking out of).
-    update(world, view, ground, hideId) {
+    // Write all three species, and their dead (`effects`, effects.js).
+    // `hideId`: someone not to draw (whoever the first-person camera is
+    // looking out of). The motion clock (motion.tick) has been moved on to
+    // this frame already.
+    update(world, view, ground, hideId, effects = null) {
         if (this.tribeColors.size > 64) this.tribeColors.clear();
         this.pickN = 0;
-        this.write(world, world.herbivores, 'herbivore', view, ground, hideId, 0);
-        this.write(world, world.carnivores, 'carnivore', view, ground, hideId, 0);
-        this.write(world, world.humans, 'human', view, ground, hideId, world.p.human.maturity);
+        this.write(world, world.herbivores, 'herbivore', view, ground, hideId, 0, effects);
+        this.write(world, world.carnivores, 'carnivore', view, ground, hideId, 0, effects);
+        this.write(world, world.humans, 'human', view, ground, hideId, world.p.human.maturity, effects);
     }
 
-    write(world, pop, kind, view, ground, hideId, maturity) {
+    write(world, pop, kind, view, ground, hideId, maturity, effects) {
         const herd = this.herds[kind];
         const spec = SPECIES[kind];
+        const motion = this.motion;
+        const P = world.p[kind];
         const { W, H, fx, fz, minX, maxX, minZ, maxZ, camX, camY, camZ, planes } = view;
+        motion.species(kind, W, H, P.speed * P.cruise);
         const grow = (view.unitPx * spec.minPx * view.mapness) / spec.size; // scale per unit of distance
         const near2 = view.personalSpace * view.personalSpace;
-        const { x, y, heading, id, age, tribe } = pop;
+        const { x, y, heading, id, age, tribe, state } = pop;
+        // People are tracked even off screen: should one die there, its body
+        // still wears its tribe's colour.
+        const always = kind === 'human';
+        // The person the page controls (play/) sits only to rest; standing
+        // still at camp, it stands.
+        const player = always ? world.player ?? null : null;
         let te = herd.matrices;
         let tc = herd.colors;
+        let tg = herd.gaits;
+        let tp = herd.poses;
         let k = 0;
         for (let i = 0; i < pop.n; i++) {
-            if (id[i] === hideId) continue;
+            const base = maturity && age[i] < maturity ? CHILD : 1;
             // Its copies in view: offsets dx + ax·W with ax in [ax0, ax1].
             const dx = wrapDelta(x[i] - fx, W);
             const ax0 = Math.ceil((minX - dx) / W);
             const ax1 = Math.floor((maxX - dx) / W);
-            if (ax0 > ax1) continue;
             const dz = wrapDelta(y[i] - fz, H);
             const az0 = Math.ceil((minZ - dz) / H);
             const az1 = Math.floor((maxZ - dz) / H);
-            if (az0 > az1) continue;
+            let st = state[i];
+            if (player !== null && id[i] === player.id) st = player.resting ? STATE.AT_CAMP : st === STATE.AT_CAMP ? STATE.WALKING : st;
+            if (ax0 > ax1 || az0 > az1 || id[i] === hideId) {
+                if (always) motion.track(id[i], x[i], y[i], st, base, tribe[i]);
+                continue;
+            }
+            motion.track(id[i], x[i], y[i], st, base, tribe[i]);
+            const { phase, amount, code, progress, weight } = motion;
 
             const gy = ground(x[i], y[i]);
             const c = Math.cos(heading[i]);
             const s = Math.sin(heading[i]);
-            const base = maturity && age[i] < maturity ? CHILD : 1;
             const rgb = tc ? this.tribeColor(world, tribe[i]) : null;
             for (let ax = ax0; ax <= ax1; ax++) {
                 for (let az = az0; az <= az1; az++) {
@@ -170,6 +244,8 @@ export class Creatures {
                         herd.grow(k + 1);
                         te = herd.matrices;
                         tc = herd.colors;
+                        tg = herd.gaits;
+                        tp = herd.poses;
                     }
                     // A turn by the heading about the vertical, a uniform
                     // scale, and a move: model +X ends up along (cos h, sin h)
@@ -196,12 +272,87 @@ export class Creatures {
                         tc[k * 3 + 1] = rgb[1];
                         tc[k * 3 + 2] = rgb[2];
                     }
+                    tg[k * 2] = phase;
+                    tg[k * 2 + 1] = amount;
+                    tp[k * 3] = code;
+                    tp[k * 3 + 1] = progress;
+                    tp[k * 3 + 2] = weight;
                     this.remember(rx, cy, rz, id[i]);
                     k++;
                 }
             }
         }
+        if (effects) k = this.writeDead(world, kind, view, effects, k);
         herd.commit(k);
+    }
+
+    // The dead of this kind (effects.js) where they fell, after the living
+    // (from instance k): fallen over in the FALL pose, and sinking into the
+    // ground as they fade. They cannot be clicked.
+    writeDead(world, kind, view, effects, k) {
+        const herd = this.herds[kind];
+        const spec = SPECIES[kind];
+        const d = effects.dead;
+        const which = KINDS.indexOf(kind);
+        const fall = POSES[kind][POSE.FALL].seconds;
+        const { W, H, fx, fz, minX, maxX, minZ, maxZ, camX, camY, camZ, planes } = view;
+        const grow = (view.unitPx * spec.minPx * view.mapness) / spec.size;
+        const near2 = view.personalSpace * view.personalSpace;
+        for (let q = 0; q < d.count; q++) {
+            const j = (d.start + q) % d.cap;
+            if (d.kind[j] !== which) continue;
+            const dx = wrapDelta(d.x[j] - fx, W);
+            const ax0 = Math.ceil((minX - dx) / W);
+            const ax1 = Math.floor((maxX - dx) / W);
+            const dz = wrapDelta(d.y[j] - fz, H);
+            const az0 = Math.ceil((minZ - dz) / H);
+            const az1 = Math.floor((maxZ - dz) / H);
+            if (ax0 > ax1 || az0 > az1) continue;
+            const gy = d.gy[j];
+            const c = Math.cos(d.heading[j]);
+            const s = Math.sin(d.heading[j]);
+            const progress = Math.min(1, Math.max(0, (effects.clock - d.t0[j]) / fall));
+            const sink = d.fade[j] * spec.center * 1.4;
+            const rgb = herd.tinted ? this.tribeColor(world, d.tribe[j]) : null;
+            for (let ax = ax0; ax <= ax1; ax++) {
+                for (let az = az0; az <= az1; az++) {
+                    const rx = dx + ax * W;
+                    const rz = dz + az * H;
+                    const ex = rx - camX;
+                    const ey = gy - camY;
+                    const ez = rz - camZ;
+                    const d2 = ex * ex + ey * ey + ez * ez;
+                    if (d2 < near2) continue;
+                    let sc = d.scale[j];
+                    if (grow > 0) {
+                        const up = Math.sqrt(d2) * grow;
+                        if (up > 1) sc *= up;
+                    }
+                    if (offScreen(planes, rx, gy, rz, spec.size * sc)) continue;
+                    if (k >= herd.capacity) herd.grow(k + 1);
+                    const te = herd.matrices;
+                    const o = k * 16;
+                    te.fill(0, o, o + 16);
+                    te[o] = sc * c;
+                    te[o + 2] = sc * s;
+                    te[o + 5] = sc;
+                    te[o + 8] = -sc * s;
+                    te[o + 10] = sc * c;
+                    te[o + 12] = rx;
+                    te[o + 13] = gy - sink * sc;
+                    te[o + 14] = rz;
+                    te[o + 15] = 1;
+                    if (rgb) herd.colors.set(rgb, k * 3);
+                    herd.gaits[k * 2] = 0;
+                    herd.gaits[k * 2 + 1] = 0;
+                    herd.poses[k * 3] = POSE.FALL;
+                    herd.poses[k * 3 + 1] = progress;
+                    herd.poses[k * 3 + 2] = 1;
+                    k++;
+                }
+            }
+        }
+        return k;
     }
 
     remember(x, y, z, id) {

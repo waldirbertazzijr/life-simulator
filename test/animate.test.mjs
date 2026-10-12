@@ -1,0 +1,589 @@
+// Bodies in motion (src/view3d/): gait and poses (animate.js), body parts
+// (shapes.js), carcasses and blood (effects.js), meat racks (camps.js).
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { register } from 'node:module';
+import { params } from '../src/config.js';
+import { STATE } from '../src/population.js';
+
+// The view's modules import 'three', which the page maps to the vendored
+// copy (an import map in index.html); here a loader hook does the same.
+const THREE_URL = new URL('../vendor/three/three.module.min.js', import.meta.url).href;
+register(`data:text/javascript,${encodeURIComponent(
+    `export async function resolve(s, c, next) { return s === 'three' ? { url: ${JSON.stringify(THREE_URL)}, shortCircuit: true } : next(s, c); }`,
+)}`);
+
+const { POSE, POSES, KINDS, Motion, statePose, poseApplies, samplePose, strideOf } = await import('../src/view3d/animate.js');
+
+const W = 1000;
+const H = 600;
+const TAU = Math.PI * 2;
+const walking = (kind) => params[kind].speed * params[kind].cruise; // units per step at gene 1
+
+// A Motion whose clock has started; frame() moves it on by one 60 Hz frame
+// at 1× (a quarter of a step), or as told.
+function motion() {
+    const m = new Motion();
+    m.tick(0, 0);
+    return m;
+}
+const frame = (m, steps = 0.25, ms = 1000 / 60) => m.tick(m.shown + steps, m.last + ms);
+function track(m, kind, id, x, y, state, scale = 1, tribe = 0) {
+    m.species(kind, W, H, walking(kind));
+    m.track(id, x, y, state, scale, tribe);
+    return { phase: m.phase, amount: m.amount, code: m.code, progress: m.progress, weight: m.weight };
+}
+// Walk an individual along x at `perStep` units per step for `frames` frames.
+function walk(m, kind, id, x0, perStep, frames, state = STATE.SEARCHING, scale = 1) {
+    let x = x0;
+    let out = null;
+    for (let f = 0; f < frames; f++) {
+        frame(m);
+        x += perStep * 0.25;
+        out = track(m, kind, id, x, 100, state, scale);
+    }
+    return { x, ...out };
+}
+const cycleDelta = (a, b) => ((b - a) % 1 + 1) % 1;
+
+test('pose codes are the agreed numbers', () => {
+    assert.deepEqual({ ...POSE }, {
+        NONE: 0, THROW: 1, JAB: 2, SWING: 3, GATHER: 4, BUTCHER: 5, EAT: 6, CHOP: 7, KNAP: 8,
+        CRAFT: 9, SIT: 10, ROLL: 11, FALL: 12, CROUCH: 13, POUNCE: 14, GRAZE: 15, HOP: 16,
+    });
+});
+
+test('the gait advances with distance, not time', () => {
+    const m = motion();
+    const settled = walk(m, 'herbivore', 7, 100, 0.5, 120); // up to a steady walk
+    assert.ok(Math.abs(settled.amount - 1) < 0.01, `walking amount ${settled.amount}`);
+    // Three and a quarter strides further on, the legs are a quarter cycle on.
+    const stride = strideOf('herbivore', 1);
+    const n = 52;
+    const per = (stride * 3.25) / n;
+    let x = settled.x;
+    let out;
+    for (let f = 0; f < n; f++) {
+        frame(m);
+        x += per;
+        out = track(m, 'herbivore', 7, x, 100, STATE.SEARCHING);
+    }
+    assert.ok(Math.abs(cycleDelta(settled.phase, out.phase) - 0.25) < 1e-6, `advanced ${cycleDelta(settled.phase, out.phase)}`);
+    // Standing still while time passes: the legs stay where they are.
+    for (let f = 0; f < 60; f++) {
+        frame(m);
+        track(m, 'herbivore', 7, x, 100, STATE.GRAZING);
+    }
+    assert.equal(m.phase, out.phase);
+});
+
+test("the gait takes the short way across the world's edge", () => {
+    const m = motion();
+    walk(m, 'herbivore', 7, W - 30, 0.5, 120); // settled, heading for the edge
+    frame(m);
+    const before = track(m, 'herbivore', 7, W - 0.2, 100, STATE.SEARCHING).phase;
+    frame(m);
+    const after = track(m, 'herbivore', 7, 0.1, 100, STATE.SEARCHING).phase;
+    const expect = 0.3 / strideOf('herbivore', m.amount);
+    assert.ok(Math.abs(cycleDelta(before, after) - expect) < 0.01, `advanced ${cycleDelta(before, after)}, want ${expect}`);
+});
+
+test('newborns start mid-stride, not in step', () => {
+    const m = motion();
+    const quarters = [0, 0, 0, 0];
+    const phases = [];
+    for (let id = 1000; id < 1400; id++) {
+        const { phase } = track(m, 'herbivore', id, 50, 50, STATE.GRAZING);
+        assert.ok(phase >= 0 && phase < 1);
+        quarters[Math.floor(phase * 4)]++;
+        phases.push(phase);
+    }
+    for (const q of quarters) assert.ok(q > 60, `quarters ${quarters}`);
+    let same = 0;
+    for (let k = 1; k < phases.length; k++) if (Math.abs(phases[k] - phases[k - 1]) < 0.005) same++;
+    assert.ok(same < 15, `${same} consecutive ids nearly in step`);
+});
+
+test('a child takes shorter strides', () => {
+    const m = motion();
+    const a = walk(m, 'human', 1, 100, 0.4, 120);
+    const c = walk(m, 'human', 2, 100, 0.4, 120, STATE.SEARCHING, 0.62);
+    const a0 = a.phase;
+    const c0 = c.phase;
+    const a1 = walk(m, 'human', 1, a.x, 0.4, 8).phase;
+    const c1 = walk(m, 'human', 2, c.x, 0.4, 8, STATE.SEARCHING, 0.62).phase;
+    const ratio = cycleDelta(c0, c1) / cycleDelta(a0, a1);
+    assert.ok(Math.abs(ratio - 1 / 0.62) < 0.02, `ratio ${ratio}`);
+});
+
+test('a jump does not spin the legs', () => {
+    const m = motion();
+    const { phase } = track(m, 'carnivore', 9, 100, 100, STATE.ROAMING);
+    frame(m);
+    const after = track(m, 'carnivore', 9, 160, 100, STATE.ROAMING).phase;
+    assert.ok(cycleDelta(phase, after) <= 0.2 + 1e-9);
+});
+
+test('state decides the pose', () => {
+    const S = STATE;
+    assert.equal(statePose('herbivore', S.GRAZING, true), POSE.GRAZE);
+    assert.equal(statePose('herbivore', S.EATING, true), POSE.GRAZE);
+    assert.equal(statePose('herbivore', S.SEARCHING, false), POSE.NONE);
+    assert.equal(statePose('herbivore', S.FLEEING, false), POSE.NONE);
+    assert.equal(statePose('carnivore', S.EATING, true), POSE.EAT);
+    assert.equal(statePose('carnivore', S.CHASING, false), POSE.NONE);
+    assert.equal(statePose('human', S.GATHERING, true), POSE.GATHER);
+    assert.equal(statePose('human', S.GATHERING, false), POSE.NONE);
+    assert.equal(statePose('human', S.AT_CAMP, true), POSE.SIT);
+    assert.equal(statePose('human', S.AT_CAMP, false), POSE.NONE);
+    assert.equal(statePose('human', S.PLAYING, true), POSE.HOP);
+    assert.equal(statePose('human', S.PLAYING, false), POSE.HOP);
+    assert.equal(statePose('human', S.HUNTING, true), POSE.NONE);
+    // In Motion: a grazer standing at its patch eases into the pose.
+    const m = motion();
+    let out;
+    for (let f = 0; f < 60; f++) {
+        frame(m);
+        out = track(m, 'herbivore', 3, 10, 10, S.GRAZING);
+    }
+    assert.equal(out.code, POSE.GRAZE);
+    assert.equal(out.weight, 1);
+    // Off it goes: the pose eases out, then there is none.
+    for (let f = 0; f < 60; f++) {
+        frame(m);
+        out = track(m, 'herbivore', 3, 10 + f * 0.1, 10, S.SEARCHING);
+    }
+    assert.equal(out.code, POSE.NONE);
+    assert.equal(out.weight, 0);
+});
+
+test('running states make a fast gait', () => {
+    const m = motion();
+    const top = params.herbivore.speed * 1.3; // a typical grazer's top speed
+    assert.ok(walk(m, 'herbivore', 1, 100, top, 120, STATE.FLEEING).amount > 1.5);
+    assert.ok(walk(m, 'herbivore', 2, 100, top, 120, STATE.SEARCHING).amount <= 1);
+    const chase = params.carnivore.speed * 1.55;
+    assert.ok(walk(m, 'carnivore', 3, 100, chase, 120, STATE.CHASING).amount > 1.5);
+    assert.ok(walk(m, 'carnivore', 4, 100, chase * 0.4, 120, STATE.ROAMING).amount <= 1);
+    // Standing still is still, whatever the state.
+    for (let f = 0; f < 120; f++) {
+        frame(m);
+        track(m, 'carnivore', 5, 100, 100, STATE.CHASING);
+    }
+    assert.ok(m.amount < 0.01);
+});
+
+test("a one-shot plays once, then the state's pose returns", () => {
+    const m = motion();
+    for (let f = 0; f < 60; f++) {
+        frame(m);
+        track(m, 'carnivore', 5, 100, 100, STATE.EATING);
+    }
+    m.pose(5, POSE.POUNCE, 0.5);
+    frame(m);
+    let out = track(m, 'carnivore', 5, 100, 100, STATE.EATING);
+    assert.equal(out.code, POSE.POUNCE);
+    assert.ok(out.progress > 0 && out.progress < 0.1);
+    assert.equal(out.weight, 1);
+    for (let f = 0; f < 14; f++) {
+        frame(m);
+        out = track(m, 'carnivore', 5, 100, 100, STATE.EATING);
+    }
+    assert.equal(out.code, POSE.POUNCE);
+    assert.ok(Math.abs(out.progress - 0.5) < 0.04, `half way: ${out.progress}`);
+    for (let f = 0; f < 16; f++) {
+        frame(m);
+        out = track(m, 'carnivore', 5, 100, 100, STATE.EATING);
+    }
+    assert.equal(out.code, POSE.EAT);
+    assert.ok(out.weight < 0.2, 'the state pose eases back in');
+    // The length defaults to the pose's own.
+    m.pose(5, POSE.POUNCE);
+    frame(m);
+    track(m, 'carnivore', 5, 100, 100, STATE.EATING);
+    assert.equal(m.code, POSE.POUNCE);
+});
+
+test('hold loops until release', () => {
+    const m = motion();
+    m.hold(8, POSE.CROUCH);
+    let out;
+    const seen = [];
+    for (let f = 0; f < 400; f++) {
+        frame(m);
+        out = track(m, 'human', 8, 100, 100, STATE.HUNTING);
+        seen.push(out.progress);
+    }
+    assert.equal(out.code, POSE.CROUCH);
+    assert.equal(out.weight, 1);
+    assert.ok(seen.some((p, k) => k && p < seen[k - 1]), 'the cycle wraps around');
+    m.release(8);
+    for (let f = 0; f < 60; f++) {
+        frame(m);
+        out = track(m, 'human', 8, 100, 100, STATE.HUNTING);
+    }
+    assert.equal(out.code, POSE.NONE);
+    // A one-shot pose held stops at its wind-up; played, it carries on from there.
+    m.hold(8, POSE.THROW);
+    for (let f = 0; f < 60; f++) {
+        frame(m);
+        out = track(m, 'human', 8, 100, 100, STATE.HUNTING);
+    }
+    assert.equal(out.code, POSE.THROW);
+    assert.equal(out.progress, POSES.human[POSE.THROW].hold);
+    m.pose(8, POSE.THROW, 0.6);
+    frame(m);
+    out = track(m, 'human', 8, 100, 100, STATE.HUNTING);
+    assert.ok(out.progress > POSES.human[POSE.THROW].hold, 'carries on');
+    for (let f = 0; f < 60; f++) {
+        frame(m);
+        out = track(m, 'human', 8, 100, 100, STATE.HUNTING);
+    }
+    assert.equal(out.code, POSE.NONE, 'and the hold is over');
+});
+
+test("poses keep the drawn world's clock: paused they wait, at speed at most 4× real time", () => {
+    const m = motion();
+    frame(m, 0.25);
+    assert.ok(Math.abs(m.clock - 1 / 60) < 1e-9, '1×: a frame is a frame');
+    const c = m.clock;
+    frame(m, 0);
+    assert.equal(m.clock, c, 'paused');
+    frame(m, 16); // 64×
+    assert.ok(Math.abs(m.clock - c - 4 / 60) < 1e-9, '64×: four frames at most');
+    frame(m, 0.5); // 2×
+    assert.ok(Math.abs(m.clock - c - 6 / 60) < 1e-9, '2×: as the world goes');
+});
+
+test('every key is finite; sequences start at rest and all but FALL end at rest', () => {
+    const rest = (v) => v.every((a) => Math.abs(Math.sin(a / 2)) < 1e-6); // a whole number of turns
+    for (const kind of KINDS) {
+        for (const [code, def] of Object.entries(POSES[kind])) {
+            const name = `${kind} ${code}`;
+            assert.equal(def.keys.length, 4, name);
+            assert.ok(def.seconds > 0, name);
+            for (const key of def.keys) {
+                for (const v of Object.values(key)) assert.ok(v.length === 3 && v.every(Number.isFinite), name);
+            }
+            if (def.cycle) continue;
+            const ends = Number(code) === POSE.FALL ? [0] : [0, 1];
+            for (const p of ends) {
+                for (const col of Object.keys(def.keys[0]).concat(Object.keys(def.keys[3]))) {
+                    if (col === 'pivot') continue; // where it would turn, had it turned
+                    const v = samplePose(kind, Number(code), p, col);
+                    if (col === 'shift') assert.ok(v.every((a) => Math.abs(a) < 1e-9), `${name} ${col} at ${p}`);
+                    else assert.ok(rest(v), `${name} ${col} at ${p}: ${v}`);
+                }
+            }
+            // A hold point is on a key.
+            if (def.hold !== undefined) assert.ok(Math.abs(def.hold * 3 - Math.round(def.hold * 3)) < 1e-9, name);
+        }
+    }
+    // The JS reference meets the keys exactly at their moments.
+    const t = POSES.human[POSE.THROW];
+    assert.deepEqual(samplePose('human', POSE.THROW, 1 / 3, 'armR'), t.keys[1].armR);
+});
+
+test('each species has its own poses', () => {
+    assert.ok(poseApplies('herbivore', POSE.GRAZE));
+    assert.ok(poseApplies('herbivore', POSE.FALL));
+    assert.ok(!poseApplies('herbivore', POSE.THROW));
+    assert.ok(poseApplies('carnivore', POSE.POUNCE));
+    assert.ok(poseApplies('carnivore', POSE.EAT));
+    assert.ok(!poseApplies('carnivore', POSE.SIT));
+    for (const code of ['THROW', 'JAB', 'SWING', 'GATHER', 'BUTCHER', 'EAT', 'CHOP', 'KNAP', 'CRAFT', 'SIT', 'ROLL', 'FALL', 'CROUCH', 'HOP']) {
+        assert.ok(poseApplies('human', POSE[code]), code);
+    }
+    assert.ok(!poseApplies('human', POSE.POUNCE));
+});
+
+test('forget returns how the dead looked and drops them', () => {
+    const m = motion();
+    track(m, 'human', 42, 10, 10, STATE.PLAYING, 0.62, 7);
+    m.hold(42, POSE.SIT);
+    assert.deepEqual({ ...m.describe(42), phase: 0 }, { tribe: 7, scale: 0.62, phase: 0 });
+    m.forget(42);
+    assert.equal(m.describe(42), null);
+    assert.equal(m.holds.size, 0);
+    assert.equal(m.describe(43), null);
+});
+
+// ---- Bodies (shapes.js) ----
+
+const shapes = await import('../src/view3d/shapes.js');
+const { PART, GAIT } = await import('../src/view3d/animate.js');
+const BODIES = { herbivore: shapes.herbivoreShape, carnivore: shapes.carnivoreShape, human: shapes.personShape };
+const PARTS_OF = {
+    herbivore: [PART.TORSO, PART.HEAD, PART.LEG_FL, PART.LEG_FR, PART.LEG_BL, PART.LEG_BR],
+    carnivore: [PART.TORSO, PART.HEAD, PART.LEG_FL, PART.LEG_FR, PART.LEG_BL, PART.LEG_BR],
+    human: [PART.TORSO, PART.HEAD, PART.LEG_FL, PART.LEG_FR, PART.ARM_L, PART.ARM_R],
+};
+
+// Per part: its joint (the same for all its vertices) and its vertices' extent.
+function partsOf(g) {
+    const pos = g.attributes.position;
+    const rig = g.attributes.rig;
+    const parts = new Map();
+    for (let v = 0; v < pos.count; v++) {
+        const p = rig.getW(v);
+        const joint = [rig.getX(v), rig.getY(v), rig.getZ(v)];
+        if (!parts.has(p)) parts.set(p, { joint, minY: Infinity, maxY: -Infinity, n: 0 });
+        const e = parts.get(p);
+        assert.deepEqual(joint, e.joint, `part ${p} has one joint`);
+        e.minY = Math.min(e.minY, pos.getY(v));
+        e.maxY = Math.max(e.maxY, pos.getY(v));
+        e.n++;
+    }
+    return parts;
+}
+const near = (a, b) => a.every((v, k) => Math.abs(v - b[k]) < 1e-6);
+
+test('every vertex belongs to a part, and every part has a pivot', () => {
+    for (const kind of KINDS) {
+        const g = BODIES[kind]();
+        assert.equal(g.attributes.rig.itemSize, 4, kind);
+        assert.equal(g.attributes.rig.count, g.attributes.position.count, kind);
+        const parts = partsOf(g);
+        assert.deepEqual([...parts.keys()].sort((a, b) => a - b), PARTS_OF[kind], kind);
+        assert.ok(near(parts.get(PART.TORSO).joint, shapes.RIGS[kind].torso), `${kind} torso joint`);
+        // Hips at the gait's leg length: a leg hanging straight down reaches the ground.
+        for (const leg of [PART.LEG_FL, PART.LEG_FR, PART.LEG_BL, PART.LEG_BR]) {
+            if (!parts.has(leg)) continue;
+            const { joint, minY, maxY } = parts.get(leg);
+            assert.ok(Math.abs(joint[1] - GAIT[kind].leg) < 1e-6, `${kind} leg ${leg} hip at ${joint[1]}`);
+            assert.ok(Math.abs(minY) < 1e-6, `${kind} leg ${leg} on the ground`);
+            assert.ok(maxY > joint[1], `${kind} leg ${leg} reaches up into the body`);
+        }
+    }
+});
+
+test('people have legs and arms, animals four legs', () => {
+    const side = (kind, p) => Math.sign(partsOf(BODIES[kind]()).get(p).joint[2]);
+    const front = (kind, p) => Math.sign(partsOf(BODIES[kind]()).get(p).joint[0] - shapes.RIGS[kind].torso[0]);
+    for (const kind of ['herbivore', 'carnivore']) {
+        assert.deepEqual([side(kind, PART.LEG_FL), front(kind, PART.LEG_FL)], [-1, 1], `${kind} front left`);
+        assert.deepEqual([side(kind, PART.LEG_FR), front(kind, PART.LEG_FR)], [1, 1], `${kind} front right`);
+        assert.deepEqual([side(kind, PART.LEG_BL), front(kind, PART.LEG_BL)], [-1, -1], `${kind} back left`);
+        assert.deepEqual([side(kind, PART.LEG_BR), front(kind, PART.LEG_BR)], [1, -1], `${kind} back right`);
+    }
+    assert.equal(side('human', PART.LEG_FL), -1);
+    assert.equal(side('human', PART.LEG_FR), 1);
+    assert.equal(side('human', PART.ARM_L), -1);
+    assert.equal(side('human', PART.ARM_R), 1);
+    const arm = partsOf(BODIES.human()).get(PART.ARM_R);
+    assert.ok(arm.joint[1] > 3 && arm.minY > 1.5, 'arms hang from the shoulders');
+});
+
+test('bodies stand on the ground', () => {
+    for (const kind of KINDS) {
+        const g = BODIES[kind]();
+        g.computeBoundingBox();
+        assert.ok(Math.abs(g.boundingBox.min.y) < 1e-6, `${kind} feet at 0`);
+    }
+    const g = BODIES.human();
+    g.computeBoundingBox();
+    assert.ok(g.boundingBox.max.y > 4.6 && g.boundingBox.max.y < 5, `a person is ${g.boundingBox.max.y} tall`);
+});
+
+// ---- Meat racks (camps.js) ----
+
+test('the meat on a rack follows the store, up to a cap', async () => {
+    const { meatOnRack, MEAT_CAP } = await import('../src/view3d/camps.js');
+    assert.equal(meatOnRack(0), 0);
+    assert.equal(meatOnRack(-5), 0);
+    assert.equal(meatOnRack(1), 1, 'any food at all shows');
+    let last = 0;
+    for (let store = 0; store <= 3000; store += 5) {
+        const n = meatOnRack(store);
+        assert.ok(n >= last && n <= MEAT_CAP, `${store}: ${n}`);
+        last = n;
+    }
+    assert.ok(meatOnRack(300) >= 3 && meatOnRack(300) < MEAT_CAP, 'a starting camp has some');
+    assert.equal(meatOnRack(1e6), MEAT_CAP);
+});
+
+// ---- Death and blood (effects.js, and carcasses in creatures.js) ----
+
+const THREE = await import('three');
+const { Effects } = await import('../src/view3d/effects.js');
+const { Creatures } = await import('../src/view3d/creatures.js');
+
+// A view like camera.js's: floating origin (fx, fz), the camera at `cam`
+// (render coordinates), the box of ground in sight. No planes: nothing is off
+// screen.
+function view({ fx = 100, fz = 100, span = 400, personalSpace = 0, cam = [0, 300, 0] } = {}) {
+    return {
+        W, H, fx, fz, camX: cam[0], camY: cam[1], camZ: cam[2],
+        minX: -span, maxX: span, minZ: -span, maxZ: span,
+        unitPx: 1e-4, mapness: 0, dist: 300, personalSpace, fogFar: 3000,
+        planes: new Float64Array(24),
+    };
+}
+function effects(m = motion()) {
+    const fx = new Effects(new THREE.Scene(), m);
+    fx.attach(() => 0);
+    fx.tick(m.clock, 0);
+    return fx;
+}
+const death = (id, cause, extra = {}) => ({ type: 'death', kind: 'herbivore', id, x: 100, y: 100, heading: 0.5, cause, by: 0, time: 0, ...extra });
+// A world with nobody alive in it, for drawing only the dead.
+const empty = () => {
+    const pop = { n: 0 };
+    for (const c of ['x', 'y', 'heading', 'id', 'age', 'tribe', 'state']) pop[c] = new Float64Array(0);
+    return pop;
+};
+const deadWorld = () => ({ p: params, herbivores: empty(), carnivores: empty(), humans: empty(), tribeById: new Map(), fallen: [] });
+
+test('a kill leaves a bloody carcass and makes the predator pounce', () => {
+    const m = motion();
+    track(m, 'herbivore', 10, 100, 100, STATE.FLEEING);
+    const fx = effects(m);
+    fx.handle([death(10, 'eaten', { by: 20 })]);
+    assert.equal(fx.dead.count, 1);
+    assert.equal(fx.pools.count, 1);
+    assert.ok(fx.drops.count >= 10, `${fx.drops.count} droplets`);
+    assert.equal(m.describe(10), null, 'the dead are forgotten');
+    assert.equal(m.oneShots.get(20).code, POSE.POUNCE);
+    // Hunters throw, and a person killed by a person was stabbed.
+    fx.handle([death(11, 'hunted', { by: 21 }), death(12, 'killed', { kind: 'human', by: 22 }), death(13, 'killed', { kind: 'carnivore', by: 23 })]);
+    assert.equal(m.oneShots.get(21).code, POSE.THROW);
+    assert.equal(m.oneShots.get(22).code, POSE.JAB);
+    assert.equal(m.oneShots.get(23).code, POSE.THROW);
+    assert.equal(fx.pools.count, 4);
+});
+
+test('old age and starvation leave clean carcasses', () => {
+    const m = motion();
+    const fx = effects(m);
+    fx.handle([death(1, 'old age'), death(2, 'starvation'), { type: 'bite', id: 3, by: 4 }]);
+    assert.equal(fx.dead.count, 2);
+    assert.equal(fx.pools.count, 0);
+    assert.equal(fx.drops.count, 0);
+    assert.equal(m.oneShots.size, 0);
+});
+
+test('the caps hold under thousands of deaths', () => {
+    const m = motion();
+    const fx = effects(m);
+    const events = [];
+    for (let id = 1; id <= 5000; id++) events.push(death(id, 'eaten', { x: id % W, by: 9000 + id }));
+    const t0 = performance.now();
+    fx.handle(events);
+    fx.update(view());
+    const ms = performance.now() - t0;
+    assert.equal(fx.dead.count, 300);
+    assert.equal(fx.pools.count, 300);
+    assert.ok(fx.drops.count <= 2000);
+    assert.equal(fx.dead.id[(fx.dead.start + fx.dead.count - 1) % fx.dead.cap], 5000, 'the newest is kept');
+    assert.equal(fx.dead.id[fx.dead.start], 4701, 'the oldest went first');
+    assert.ok(fx.poolMesh.count <= 300 && fx.dropMesh.count <= 2000);
+    assert.ok(ms < 250, `${ms.toFixed(1)} ms for 5000 deaths`);
+});
+
+test('carcasses fade with world time', () => {
+    const m = motion();
+    const fx = effects(m);
+    fx.handle([death(1, 'eaten')]);
+    fx.tick(m.clock, 300);
+    assert.equal(fx.dead.count, 1);
+    assert.equal(fx.dead.fade[fx.dead.start], 0);
+    fx.tick(m.clock, 520);
+    const f = fx.dead.fade[fx.dead.start];
+    assert.ok(f > 0 && f < 1, `fading: ${f}`);
+    fx.tick(m.clock, 601);
+    assert.equal(fx.dead.count, 0);
+    assert.equal(fx.pools.count, 0);
+});
+
+test('blood off hides sprays and pools, not carcasses', () => {
+    const m = motion();
+    const fx = effects(m);
+    fx.setBlood(false);
+    fx.handle([death(1, 'eaten')]);
+    fx.update(view());
+    assert.equal(fx.dropMesh.visible, false);
+    assert.equal(fx.poolMesh.visible, false);
+    const c = new Creatures(new THREE.Scene());
+    c.update(deadWorld(), view(), () => 0, 0, fx);
+    assert.equal(c.herds.herbivore.mesh.count, 1, 'the carcass still lies there');
+    fx.setBlood(true);
+    frame(m);
+    fx.tick(m.clock, 1);
+    fx.update(view());
+    assert.ok(fx.dropMesh.visible && fx.dropMesh.count > 0);
+    assert.ok(fx.poolMesh.visible && fx.poolMesh.count === 1);
+});
+
+test("effects at the world's edge are drawn at their wrapped copy", () => {
+    const m = motion();
+    const fx = effects(m);
+    fx.handle([death(1, 'eaten', { x: W - 1, y: 100 })]);
+    frame(m);
+    fx.tick(m.clock, 1);
+    const v = view({ fx: 0, fz: 100, span: 50 });
+    fx.update(v);
+    assert.equal(fx.poolMesh.count, 1);
+    assert.ok(Math.abs(fx.poolMesh.instanceMatrix.array[12] + 1) < 1e-6, 'the pool is 1 unit left of the origin');
+    const xs = [];
+    for (let k = 0; k < fx.dropMesh.count; k++) xs.push(fx.dropMesh.instanceMatrix.array[k * 16 + 12]);
+    assert.ok(xs.length && xs.every((x) => Math.abs(x + 1) < 3), `droplets near it: ${xs}`);
+    const c = new Creatures(new THREE.Scene());
+    c.update(deadWorld(), v, () => 0, 0, fx);
+    const herd = c.herds.herbivore;
+    assert.equal(herd.mesh.count, 1);
+    assert.ok(Math.abs(herd.matrices[12] + 1) < 1e-6, 'and so is the carcass');
+    assert.equal(herd.poses[0], POSE.FALL);
+    assert.equal(herd.poses[2], 1);
+    // It falls, then lies still.
+    for (let f = 0; f < 60; f++) frame(m);
+    fx.tick(m.clock, 2);
+    c.update(deadWorld(), v, () => 0, 0, fx);
+    assert.equal(herd.poses[1], 1);
+});
+
+test('the person you control sits only to rest', () => {
+    const c = new Creatures(new THREE.Scene());
+    const humans = empty();
+    for (const k of Object.keys(humans)) if (k !== 'n') humans[k] = new Float64Array(1);
+    humans.n = 1;
+    humans.x[0] = 100;
+    humans.y[0] = 100;
+    humans.id[0] = 5;
+    humans.age[0] = 5000;
+    humans.state[0] = STATE.AT_CAMP; // standing still at camp
+    const w = { ...deadWorld(), humans, player: { id: 5, resting: false } };
+    const m = c.motion;
+    m.tick(0, 0);
+    const settle = () => {
+        for (let f = 0; f < 40; f++) {
+            m.tick(m.shown + 0.25, m.last + 1000 / 60);
+            c.update(w, view(), () => 0, 0);
+        }
+        return c.herds.human.poses[0];
+    };
+    assert.equal(settle(), POSE.NONE, 'standing');
+    w.player.resting = true;
+    assert.equal(settle(), POSE.SIT, 'resting');
+    w.player = null;
+    w.humans.state[0] = STATE.AT_CAMP;
+    assert.equal(settle(), POSE.SIT, 'anyone else at camp sits as before');
+});
+
+test('nothing is drawn inside personal space', () => {
+    const m = motion();
+    const fx = effects(m);
+    fx.handle([death(1, 'eaten', { x: 0, y: 0 })]);
+    frame(m);
+    fx.tick(m.clock, 1);
+    const eyes = view({ fx: 0, fz: 0, span: 50, personalSpace: 5, cam: [0.5, 2.5, 0] });
+    fx.update(eyes);
+    assert.equal(fx.dropMesh.count, 0);
+    const c = new Creatures(new THREE.Scene());
+    c.update(deadWorld(), eyes, () => 0, 0, fx);
+    assert.equal(c.herds.herbivore.mesh.count, 0);
+    const away = view({ fx: 0, fz: 0, span: 50, personalSpace: 5, cam: [30, 10, 0] });
+    fx.update(away);
+    assert.ok(fx.dropMesh.count > 0);
+    c.update(deadWorld(), away, () => 0, 0, fx);
+    assert.equal(c.herds.herbivore.mesh.count, 1);
+});
