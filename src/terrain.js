@@ -93,8 +93,10 @@ function addOctave(out, cols, rows, nx, ny, amp, rng, ridged) {
     }
 }
 
-// Fractal noise: octaves of halving size and shrinking weight, scaled to 0..1.
-function fractal(cols, rows, W, H, wavelength, octaves, roughness, rng, ridged) {
+// Fractal noise: octaves of halving size and shrinking weight, scaled to 0..1,
+// one value per node of a cols × rows grid over a W × H torus. Exported so other
+// fields laid over the land (moisture, temperature for biomes) can reuse it.
+export function fractal(cols, rows, W, H, wavelength, octaves, roughness, rng, ridged = false) {
     const out = new Float64Array(cols * rows);
     let amp = 1;
     for (let o = 0; o < octaves; o++) {
@@ -360,6 +362,9 @@ export class Terrain {
 
     // How much grass the ground can hold, 0..1: none in water or on cliffs, full
     // in the lowlands, thinning out up the mountains to bare rock near the summits.
+    // The one place fertility is decided: Grass gets it per patch through
+    // fertilityGrid(), so a richer rule (biomes from moisture and temperature)
+    // only has to change this method.
     fertility(x, y) {
         if (this.isWater(x, y) || this.isCliff(x, y)) return 0;
         return 1 - this.rockiness(x, y);
