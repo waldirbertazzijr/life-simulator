@@ -4,7 +4,7 @@ PLAYWRIGHT := mcr.microsoft.com/playwright@sha256:06a9939e57531807f8d5fd76ce44b5
 DOCKER     := docker run --rm -v "$(CURDIR)":/app:ro -w /app
 PORT       ?= 8000
 
-.PHONY: serve check shot fingerprint test bot
+.PHONY: serve check shot fingerprint test bot orders
 
 # Serve the app at http://localhost:$(PORT)
 serve:
@@ -17,6 +17,10 @@ check:
 # A bot plays the controlled person headlessly, in God and Play mode, e.g. make bot ARGS="--seeds 1-20 --steps 20000"
 bot:
 	$(DOCKER) $(NODE) node headless/bot.mjs $(ARGS)
+
+# Random orders for every tribe, against none, on many seeds, e.g. make orders ARGS="--seeds 73-92 --steps 150000"
+orders:
+	$(DOCKER) $(NODE) node headless/orders.mjs $(ARGS)
 
 # Behaviour fingerprint (must not change for a pure refactor), e.g. make fingerprint ARGS="--set human.enabled=false"
 fingerprint:

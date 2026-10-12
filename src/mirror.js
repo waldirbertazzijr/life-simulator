@@ -26,7 +26,8 @@
 // (it adapts, see update()). Interpolation is display-only: positions and
 // headings are blended into arrays of our own; the snapshots are untouched.
 import { World } from './world.js';
-import { Packer, KINDS, COLUMNS, startHash, setParam } from './sim.js';
+import { Packer, KINDS, COLUMNS, TRIBE_STRIDE, startHash, setParam } from './sim.js';
+import { ORDER_KINDS } from './orders.js';
 
 const TAU = Math.PI * 2;
 const MAX_KEPT = 32;   // snapshots kept at most (normally 2–5: until the moment drawn has passed them)
@@ -41,6 +42,16 @@ function emptyPopulation() {
     const pop = { n: 0 };
     for (const c of COLUMNS) pop[c] = new Float64Array(0);
     return pop;
+}
+
+// A tribe's standing order from a snapshot's numbers at `q` (code, x, y):
+// {kind, x, y}, or null. The one it had is kept while it says the same.
+function orderAt(numbers, q, had) {
+    const kind = ORDER_KINDS[numbers[q]];
+    if (!kind) return null;
+    const x = numbers[q + 1];
+    const y = numbers[q + 2];
+    return had !== null && had.kind === kind && had.x === x && had.y === y ? had : { kind, x, y };
 }
 
 export class Mirror {
@@ -277,7 +288,7 @@ export class Mirror {
         });
         snap.g = f.subarray(o, o + snap.grassLength);
         for (const d of snap.newTribes) {
-            this.known.set(d.id, { ...d, store: 0, members: 0, adults: 0, births: 0, alive: true });
+            this.known.set(d.id, { ...d, camp: { ...d.camp }, store: 0, members: 0, adults: 0, births: 0, alive: true, order: null });
         }
         if (snap.samples.length && this.onSamples) this.onSamples(snap.samples);
         if (snap.events?.length) this.pending.push(snap.time, snap.events);
@@ -386,12 +397,16 @@ export class Mirror {
 
         const tribes = [];
         this.tribeById.clear();
-        for (let q = 0; q < s.tribes.length; q += 5) {
+        for (let q = 0; q < s.tribes.length; q += TRIBE_STRIDE) {
             const t = this.known.get(s.tribes[q]);
             t.members = s.tribes[q + 1];
             t.adults = s.tribes[q + 2];
             t.store = s.tribes[q + 3];
             t.births = s.tribes[q + 4];
+            // The camp can move, and the player can give the tribe an order (orders.js).
+            t.camp.x = s.tribes[q + 5];
+            t.camp.y = s.tribes[q + 6];
+            t.order = orderAt(s.tribes, q + 7, t.order);
             t.alive = true;
             tribes.push(t);
             this.tribeById.set(t.id, t);

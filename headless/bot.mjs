@@ -32,6 +32,8 @@ const CREEP = 25;      // and it creeps up on them from this close
 const DANGER = 6;      // a predator this close: roll away
 const PROBE_AT = 200;  // the step of the deliberate teleport, which must be turned down
 const AWAY = 500;      // steps on autopilot, halfway through
+const CALLS = ['rally', 'hunt', 'gather', 'defend', 'move']; // given in turn...
+const CALL_EVERY = 600;                                      // ...this often
 
 const wrapDelta = (d, size) => (d > size / 2 ? d - size : d < -size / 2 ? d + size : d);
 const wrapPos = (v, size) => (v >= 0 && v < size ? v : ((v % size) + size) % size);
@@ -91,6 +93,7 @@ function play(params, seed, mode, steps) {
     const stats = {
         seed, mode, controlled: 0, moves: 0, rejected: 0, bites: 0, dodges: 0, heirs: 0, deaths: 0,
         rests: 0, auto: 0, probe: '—', end: '—', problems: [],
+        calls: 0, answers: { call: 0, rally: 0, refused: 0 }, // calls given, and the tribe's answers
     };
     const problem = (what) => {
         if (stats.problems.length < 10) stats.problems.push(what);
@@ -273,6 +276,13 @@ function play(params, seed, mode, steps) {
             body.stamina = Math.min(STAMINA.max, body.stamina + STAMINA.regen);
         }
 
+        // Now and then a call to the tribe (orders.js): each kind in turn, 30
+        // ahead (a rally is around the body).
+        if (w.time % CALL_EVERY === CALL_EVERY / 2) {
+            const kind = CALLS[stats.calls++ % CALLS.length];
+            send({ type: 'act', seq: ++seq, action: 'call', kind, x: body.x + 30 * Math.cos(body.heading), y: body.y + 30 * Math.sin(body.heading) });
+        }
+
         // The deliberate teleport: far beyond any allowance, never applied.
         let { x, y } = body;
         if (w.time === PROBE_AT) {
@@ -303,6 +313,7 @@ function play(params, seed, mode, steps) {
             else if (e.type === 'heir') stats.heirs++;
             else if (e.type === 'death' && e.kind === 'human' && mine.has(e.id)) stats.deaths++;
             else if (e.type === 'released' || e.type === 'over') ended = e.type;
+            else if (e.type in stats.answers && e.tribe === snap.player?.tribe) stats.answers[e.type]++;
         }
         const pop = w.humans;
         for (let k = 0; k < pop.n; k++) {
@@ -365,6 +376,8 @@ function play(params, seed, mode, steps) {
         problem(`exception at step ${w.time}: ${err.stack}`);
     }
     if (stats.rejected > stats.moves * 0.01) problem(`${stats.rejected} of ${stats.moves} moves turned down`);
+    const a = stats.answers;
+    if (stats.calls > 2 && a.call + a.rally + a.refused === 0) problem(`${stats.calls} calls given, and not one answered`);
     return stats;
 }
 
@@ -389,6 +402,8 @@ for (const seed of opts.seeds) {
             `${String(s.rejected).padStart(8)}  ${String(s.bites).padStart(5)}  ${String(s.dodges).padStart(6)}  ${String(s.heirs).padStart(5)}  ` +
             `${String(s.deaths).padStart(6)}  ${String(s.rests).padStart(5)}  ${String(s.auto).padStart(4)}  ${s.probe.padEnd(8)}  ${s.end}`,
         );
+        const a = s.answers;
+        console.log(`        calls: ${s.calls} given; orders taken ${a.call}, rallies ${a.rally}, refused ${a.refused}`);
         for (const msg of s.problems) console.log(`        ✗ ${msg}`);
     }
 }

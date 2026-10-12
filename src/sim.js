@@ -17,7 +17,8 @@
 //        input {seq, x, y, heading, speed, crouch}  where the page has moved the controlled body
 //                                            (the newest is checked at the next step)
 //        act {seq, action, ...}              a one-off action of the controlled person: 'roll', 'rest' {on},
-//                                            'auto' {on} (autopilot: the AI runs it while the page is on the map)
+//                                            'auto' {on} (autopilot: the AI runs it while the page is on the map),
+//                                            'call' {kind, x, y} (a call to its tribe: orders.js)
 //   out  started {gen, hash}                 the new world's first moment, hashed
 //        snapshot {...}                      see pack() below; with `events`, everything that happened
 //                                            since the last one (World.events, oldest first), and
@@ -29,6 +30,7 @@
 // display's rate, never pile up, and stop when the page is not drawing.
 import { World } from './world.js';
 import { takeControl, applyInput, applyAct, playerSnapshot } from './player.js';
+import { ORDER_KINDS } from './orders.js';
 
 // Steps per second at 1×: a calm pace, at which a person walks about six
 // units (a little over a body length) a second and runs at ten. (It used to
@@ -53,6 +55,11 @@ export const COLUMNS = [
     'generation', 'children', 'kills', 'focus', 'state', 'tribe', 'carry',
 ];
 export const STRIDE = COLUMNS.length + 1; // values per individual, with prev
+
+// What a snapshot carries of each living tribe, as numbers: id, members,
+// adults, store, births; where its camp is (it can move: orders.js); and its
+// standing order: a code (an index into ORDER_KINDS, 0 for none) and its x, y.
+export const TRIBE_STRIDE = 10;
 
 export class Sim {
     // post(message, transferList): how messages leave (postMessage in the worker).
@@ -300,10 +307,14 @@ export class Packer {
         f.set(g, o);
         this.time = world.time;
 
-        // Tribes: what changes as numbers (id, members, adults, store, births);
-        // the fallen as (id, when it ended); and, once each, the rest.
+        // Tribes: what changes as numbers (TRIBE_STRIDE of them); the fallen
+        // as (id, when it ended); and, once each, the rest.
         const tribes = [];
-        for (const t of world.tribes) tribes.push(t.id, t.members, t.adults, t.store, t.births);
+        for (const t of world.tribes) {
+            const o = t.order;
+            tribes.push(t.id, t.members, t.adults, t.store, t.births, t.camp.x, t.camp.y,
+                o === null ? 0 : ORDER_KINDS.indexOf(o.kind), o === null ? 0 : o.x, o === null ? 0 : o.y);
+        }
         const fallen = [];
         for (const t of world.fallen) fallen.push(t.id, t.ended);
         const newTribes = [];

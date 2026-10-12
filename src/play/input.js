@@ -18,7 +18,8 @@
 // until it is), dragging on the view looks around instead.
 //
 // Modes: 'off' hears nothing (the page's own shortcuts work, ui.js), 'map'
-// hears only M (back into your body), 'body' hears everything. Keys typed
+// hears only M (back into your body) and G (a call, given where you click:
+// calls.js), 'body' hears everything. Keys typed
 // into a text field, or pressed with Ctrl/Cmd/Alt, are left alone. A key
 // released while the window was not looking would stay held, so losing focus
 // or hiding the tab lets go of everything.
@@ -61,6 +62,8 @@ const ACTIONS = {
     KeyV: 'view', KeyM: 'map', KeyP: 'pause',
     ArrowRight: 'cycle-weapon', ArrowLeft: 'cycle-tool', ArrowDown: 'cycle-pouch', ArrowUp: 'cycle-call',
 };
+// On the map (where the arrows and WASD are the camera's).
+const MAP_ACTIONS = { KeyM: 'map', KeyG: 'call' };
 
 const typing = (e) => {
     const el = e.target;
@@ -132,9 +135,10 @@ export class Input {
     keydown(e) {
         if (this.mode === 'off' || typing(e) || e.ctrlKey || e.metaKey || e.altKey) return;
         if (this.mode === 'map') {
-            if (e.code === 'KeyM') {
+            const action = MAP_ACTIONS[e.code];
+            if (action) {
                 e.preventDefault();
-                if (!e.repeat) this.onAction('map');
+                if (!e.repeat) this.onAction(action);
             }
             return;
         }

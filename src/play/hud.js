@@ -1,12 +1,14 @@
 // The HUD you see while in a body (spec §7), laid out as in Elden Ring and
 // nothing else on screen: top left, your tribe's flag and three thin bars
 // (red Life, blue Spirit, green Stamina) with a trailing segment for what
-// was just lost; top centre, a compass strip with your camp and your locked
-// target; bottom left, the equipment cross; bottom centre, what E (or P)
-// would do; bottom right, your tribe's store; a dot in the middle, a ring
-// on the locked target, and a red edge when you are bitten. Banners (YOU
-// DIED, your line continuing, your line ended, with the story) sit in a
-// layer of their own, also seen from the map.
+// was just lost; top centre, a compass strip with your camp, your tribe's
+// standing order and your locked target; bottom left, the equipment cross
+// (its top slot: your call); bottom centre, what E (or P) would do, and
+// above it your tribe's answer to a call; bottom right, your tribe's store;
+// a dot in the middle, a ring on the locked target, and a red edge when you
+// are bitten. Banners (YOU DIED, your line continuing, your line ended,
+// with the story) sit in a layer of their own, also seen from the map, as
+// are the answers to calls.
 //
 // The markup and styles are in index.html; this fills them in. What it
 // shows comes each frame from modes.js (drawHud) as one plain object.
@@ -20,6 +22,17 @@ export const COMPASS_SPAN = 180; // degrees across the compass strip
 
 const BANNER_MS = { died: 3400, line: 4800 };
 const TITLES = { died: 'YOU DIED', ended: 'YOUR LINE HAS ENDED' };
+const NOTICE_MS = 3200; // a call's answer stays this long (calls.js)
+
+// The calls' signs in the top slot (36 × 36, drawn like the others): a horn,
+// a mark on the ground, a sprig, a shield, a flag on the move.
+const CALL_ICONS = {
+    rally: '<path d="M7 15.5h3.5L25 9v18l-14.5-6.5H7z"/><path d="M12 21c0 3.6 3.4 5.6 7.5 5"/><path d="M28.5 13.5c1.6 2.6 1.6 6.4 0 9"/>',
+    hunt: '<circle cx="18" cy="18" r="7"/><path d="M18 5v6M18 25v6M5 18h6M25 18h6"/><circle cx="18" cy="18" r="0.8"/>',
+    gather: '<path d="M18 30V13"/><path d="M18 22c-5 0-8.5-3-8.5-8 5 0 8.5 3 8.5 8z"/><path d="M18 17.5c4.5 0 7.5-2.6 7.5-7-4.5 0-7.5 2.6-7.5 7z"/>',
+    defend: '<path d="M18 6.5 27.5 10v7.5c0 6.5-4.2 10.6-9.5 12.5-5.3-1.9-9.5-6-9.5-12.5V10z"/><path d="M18 11v15"/>',
+    move: '<path d="M11 30V7"/><path d="M11 8h13l-3.5 4 3.5 4H11"/><path d="M16 26h11m-3-3 3 3-3 3"/>',
+};
 
 export class TrailBar {
     constructor() {
@@ -73,7 +86,11 @@ export class Hud {
             const el = this.root.querySelector(`.vbar.${k}`);
             this.bars[k] = { bar: new TrailBar(), fill: el.querySelector('.fill'), trail: el.querySelector('.trail') };
         }
-        this.shown = { name: null, age: null, flag: null, carry: null, store: null, prompt: null };
+        this.shown = { name: null, age: null, flag: null, carry: null, store: null, prompt: null, call: null };
+        this.callSlot = this.root.querySelector('.slot.up');
+        this.callName = $('hud-call');
+        this.noticeEl = $('notice');
+        this.noticeTimer = 0;
         // The compass draws text in the HUD's face: ask for it now.
         try {
             doc.fonts?.load('500 14px "EB Garamond"').catch(() => {});
@@ -123,7 +140,41 @@ export class Hud {
         const ring = $('hud-ring');
         ring.hidden = !s.ring;
         if (s.ring) ring.style.transform = `translate(${s.ring.x.toFixed(1)}px, ${s.ring.y.toFixed(1)}px)`;
+        this.showCall(s.call);
         this.drawCompass(s);
+    }
+
+    // The call in the top slot (calls.js): its sign, and its name beside
+    // it, lit up for a moment when it changes.
+    showCall(call) {
+        if (!call || call === this.shown.call) return;
+        const first = this.shown.call === null;
+        this.shown.call = call;
+        this.callSlot.innerHTML = `<svg viewBox="0 0 36 36" aria-hidden="true">${CALL_ICONS[call.kind] ?? ''}</svg>`;
+        this.callSlot.title = `Call: ${call.name} (↑ to change, G to give)`;
+        const el = this.callName;
+        el.textContent = call.name;
+        el.classList.remove('lit');
+        if (first) return;
+        void el.offsetWidth; // (restart the animation)
+        el.classList.add('lit');
+    }
+
+    // Your tribe's answer to a call, for a few seconds above the prompt; a
+    // refusal reads in a muted red. Seen from the map too.
+    notice(text, refused = false) {
+        if (!text) return;
+        const el = this.noticeEl;
+        el.querySelector('span').textContent = text;
+        el.classList.toggle('refused', refused);
+        el.hidden = false;
+        el.classList.remove('on');
+        void el.offsetWidth;
+        el.classList.add('on');
+        clearTimeout(this.noticeTimer);
+        this.noticeTimer = setTimeout(() => {
+            el.hidden = true;
+        }, NOTICE_MS);
     }
 
     bar(k, v, dt) {
@@ -182,6 +233,10 @@ export class Hud {
                 drawFlag(ctx, s.tribe.flag, Math.round(x) + 0.5, mid - 7, 11, 7);
             }
         }
+        if (s.order != null && s.tribe) {
+            const x = stripX(bearing(s.order), facing, w);
+            if (x !== null) this.orderMark(ctx, Math.round(x) + 0.5, mid, s.tribe.color);
+        }
         if (s.target !== null) {
             const x = stripX(bearing(s.target), facing, w);
             if (x !== null) {
@@ -196,6 +251,24 @@ export class Hud {
                 ctx.stroke();
             }
         }
+    }
+
+    // Your tribe's standing order on the compass: a pole with a pennant in
+    // the tribe's colour, flying the other way from the camp's flag (an
+    // order at the camp shows beside it).
+    orderMark(ctx, x, mid, color) {
+        ctx.fillStyle = 'rgba(238, 232, 218, 0.85)';
+        ctx.fillRect(x - 0.5, mid - 8, 1, 15);
+        ctx.fillStyle = color;
+        ctx.strokeStyle = 'rgba(8, 9, 9, 0.7)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x - 0.5, mid - 8);
+        ctx.lineTo(x - 9.5, mid - 5);
+        ctx.lineTo(x - 0.5, mid - 2);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
     }
 
     // The red edge of a bite.
@@ -248,6 +321,7 @@ export class Hud {
         for (const old of [...this.layer.children]) old.remove();
         this.hideSummary();
         this.flashEl.classList.remove('on');
+        this.noticeEl.hidden = true;
         for (const b of Object.values(this.bars)) b.bar = new TrailBar();
         for (const k of Object.keys(this.shown)) this.shown[k] = null;
     }

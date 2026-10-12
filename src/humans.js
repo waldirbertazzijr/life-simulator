@@ -15,6 +15,7 @@
 import { STATE } from './population.js';
 import { tribeIdentity } from './identity.js';
 import { stepPlayer } from './player.js';
+import { fighting, heeded, lead, follow, led } from './orders.js';
 
 const TAU = Math.PI * 2;
 const wrapDelta = (d, size) => (d > size / 2 ? d - size : d < -size / 2 ? d + size : d);
@@ -43,6 +44,10 @@ export function foundTribe(world, x, y, culture, parent = null) {
         births: 0,
         birthCooldown: 0,
         alive: true,
+        // The player's standing order for the tribe, or null; and the
+        // earliest step its camp may move again (orders.js).
+        order: null,
+        nextMove: 0,
     };
     world.tribes.push(tribe);
     world.tribeById.set(tribe.id, tribe);
@@ -64,6 +69,17 @@ function toward(world, tribe, x, y, ddx, ddy, d) {
     wayY = world.terrain.uy;
 }
 
+// Hunt here (orders.js): is (x, y) beyond the range of the order's marker?
+// If so, the way back to it (by land) is left in wayX, wayY.
+function beyond(world, order, x, y) {
+    const ddx = wrapDelta(order.x - x, world.width);
+    const ddy = wrapDelta(order.y - y, world.height);
+    const d = Math.hypot(ddx, ddy) || 1;
+    if (d < order.range) return false;
+    toward(world, order, x, y, ddx, ddy, d);
+    return true;
+}
+
 // Average grass within `r` of a point (sampled on the grass grid).
 function grassAround(world, x, y, r) {
     const { grass, width: W, height: H } = world;
@@ -80,8 +96,9 @@ function grassAround(world, x, y, r) {
 
 // How good a spot is for a camp: flat, fertile ground near water but not in
 // it. -Infinity where no camp can go: water, a cliff or cut-off land at the
-// spot, or water or a cliff inside the camp itself.
-function campSite(world, x, y) {
+// spot, or water or a cliff inside the camp itself. (Also where a camp may
+// move to: orders.js.)
+export function campSite(world, x, y) {
     const T = world.terrain;
     const R = world.p.human.campRadius;
     if (!T.spawnable(x, y)) return -Infinity;
@@ -165,7 +182,7 @@ export function seedTribes(world) {
 }
 
 // Chance a spear throw kills: better with tribe-mates nearby, if they cooperate.
-const hitChance = (P, tribe, mates) => Math.min(0.95, P.hit * (1 + P.teamwork * mates * tribe.sociality));
+export const hitChance = (P, tribe, mates) => Math.min(0.95, P.hit * (1 + P.teamwork * mates * tribe.sociality));
 
 // The nearest other tribe whose camp is within `range` of this tribe's camp
 // and holds at least `minStore` food: a raid is only worth a full haul.
@@ -207,6 +224,7 @@ export function stepHumans(world) {
     const throw2 = P.throwRange * P.throwRange;
     const home2 = P.homeRange * P.homeRange;
     const player = world.player; // the person the page controls, or null (player.js)
+    const rally = player !== null ? lead(world) : null; // its calls heard, and a rally under way (orders.js)
 
     for (let i = 0; i < n; i++) {
         if (energy[i] <= 0) continue; // killed earlier this step
@@ -219,6 +237,7 @@ export function stepHumans(world) {
             continue;
         }
         const tribe = tribeById.get(tribeOf[i]);
+        const order = heeded(world.p, tribe); // the player's standing order, unless the tribe is hungry (orders.js); or null
         const adult = age[i] >= P.maturity;
         const top = P.speed * speedGene[i];
         const sense = P.sense * senseGene[i];
@@ -242,7 +261,7 @@ export function stepHumans(world) {
         if (threat >= 0) {
             focus[i] = carnivores.id[threat];
             const mates = people.count(x[i], y[i], P.groupRadius, i, tribeOf, tribeOf[i], true);
-            if (adult && mates > 0 && rng.next() < tribe.aggression) {
+            if (adult && mates > 0 && rng.next() < fighting(tribe)) {
                 // Stand together and fight.
                 s = STATE.FIGHTING;
                 if (timer[i] === 0 && predators.d2 <= throw2) {
@@ -282,6 +301,23 @@ export function stepHumans(world) {
                 dy = -people.dy / d;
                 v = top * P.cruise;
             }
+        } else if (rally !== null && rally.ids.has(id[i])) {
+            // Rallied (orders.js): with the player, going for what they go for.
+            s = follow(world, rally, i, tribe, e, c);
+            e = led.e;
+            c = led.c;
+            dx = led.dx;
+            dy = led.dy;
+            v = led.v;
+        } else if (adult && order !== null && order.kind === 'defend') {
+            // Defend camp (orders.js): in camp, on guard.
+            s = STATE.GUARDING;
+            if (campD > P.campRadius * 0.6) {
+                toward(world, tribe, x[i], y[i], campDx, campDy, campD);
+                dx = wayX;
+                dy = wayY;
+                v = top * P.cruise;
+            }
         } else if (goal[i] && c < P.tripLoad) {
             // On a raid: walk to the other tribe's camp and take food from its
             // store, if its defenders let you.
@@ -294,7 +330,9 @@ export function stepHumans(world) {
                 const rdy = wrapDelta(target.camp.y - y[i], H);
                 const rd = Math.hypot(rdx, rdy) || 1;
                 if (rd < P.campRadius) {
-                    const defenders = people.count(x[i], y[i], P.defendRadius, i, tribeOf, target.id, true);
+                    let defenders = people.count(x[i], y[i], P.defendRadius, i, tribeOf, target.id, true);
+                    // (A camp under orders to defend is met by every adult: orders.js.)
+                    if (target.order !== null && target.order.kind === 'defend' && defenders < target.adults) defenders = target.adults;
                     for (let k = 0; k < defenders; k++) {
                         if (rng.next() < P.guard * (0.5 + 0.5 * target.sociality)) e -= P.fightDamage;
                     }
@@ -345,13 +383,17 @@ export function stepHumans(world) {
             s = STATE.RAIDING;
         } else {
             // Forage: hunt a grazer in sight near home, otherwise gather plants.
+            // (Orders, orders.js: under Hunt here, "near home" is near its
+            // marker; under Gather food, nobody hunts.)
             let hunting = false;
+            const ground = order !== null && order.kind === 'hunt' ? order : null;
             // (In forest, with biomes.cover, a grazer is seen only from closer.)
-            const target = world.hidden === null ? prey.nearest(x[i], y[i], sense) : world.spot(prey, x[i], y[i], sense);
+            const target = order !== null && order.kind === 'gather' ? -1
+                : world.hidden === null ? prey.nearest(x[i], y[i], sense) : world.spot(prey, x[i], y[i], sense);
             if (target >= 0) {
-                const fx = wrapDelta(herbivores.x[target] - tribe.camp.x, W);
-                const fy = wrapDelta(herbivores.y[target] - tribe.camp.y, H);
-                if (fx * fx + fy * fy < home2) {
+                const fx = wrapDelta(herbivores.x[target] - (ground === null ? tribe.camp.x : ground.x), W);
+                const fy = wrapDelta(herbivores.y[target] - (ground === null ? tribe.camp.y : ground.y), H);
+                if (fx * fx + fy * fy < (ground === null ? home2 : ground.range2)) {
                     hunting = true;
                     s = STATE.HUNTING;
                     focus[i] = herbivores.id[target];
@@ -381,8 +423,8 @@ export function stepHumans(world) {
             if (!hunting) {
                 s = STATE.GATHERING;
                 const gi = grass.index(x[i], y[i]);
-                if (campD >= P.homeRange) {
-                    toward(world, tribe, x[i], y[i], campDx, campDy, campD);
+                if (ground !== null ? beyond(world, ground, x[i], y[i]) : campD >= P.homeRange) {
+                    if (ground === null) toward(world, tribe, x[i], y[i], campDx, campDy, campD);
                     dx = wayX;
                     dy = wayY;
                     v = top * P.cruise;
@@ -489,6 +531,7 @@ export function stepTribes(world) {
             endTribe(world, t);
             continue;
         }
+        if (t.order !== null && world.time + 1 >= t.order.until) t.order = null; // its last step: the order lapses (orders.js)
         t.store *= 1 - P.spoil;
         if (t.birthCooldown > 0) t.birthCooldown--;
         if (t.adults >= 2 && t.birthCooldown === 0 && t.store >= P.birthCost + P.reserve * t.members) {

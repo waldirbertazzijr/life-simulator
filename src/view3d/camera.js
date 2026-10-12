@@ -252,6 +252,7 @@ export class CameraRig {
         // eye must stay above.
         const out = [0, 0];
         this.surface = terrain ? (x, z) => (meshHeight(terrain, x, z, out), out[0]) : () => 0;
+        this.sea = terrain ? terrain.seaLevel : -Infinity; // (the water's surface, for groundAt)
         this.lowest = 0;
         if (terrain) {
             this.lowest = Infinity;
@@ -597,6 +598,39 @@ export class CameraRig {
         v.applyMatrix4(this.camera.projectionMatrix);
         out.x = (v.x + 1) * 0.5 * this.w;
         out.y = (1 - v.y) * 0.5 * this.h;
+        return true;
+    }
+
+    // The ground under the screen point (px, py) (CSS pixels): where the
+    // line of sight through it first meets the land as drawn (or a lake's
+    // surface), as a world point in out.x, out.y. False if it meets nothing
+    // before the fog: the sky. (Calls are given there: play/calls.js.) It
+    // marches out in steps that grow with the distance, then halves the
+    // last one down to a few centimetres.
+    groundAt(px, py, out) {
+        const { camera, pose } = this;
+        const d = this.v.set((px / this.w) * 2 - 1, 1 - (py / this.h) * 2, 0.5).unproject(camera).sub(camera.position).normalize();
+        const { x: ox, y: oy, z: oz } = camera.position;
+        const { x: dx, y: dy, z: dz } = d;
+        const sea = this.sea;
+        const above = (t) => {
+            const h = this.surface(pose.fx + ox + dx * t, pose.fz + oz + dz * t);
+            return oy + dy * t - (h > sea ? h : sea);
+        };
+        let a = 0;
+        let t = camera.near;
+        while (above(t) > 0) {
+            if (t >= pose.fogFar) return false;
+            a = t;
+            t = Math.min(pose.fogFar, t + Math.max(0.5, t * 0.02));
+        }
+        for (let k = 0; k < 24; k++) {
+            const m = (a + t) / 2;
+            if (above(m) > 0) a = m;
+            else t = m;
+        }
+        out.x = wrap(pose.fx + ox + dx * t, this.W);
+        out.y = wrap(pose.fz + oz + dz * t, this.H);
         return true;
     }
 

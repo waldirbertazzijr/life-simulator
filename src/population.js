@@ -19,11 +19,14 @@ export const STATE = {
     GATHERING: 8, HUNTING: 9, HOMEWARD: 10, AT_CAMP: 11, FIGHTING: 12, PLAYING: 13, AVOIDING: 14, RAIDING: 15,
     // the person the page controls (player.js)
     WALKING: 16, RUNNING: 17, CREEPING: 18, ROLLING: 19,
+    // people the player leads (orders.js)
+    FOLLOWING: 20, GUARDING: 21,
 };
 export const STATE_LABEL = [
     'grazing', 'looking for grass', 'fleeing', 'looking for prey', 'chasing', 'eating', 'catching its breath', 'full, ambling',
     'gathering', 'hunting', 'carrying food home', 'resting at camp', 'fighting', 'playing at camp', 'avoiding strangers', 'raiding',
     'walking', 'running', 'creeping', 'rolling',
+    'following the leader', 'guarding the camp',
 ];
 
 // One species, stored as parallel arrays. An individual is an index.

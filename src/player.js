@@ -22,6 +22,8 @@
 //   over      Play mode: the line and the tribe are gone
 //   auto      autopilot: the page is on the map, and the AI runs the person
 //   x, y, heading  where the body was last seen alive
+//   lastTarget, calls, rally  what the latest attack went for, calls not yet
+//             heard, and a rally under way (orders.js adds them when needed)
 //
 // On autopilot the person lives exactly as if nobody controlled it: no input,
 // no wounds instead of death, no rolls, no crouching (wounds exist because
@@ -30,6 +32,7 @@
 // The page moves the body (src/play/body.js); here it is only checked, and
 // everything that is not a decision still happens to it as to anyone.
 import { STATE } from './population.js';
+import { giveCall } from './orders.js';
 
 const wrapDelta = (d, size) => (d > size / 2 ? d - size : d < -size / 2 ? d + size : d);
 // (A position already on the world is kept exactly as the page sent it.)
@@ -94,11 +97,15 @@ export function applyInput(world, msg) {
 
 // A one-off action {seq, action, ...}: 'roll', a dodge roll (bites miss for
 // play.rollSteps steps); 'rest' {on}, to sit down at camp (only inside it)
-// or get up; 'auto' {on}, autopilot on or off. Others are ignored, so the
-// page can be ahead of the simulation. On autopilot, only 'auto' counts.
+// or get up; 'auto' {on}, autopilot on or off; 'call' {kind, x, y}, a call
+// to your tribe (orders.js). Others are ignored, so the page can be ahead of
+// the simulation. On autopilot, only 'auto' and 'call' count (orders can be
+// given from the map).
 export function applyAct(world, msg) {
     const pl = world.player;
     if (pl === null || pl.id === 0) return;
+    // What you attack, your followers go for too (orders.js).
+    if (msg.action === 'attack' && msg.target > 0) pl.lastTarget = Number(msg.target);
     if (msg.action === 'auto') {
         const on = msg.on === true;
         if (on === pl.auto) return;
@@ -115,6 +122,8 @@ export function applyAct(world, msg) {
             pl.seq = 0;
             pl.lastStep = world.time;
         }
+    } else if (msg.action === 'call') {
+        giveCall(world, msg);
     } else if (pl.auto) {
         // The AI decides.
     } else if (msg.action === 'roll') {

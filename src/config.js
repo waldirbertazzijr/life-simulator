@@ -197,6 +197,27 @@ export const params = {
         spiritRest: 1,       // ...plus this much while resting at camp
     },
 
+    // Leading a tribe (src/orders.js): the player's rallies and a tribe's
+    // standing orders. Only the player gives them (and the tests and the
+    // orders check, through issueOrder); with nobody controlled, none of this
+    // is ever read.
+    orders: {
+        rallyCost: 40,       // Spirit a rally costs
+        rallyRadius: 60,     // adult tribe-mates this close follow you...
+        rallySteps: 450,     // ...for this long (30 s at 1×)
+        keep: 15,            // followers keep within about this far of you...
+        close: 8,            // ...closing in to about this far
+        lasts: 3000,         // a standing order holds this long, unless replaced
+        // Gather food and Defend camp keep people from food: a tribe heeds them
+        // only while its store could pay for a birth (human.birthCost +
+        // human.reserve a member, × this), and a hungry camp feeds itself
+        // first. How its camp meets raiders and predators follows the order
+        // regardless.
+        surplus: 1,
+        huntRange: 160,      // Hunt here: foragers keep within this of the marker (100 starved the hunt)
+        moveCooldown: 3000,  // steps before a camp can move again
+    },
+
     evolution: {
         enabled: true,
         // Children inherit each gene × e^(σ·N(0,1)) — symmetric in log space, so

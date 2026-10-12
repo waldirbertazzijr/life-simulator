@@ -154,6 +154,12 @@
         #play-bar canvas { width: 18px; height: 12px; border-radius: 1px; }
         #play-bar .self { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         #play-return { border-color: var(--line); color: var(--text); }
+        #play-calls { display: flex; align-items: center; gap: 2px; margin-top: 6px; }
+        #play-calls[hidden], #play-order[hidden] { display: none; }
+        #play-calls .label { color: var(--muted); font-size: 11px; margin-right: 4px; }
+        #play-calls button { flex: 1; padding: 0 3px; white-space: nowrap; }
+        #play-order { color: var(--muted); font-size: 11px; margin-top: 3px; }
+        #play-order.armed { color: var(--text); }
         #picker { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 6px; }
         #picker .head { display: flex; align-items: center; color: var(--muted); font-size: 11px; height: 22px; }
         #picker .head span { margin-right: auto; }
@@ -256,6 +262,21 @@
         #hud-flash.on { animation: bitten 0.9s ease-out; }
         @keyframes bitten { from { opacity: 1; } to { opacity: 0; } }
 
+        /* Leading (play/calls.js): the call's name beside its slot, lit for a
+           moment when it changes, and the tribe's answer above the prompt. */
+        .hud-cross .call { position: absolute; left: 118px; top: 17px; font-size: 16px; font-style: italic; color: var(--hud-muted); white-space: nowrap; text-align: left; }
+        .hud-cross .call.lit { animation: lit 1.8s ease-out; }
+        @keyframes lit { from { color: var(--hud-text); } to { color: var(--hud-muted); } }
+        #notice {
+            position: fixed; left: 50%; bottom: 168px; transform: translateX(-50%); min-width: 380px; padding: 7px 64px;
+            text-align: center; white-space: nowrap; pointer-events: none;
+            font: 19px var(--serif); color: var(--hud-text); text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85), 0 0 10px rgba(0, 0, 0, 0.45);
+        }
+        #notice[hidden] { display: none; }
+        #notice.on { animation: notice 3.2s ease both; }
+        #notice.refused span { color: #e3b2a6; font-style: italic; }
+        @keyframes notice { 0% { opacity: 0; } 8% { opacity: 1; } 78% { opacity: 1; } 100% { opacity: 0; } }
+
         /* Banners: big, centred, serif, a slow fade. */
         .banner { position: absolute; left: 0; right: 0; top: 40%; transform: translateY(-50%); }
         .banner .band { padding: 28px 0; text-align: center; background: linear-gradient(transparent, rgba(0, 0, 0, 0.7) 26%, rgba(0, 0, 0, 0.7) 74%, transparent); }
@@ -316,6 +337,15 @@
                 <button id="play-return" title="Back into your person (M)">return</button>
                 <button id="play-stop" title="Let go of them"><svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
             </div>
+            <!-- Calls to your tribe from the map (play/calls.js). -->
+            <div id="play-calls" hidden>
+                <span class="label">order</span>
+                <button data-call="hunt" title="Hunt here: then click the map where (G)">hunt</button>
+                <button data-call="gather" title="Gather food: no hunting, only gathering">gather</button>
+                <button data-call="defend" title="Defend camp: everyone to the camp">defend</button>
+                <button data-call="move" title="Move camp: then click the map where">move</button>
+            </div>
+            <div id="play-order" hidden></div>
 
             <!-- Play: choose the tribe you will lead. -->
             <section id="picker" hidden>
@@ -400,6 +430,7 @@
                 <div class="slot left" title="Tool"></div>
                 <div class="slot right" title="Weapon"><svg viewBox="0 0 36 36" aria-hidden="true"><path d="M7 29 25.5 10.5"/><path d="M25.5 10.5 30 6l-1.2 5.8-3.3-1.3z"/><path d="M9.5 24.5l2 2"/></svg></div>
                 <div class="slot down" title="Food pouch"><svg viewBox="0 0 36 36" aria-hidden="true"><path d="M13 11.5c-4 3.5-6 8-5 12.5 1 4.2 5.2 6 10 6s9-1.8 10-6c1-4.5-1-9-5-12.5"/><path d="M12.5 11.5h11"/><path d="M14.5 11.5 13 7.5h10l-1.5 4"/></svg><span class="count" id="hud-carry">0</span></div>
+                <div class="call" id="hud-call"></div>
             </div>
             <div class="item">Plain spear</div>
         </div>
@@ -410,6 +441,8 @@
         <div id="hud-flash"></div>
     </div>
     <div id="banners" aria-live="polite"></div>
+    <!-- Your tribe's answer to a call (play/calls.js), in a body or on the map. -->
+    <div id="notice" class="fade-band" hidden aria-live="polite"><span></span></div>
     <section id="story" hidden aria-live="polite">
         <dl>
             <dt>people played</dt><dd id="story-people"></dd>

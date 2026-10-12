@@ -33,6 +33,7 @@
 // pause, and the panel (inBody, openPicker, changed).
 import { Body, STAMINA } from './body.js';
 import { personName, ageText, relation, YEAR } from './names.js';
+import { Calls, noticeFor, placed } from './calls.js';
 
 const DEG = Math.PI / 180;
 const TAU = Math.PI * 2;
@@ -152,6 +153,7 @@ export class Modes {
         // For checking (window.play.state): moves the simulation turned down
         // (each one a jump back), and the person's own reports placing the body.
         this.stats = { snaps: 0, placed: 0 };
+        this.calls = new Calls(); // leading your tribe (calls.js)
         this.input.onAction = (name, info) => this.action(name, info);
     }
 
@@ -223,6 +225,7 @@ export class Modes {
         }
         this.env.follow(this.self);
         this.inBody = true;
+        this.calls.disarm();
         this.place(f);
         this.env.setSpeed(1);
         this.env.setView(this.view);
@@ -287,6 +290,7 @@ export class Modes {
         this.self = 0;
         this.known = null;
         this.game = 'god';
+        this.calls.disarm();
         this.input.setMode('off');
         this.env.changed();
     }
@@ -307,6 +311,7 @@ export class Modes {
         this.acked = false;
         this.seenId = 0;
         this.story = freshStory();
+        this.calls.reset();
         this.world.pose = null;
         this.input.setMode('off');
         this.env.inBody(false);
@@ -350,6 +355,10 @@ export class Modes {
             else this.back();
             return;
         }
+        if (name === 'call' && !this.inBody) {
+            this.armCall(); // G on the map
+            return;
+        }
         if (!this.inBody || this.dying) return;
         switch (name) {
             case 'move':
@@ -380,10 +389,57 @@ export class Modes {
             case 'pause':
                 this.env.setPaused(!this.env.getPaused());
                 break;
+            case 'cycle-call':
+                this.calls.cycle();
+                break;
+            case 'call':
+                this.callHere();
+                break;
             default:
-                // eat, craft, call, the arrows, attacks, tool, art: later packages.
+                // eat, craft, the other arrows, attacks, tool, art: later packages.
                 break;
         }
+    }
+
+    // ---- Leading your tribe (calls.js; the simulation's side is orders.js) ----
+
+    // G in a body: the call in the slot, at the ground under the crosshair
+    // (where you stand, looking at the sky); a rally, around you.
+    callHere() {
+        const kind = this.calls.call.kind;
+        const at = kind === 'rally' ? null : this.env.crosshair?.() ?? null;
+        this.world.act({ seq: this.body.nextSeq(), action: 'call', kind, x: at ? at.x : this.body.x, y: at ? at.y : this.body.y });
+    }
+
+    // On the map: ready a call (by default the slot's) to be given where you
+    // click next; asked for again, let it go. One about the camp (Gather
+    // food, Defend camp) is given at once.
+    armCall(kind) {
+        if (this.inBody || !this.self || this.dying || this.over) return;
+        if (this.calls.armed && (kind === undefined || kind === this.calls.armed)) this.calls.disarm();
+        else {
+            this.calls.arm(kind);
+            const camp = this.world.tribeById.get(this.tribe)?.camp;
+            if (!placed(this.calls.armed) && camp) this.callAt(camp.x, camp.y);
+        }
+        this.env.changed();
+    }
+
+    // A click on the map at (x, y), with a call armed: it is given there,
+    // once. False if no call was armed (the click is the map's).
+    callAt(x, y) {
+        const kind = this.calls.armed;
+        if (!kind || this.inBody || !this.self) return false;
+        this.calls.disarm();
+        this.world.act({ seq: this.body.nextSeq(), action: 'call', kind, x, y });
+        this.env.changed();
+        return true;
+    }
+
+    // The tribe's answer to a call ('call', 'refused', 'rally' events), if
+    // it is yours: a notice.
+    answered(e) {
+        if (this.self && e.tribe === this.tribe) this.hud.notice?.(noticeFor(e), e.type === 'refused');
     }
 
     // ---- Each frame ----
@@ -508,6 +564,11 @@ export class Modes {
             case 'over':
                 if (this.dying) this.dying.outcome = { kind: 'over' };
                 break;
+            case 'call':
+            case 'refused':
+            case 'rally':
+                this.answered(e);
+                break;
         }
     }
 
@@ -580,6 +641,7 @@ export class Modes {
         this.self = 0;
         this.known = null;
         this.over = true;
+        this.calls.disarm();
         this.input.setMode('off');
         this.hud.banner('ended');
         this.hud.summary(this.numbers(), {
@@ -683,6 +745,10 @@ export class Modes {
         s.store = tribe ? tribe.store : 0;
         s.prompt = this.dying ? null : paused ? ['P', 'Resume'] : this.resting ? ['E', 'Rise'] : this.atCamp() ? ['E', 'Rest at camp'] : null;
         s.crouch = b.crouch;
+        // Your call, and your tribe's standing order on the compass (calls.js).
+        s.call = this.calls.call;
+        const order = tribe?.order ?? null;
+        s.order = order ? Math.atan2(wrapDelta(order.y - b.y, w.height), wrapDelta(order.x - b.x, w.width)) : null;
         s.ring = null;
         s.target = null;
         const t = this.lock ? w.find(this.lock) : null;

@@ -17,6 +17,7 @@ import { Grass } from './grass.js';
 import { Terrain, BIOME } from './terrain.js';
 import { seedTribes, stepHumans, stepTribes, driveOff } from './humans.js';
 import { caught, afterStep } from './player.js';
+import { fighting } from './orders.js';
 
 export { STATE, STATE_LABEL } from './population.js';
 
@@ -427,7 +428,7 @@ export class World {
                             timer[i] = P.rest;
                             state[i] = STATE.RESTING;
                             const tribe = this.tribeById.get(humans.tribe[j]);
-                            if (rng.next() < tribe.aggression * this.p.human.killPredator) {
+                            if (rng.next() < fighting(tribe) * this.p.human.killPredator) { // (defending a camp: fiercer, orders.js)
                                 this.die(pop, i, 'killed', humans.id[j]);
                                 humans.kills[j]++;
                                 continue;

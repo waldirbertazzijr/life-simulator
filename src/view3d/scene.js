@@ -20,7 +20,9 @@
 // Draw calls stay few: a handful of ground copies, two instanced meshes for
 // all the trees (one per kind), one for all the tufts, three more (one per
 // species, the dead included), two for blood (droplets and pools), the water
-// sheet, the sky, two per visible camp, and two for all the camps' racks.
+// sheet, the sky, two per visible camp, two for all the camps' racks, and
+// two for a tribe's standing order (its pole and a hunt's range:
+// order-marker.js).
 import * as THREE from 'three';
 import { CameraRig } from './camera.js';
 import { Ground } from './terrain-mesh.js';
@@ -30,6 +32,7 @@ import { Creatures } from './creatures.js';
 import { Effects } from './effects.js';
 import { Camps } from './camps.js';
 import { Marker } from './marker.js';
+import { OrderMarkers } from './order-marker.js';
 import { Lineup } from './poses.js';
 import { groundOf } from './util.js';
 import { stubTerrain } from './terrain-stub.js';
@@ -110,6 +113,7 @@ export class View3D {
         this.creatures = new Creatures(this.scene);
         this.effects = new Effects(this.scene, this.creatures.motion); // the dead, and blood
         this.camps = new Camps(this.scene, this.gl);
+        this.orders = new OrderMarkers(this.scene); // a tribe's standing order (orders.js)
         this.marker = new Marker(this.scene);
         this.lineup = LINEUP === null ? null : new Lineup(LINEUP);
         // JavaScript milliseconds per frame, for the last frame and smoothed:
@@ -137,6 +141,7 @@ export class View3D {
         this.creatures.attach();
         this.effects.attach(this.heightAt);
         this.camps.attach();
+        this.orders.attach();
         this.rig.attach(world, this.terrain);
     }
 
@@ -181,6 +186,7 @@ export class View3D {
         this.creatures.update(world, view, this.heightAt, inside ? target.pop.id[target.i] : 0, this.effects);
         this.effects.update(view);
         this.camps.update(world, view, this.heightAt);
+        this.orders.update(world, view, this.heightAt);
         this.marker.update(world, view, this.heightAt, target, focus, senseRadius);
         const t1 = performance.now();
         this.gl.render(this.scene, this.rig.camera);
@@ -195,6 +201,13 @@ export class View3D {
     // The id of whoever is drawn under pixel (px, py) (within 16 px), or 0.
     pick(world, px, py) {
         return this.creatures.pick(this.rig.camera, this.rig.w, this.rig.h, px, py);
+    }
+
+    // The world point {x, y} on the ground under pixel (px, py), or null
+    // (the sky). Calls to a tribe are given there (play/calls.js).
+    groundAt(px, py) {
+        const out = { x: 0, y: 0 };
+        return this.rig.groundAt(px, py, out) ? out : null;
     }
 
     // A one-shot pose on anyone (`seconds` at 1×; it defaults to the pose's own).

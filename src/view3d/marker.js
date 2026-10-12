@@ -14,7 +14,8 @@ import { wrapDelta, TAU } from './util.js';
 const LIFT = 0.35; // above the ground, so the band is not swallowed by it
 
 // A band around a centre, on the ground. Dashed bands draw every other segment.
-class Band {
+// (Also the range of a tribe's Hunt here order: order-marker.js.)
+export class Band {
     constructor(scene, segments, color, opacity, dashed) {
         this.segments = segments;
         this.opacity = opacity;

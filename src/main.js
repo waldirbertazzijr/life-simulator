@@ -21,6 +21,7 @@ import { Input } from './play/input.js';
 import { Hud } from './play/hud.js';
 import { Modes } from './play/modes.js';
 import { personName } from './play/names.js';
+import { setAside } from './orders.js';
 
 const VIEWS = ['map', 'follow', 'first'];
 const BLOOD_KEY = 'life-simulator.blood';
@@ -193,6 +194,10 @@ const panel = new Panel({
     stop() {
         modes.stop();
     },
+    // A call to your tribe from the map (play/calls.js): ready it, then click.
+    armCall(kind) {
+        modes.armCall(kind);
+    },
     setBlood,
 });
 panel.setBlood(blood);
@@ -218,15 +223,25 @@ const modes = new Modes({
     },
     openPicker: () => panel.openPicker(world),
     changed: () => showPlay(),
+    // Where a call goes in a body: the ground under the crosshair (the
+    // middle of the view), or null for the sky.
+    crosshair: () => renderer.groundAt?.(window.innerWidth / 2, window.innerHeight / 2) ?? null,
 });
 
 function showPlay() {
+    const tribe = world.tribeById.get(modes.tribe) ?? null;
     panel.showPlay(world, {
         can: canPlay,
         self: modes.self,
         inBody: modes.inBody,
-        tribe: world.tribeById.get(modes.tribe) ?? null,
+        tribe,
         playing: modes.game === 'play',
+    });
+    panel.showCalls({
+        shown: canPlay && !!modes.self && !modes.inBody && !modes.over,
+        armed: modes.calls.armed,
+        order: tribe?.order ?? null,
+        hungry: !!tribe && setAside(world.p, tribe),
     });
 }
 
@@ -266,11 +281,19 @@ async function createRenderer(canvas) {
 }
 
 // Click (or tap) anyone to follow them. (In a body a click is the body's:
-// it locks the pointer, or attacks.)
+// it locks the pointer, or attacks.) With a call to your tribe armed on the
+// map (play/calls.js), the click gives it there instead.
 canvas.addEventListener('click', (e) => {
     if (modes.inBody) return;
     const rect = canvas.getBoundingClientRect();
-    const id = renderer.pick(world, e.clientX - rect.left, e.clientY - rect.top);
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    if (modes.calls.armed) {
+        const at = renderer.groundAt?.(px, py);
+        if (at) modes.callAt(at.x, at.y);
+        return;
+    }
+    const id = renderer.pick(world, px, py);
     if (id) follow(id);
 });
 
@@ -360,6 +383,9 @@ window.sim = {
 //   play.hold(code, ms)  hold a key (e.g. 'KeyW') for ms; resolves when let go
 //   play.press(code)     tap a key
 //   play.banner(kind, text), play.over()   show a banner; end the line now
+//   play.call(kind)      put a call in the slot (G gives it: play.press('KeyG'))
+//   play.arm(kind), play.mapClick(x, y)    on the map: ready a call, and click
+//                        the world point (x, y) through the view
 //   play.state           who, where, stamina, snaps (moves turned down)...
 //   play.modes
 const key = (type, code) => window.dispatchEvent(new KeyboardEvent(type, { code, key: code, bubbles: true }));
@@ -395,6 +421,15 @@ window.play = {
     },
     banner: (kind, text) => hud.banner(kind, text),
     over: () => modes.gameOver(),
+    call: (kind) => modes.calls.select(kind),
+    arm: (kind) => modes.armCall(kind),
+    mapClick(x, y) {
+        const at = { x: 0, y: 0 };
+        if (!renderer.rig?.project(x, y, world.terrain ? world.terrain.heightAt(x, y) : 0, at)) return false;
+        const rect = canvas.getBoundingClientRect();
+        canvas.dispatchEvent(new MouseEvent('click', { clientX: rect.left + at.x, clientY: rect.top + at.y, bubbles: true }));
+        return true;
+    },
     get state() {
         const p = world.player;
         return {
@@ -402,6 +437,7 @@ window.play = {
             inBody: modes.inBody, view: modes.view, mode: renderer.mode, resting: modes.resting, lock: modes.lock,
             stamina: Math.round(modes.body.stamina), x: +modes.body.x.toFixed(2), y: +modes.body.y.toFixed(2),
             snaps: modes.stats.snaps, placed: modes.stats.placed, speed, paused,
+            call: modes.calls.call.kind, armed: modes.calls.armed,
             player: p ? { id: p.id, x: +p.x.toFixed(2), y: +p.y.toFixed(2), auto: p.auto, spirit: +p.spirit.toFixed(1), resting: p.resting } : null,
         };
     },

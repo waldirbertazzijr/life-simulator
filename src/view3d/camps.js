@@ -38,6 +38,9 @@ const MEAT = '#874233';
 // The place along the ridge the k-th strip takes: from the middle outward.
 const SLOTS = [4, 5, 3, 6, 2, 7, 1, 8, 0, 9];
 
+// Which way from its pole a tribe's rack stands (the same every time).
+export const rackAngle = (id) => (hash(id) / 2 ** 32) * TAU;
+
 // Strips of meat on a rack for this much food in store: one as soon as there
 // is any, one more for each MEAT_EACH, up to MEAT_CAP.
 export function meatOnRack(store) {
@@ -194,10 +197,19 @@ export class Camps {
                 material,
                 disc: groundDisc(campRadius, ground, tribe.camp.x, tribe.camp.y),
                 h0: ground(tribe.camp.x, tribe.camp.y),
-                rack: (hash(tribe.id) / 2 ** 32) * TAU, // which way from the pole the rack stands
+                rack: rackAngle(tribe.id), // which way from the pole the rack stands
                 seen: 0,
+                x: tribe.camp.x,
+                y: tribe.camp.y,
             };
             this.tribes.set(tribe.id, t);
+        } else if (t.x !== tribe.camp.x || t.y !== tribe.camp.y) {
+            // The camp has moved (orders.js): its trodden ground goes with it.
+            t.disc.dispose();
+            t.disc = groundDisc(campRadius, ground, tribe.camp.x, tribe.camp.y);
+            t.h0 = ground(tribe.camp.x, tribe.camp.y);
+            t.x = tribe.camp.x;
+            t.y = tribe.camp.y;
         }
         return t;
     }

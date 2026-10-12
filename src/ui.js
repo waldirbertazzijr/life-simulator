@@ -8,6 +8,7 @@ import { drawFlag } from './flag.js';
 import { STATE, STATE_LABEL } from './world.js';
 import { personName, ageText, years } from './play/names.js';
 import { mostExperienced, eldestOf } from './play/modes.js';
+import { callName } from './play/calls.js';
 
 // States shown in the alarm colour.
 const ALARM = new Set([STATE.FLEEING, STATE.CHASING, STATE.FIGHTING, STATE.RAIDING]);
@@ -131,6 +132,10 @@ export class Panel {
         });
         this.$('play-return').addEventListener('click', () => actions.back());
         this.$('play-stop').addEventListener('click', () => actions.stop());
+        this.$('play-calls').addEventListener('click', (e) => {
+            const b = e.target.closest('[data-call]');
+            if (b) actions.armCall(b.dataset.call);
+        });
         this.$('blood').addEventListener('click', () => actions.setBlood(!this.blood));
 
         // The seed field: type a number, Enter starts that world; Escape (or
@@ -216,6 +221,25 @@ export class Panel {
         if (play.tribe) drawFlag(ctx, play.tribe.flag, 0, 0, flag.width, flag.height);
         $('play-who').textContent = `${play.playing ? 'leading as' : 'playing'} ${personName(play.self)}`;
         $('play-who').title = play.tribe ? `${personName(play.self)} of the ${play.tribe.name}` : '';
+    }
+
+    // Calls to your tribe from the map (play/calls.js), under the bar above:
+    // `calls` = { shown, armed (the call waiting for a click, or null),
+    // order (your tribe's standing order, or null), hungry (the tribe feeds
+    // itself before heeding it) }.
+    showCalls(calls) {
+        const $ = this.$;
+        const row = $('play-calls');
+        const line = $('play-order');
+        row.hidden = !calls.shown;
+        line.hidden = !calls.shown;
+        if (!calls.shown) return;
+        for (const b of row.querySelectorAll('[data-call]')) b.setAttribute('aria-pressed', String(b.dataset.call === calls.armed));
+        const text = calls.armed ? `click the map: ${callName(calls.armed).toLowerCase()} there`
+            : calls.order ? `standing order: ${callName(calls.order.kind).toLowerCase()}${calls.hungry ? ', once the camp is fed' : ''}`
+            : 'no standing order';
+        if (line.textContent !== text) line.textContent = text;
+        line.classList.toggle('armed', !!calls.armed);
     }
 
     // Play: the living tribes, each with who you would begin as.
