@@ -53,3 +53,28 @@ test('a snapshot carries every event since the last one, then starts afresh', ()
     assert.notEqual(second, first);
     assert.equal(second.events.length, one);
 });
+
+test('a death event says its tribe and whether a child died', () => {
+    const w = world();
+    const pop = w.humans;
+    const adultAge = w.p.human.maturity;
+    let child = -1;
+    let adult = -1;
+    for (let i = 0; i < pop.n; i++) {
+        if (pop.age[i] < adultAge && child < 0) child = i;
+        if (pop.age[i] >= adultAge && adult < 0) adult = i;
+    }
+    assert.ok(child >= 0 && adult >= 0);
+    w.die(pop, child, 'killed', 5);
+    w.die(pop, adult, 'starvation');
+    const [c, a] = w.events;
+    assert.equal(c.tribe, pop.tribe[child]);
+    assert.equal(c.child, true);
+    assert.equal(a.tribe, pop.tribe[adult]);
+    assert.equal(a.child, false);
+    const g = w.herbivores;
+    g.age[0] = w.p.herbivore.maturity - 1;
+    w.die(g, 0, 'eaten', 9);
+    assert.equal(w.events.at(-1).tribe, 0, 'animals have no tribe');
+    assert.equal(w.events.at(-1).child, true);
+});

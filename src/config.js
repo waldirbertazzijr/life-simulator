@@ -195,6 +195,26 @@ export const params = {
         spiritMax: 100,
         spiritRegen: 0.05,   // regained each step...
         spiritRest: 1,       // ...plus this much while resting at camp
+        // The spear in the player's hands (spears.js). A throw flies straight
+        // until it strikes something or has flown its range.
+        throwSpeed: 3,       // a light throw: units a step...
+        throwRange: 20,      // ...and how far
+        heavySpeed: 4.5,     // a fully charged one (power 1; in between by power)
+        heavyRange: 34,
+        hitRadius: 2,        // a spear strikes what it passes this close to...
+        hitPredator: 2.5,    // ...a predator, bigger, this close
+        spearDamage: 60,     // a person struck loses this much, and dies of it at 0
+        jabRange: 5,         // a creature this close in front is jabbed instead of thrown at...
+        jabArc: Math.PI / 4, // ...this far to either side of the aim
+        jabHit: 0.5,         // chance a jab kills; from behind an unwary animal, always (an ambush)
+        // The player's kills wait to be butchered (player.js).
+        spoil: 900,          // steps an untouched carcass lasts
+        butcherSteps: 60,    // steps to cut one up...
+        butcherReach: 4,     // ...standing this close to it
+        butcherEvery: 10,    // a stroke (blood, for the page) every this many steps
+        rackReach: 8,        // the store is within this of the camp's centre
+        takeMax: 40,         // food taken from the store for the road, at most
+        eatMax: 40,          // energy eaten from the pouch at one go, at most
     },
 
     // Leading a tribe (src/orders.js): the player's rallies and a tribe's

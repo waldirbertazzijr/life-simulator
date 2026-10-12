@@ -12,6 +12,7 @@ import { params as defaults } from '../src/config.js';
 import { World } from '../src/world.js';
 import { Modes, mostExperienced, pickHeir, lockTarget, DEATH_SECONDS } from '../src/play/modes.js';
 import { TrailBar, bearing, stripX } from '../src/play/hud.js';
+import { POSE } from '../src/view3d/animate.js';
 
 // ---- The HUD's arithmetic ----
 
@@ -233,9 +234,46 @@ test('with the pointer locked, the mouse looks and a click attacks', () => {
     clock.t = 600;
     fire(doc, 'pointerup', { button: 0, pointerId: 1 });
     fire(canvas, 'pointerdown', { button: 2, pointerId: 1, shiftKey: true });
-    assert.deepEqual(actions, [['attack', { heavy: false }], ['attack', { heavy: true }], 'art']);
+    assert.deepEqual(actions, [['attack', { heavy: false, power: 0 }], ['attack', { heavy: true, power: 0.6 }], 'art']);
     input.setMode('off');
     assert.equal(doc.pointerLockElement, null, 'leaving the body frees the pointer');
+});
+
+test('a held click charges, and its length is the power', () => {
+    const { clock, input, actions, fire, canvas, doc, target } = hands({ lock: 'grant' });
+    input.setMode('body');
+    input.lock();
+    fire(canvas, 'pointerdown', { button: 0, pointerId: 1 });
+    clock.t = 100;
+    assert.equal(input.charging, false, 'a tap so far');
+    assert.equal(input.charge, 0);
+    clock.t = 400;
+    assert.equal(input.charging, true);
+    assert.ok(Math.abs(input.charge - 0.4) < 1e-9);
+    clock.t = 1700;
+    assert.equal(input.charge, 1, 'full in a second');
+    fire(doc, 'pointerup', { button: 0, pointerId: 1 });
+    assert.deepEqual(actions, [['attack', { heavy: true, power: 1 }]]);
+    assert.equal(input.charging, false);
+    // Losing the window mid-charge throws nothing.
+    fire(canvas, 'pointerdown', { button: 0, pointerId: 1 });
+    clock.t = 2400;
+    target.dispatchEvent(new Event('blur'));
+    assert.equal(input.charging, false);
+    fire(doc, 'pointerup', { button: 0, pointerId: 1 });
+    assert.equal(actions.length, 1);
+});
+
+test("E's release is heard", () => {
+    const { input, actions, key } = hands();
+    input.setMode('body');
+    key('keydown', 'KeyE');
+    key('keydown', 'KeyE', { repeat: true });
+    key('keyup', 'KeyE');
+    assert.deepEqual(actions, ['interact', 'interact-end']);
+    input.setMode('off');
+    key('keyup', 'KeyE');
+    assert.equal(actions.length, 2);
 });
 
 // ---- The body ----
@@ -439,7 +477,8 @@ function fakeWorld() {
             [1, { id: 1, name: 'Kamari', camp: { x: 100, y: 100 }, store: 120, flag, aggression: 0.3, sociality: 0.6 }],
             [2, { id: 2, name: 'Urek', camp: { x: 700, y: 400 }, store: 40, flag, aggression: 0.8, sociality: 0.2 }],
         ]),
-        player: null, snapped: false, pose: null, events: [], sent: [],
+        player: null, snapped: false, pose: null, events: [], sent: [], acts: [],
+        carcasses: [], grass: { g: [0.5], index: () => 0 },
         control(id, mode) {
             this.sent.push(['control', id, mode]);
         },
@@ -448,6 +487,7 @@ function fakeWorld() {
         },
         act(msg) {
             this.sent.push(['act', msg.action, msg.on]);
+            this.acts.push(msg);
         },
         find(id) {
             return World.prototype.find.call(this, id);
@@ -477,7 +517,7 @@ function fakeWorld() {
 
 function play() {
     const world = fakeWorld();
-    const state = { speed: 4, paused: false, view: 'map', followed: 0, inBody: false, picker: 0 };
+    const state = { speed: 4, paused: false, view: 'map', followed: 0, inBody: false, picker: 0, poses: [] };
     const input = {
         mode: 'off', x: 0, y: 0, sprinting: false,
         setMode(m) {
@@ -509,7 +549,12 @@ function play() {
             this.banners = [];
             this.story = null;
         },
-        update() {},
+        // What a frame showed: the prompt (as 'E Gather', ...) and the reload.
+        update(s) {
+            this.prompt = s.prompt ? s.prompt.map((p) => p.join(' ')) : null;
+            this.reload = s.reload;
+            this.carry = s.carry;
+        },
     };
     const modes = new Modes({
         world, input, hud,
@@ -536,6 +581,9 @@ function play() {
             state.picker++;
         },
         changed: () => {},
+        pose: (id, code) => state.poses.push(['pose', id, code]),
+        hold: (id, code) => state.poses.push(['hold', id, code]),
+        release: (id) => state.poses.push(['release', id]),
     });
     // Ana (7), at camp, with a child Tiko (11); Oren (8), an elder of the
     // same tribe; Sefa (20), alone in the other tribe.
@@ -560,6 +608,7 @@ test('becoming someone takes control at 1×', () => {
     assert.equal(state.view, 'shoulder');
     assert.equal(state.followed, 7);
     assert.ok(state.inBody && hud.shown && input.mode === 'body');
+    world.player = { id: 7, x: 100, y: 102, heading: 0 }; // (the simulation has it)
     input.y = 1;
     frame();
     assert.equal(world.pose.id, 7);
@@ -567,6 +616,42 @@ test('becoming someone takes control at 1×', () => {
     assert.equal(world.sent.at(-1)[0], 'input');
     assert.equal(world.sent.at(-1)[3], 1, 'a new body numbers its inputs from 1');
     assert.equal(modes.become(99), false, 'nobody by that id');
+});
+
+test('no input before the simulation reports the person', () => {
+    const { world, input, modes, frame } = play();
+    modes.become(7);
+    input.y = 1;
+    frame();
+    frame();
+    const inputs = () => world.sent.filter((m) => m[0] === 'input');
+    assert.equal(inputs().length, 0, 'nothing from where the page happens to draw it');
+    // Its first report places the body; from there on, every frame tells it.
+    world.player = { id: 7, x: 140, y: 150, heading: 0 };
+    frame();
+    assert.equal(inputs().length, 1);
+    const [, x, y, seq] = inputs()[0];
+    assert.ok(Math.hypot(x - 140, y - 150) < 0.2, `from the reported spot: ${x}, ${y}`);
+    assert.equal(seq, 1);
+    assert.equal(modes.stats.snaps, 0);
+    assert.equal(modes.stats.placed, 1);
+    // On autopilot (the map), and back: nothing is sent until the
+    // simulation has it by hand again, and that report places it, no snap.
+    modes.action('map');
+    world.player = { id: 7, x: 160, y: 150, heading: 0, auto: true };
+    frame();
+    modes.action('map');
+    frame();
+    const n = inputs().length;
+    frame();
+    assert.equal(inputs().length, n, 'still on autopilot as far as the simulation said');
+    world.player = { id: 7, x: 175, y: 150, heading: 0, auto: false, snap: true };
+    world.snapped = true;
+    frame();
+    assert.ok(Math.hypot(world.pose.x - 175, world.pose.y - 150) < 0.2, 'where the AI left it');
+    assert.equal(inputs().length, n + 1);
+    assert.equal(modes.stats.snaps, 0, 'that was placing, not a move turned down');
+    assert.equal(modes.stats.placed, 2);
 });
 
 test('the map puts your person on autopilot and restores the speed; M comes back', () => {
@@ -634,6 +719,7 @@ test('Play starts as the most experienced adult', () => {
 
 test('resting runs 16× until a move key', () => {
     const { world, state, modes, frame } = play();
+    world.tribeById.get(1).store = 0; // (nothing on the rack to take: E rests)
     modes.become(7);
     modes.action('interact');
     assert.equal(modes.resting, true);
@@ -655,8 +741,10 @@ test('resting runs 16× until a move key', () => {
 
 test('a bite stands you up and flashes', () => {
     const { world, state, hud, modes, frame } = play();
+    world.tribeById.get(1).store = 0; // (nothing on the rack to take: E rests)
     modes.become(7);
     modes.action('interact');
+    assert.equal(modes.resting, true);
     world.events = [{ type: 'bite', id: 7, by: 500, damage: 60 }];
     modes.after(1 / 60);
     assert.equal(hud.flashes, 1);
@@ -773,8 +861,10 @@ test('Play with nobody left is over, with the story', () => {
 
 test('a new world forgets the body', () => {
     const { world, state, input, hud, modes } = play();
+    world.tribeById.get(1).store = 0; // (nothing on the rack to take: E rests)
     modes.become(7);
     modes.action('interact');
+    assert.equal(modes.resting, true);
     modes.reset();
     assert.equal(modes.self, 0);
     assert.equal(modes.inBody, false);
@@ -825,6 +915,276 @@ test('lock-on picks the nearest creature in view', () => {
     assert.equal(modes.lock, 50);
     modes.action('lock');
     assert.equal(modes.lock, 0);
+});
+
+// ---- The hands (package 2) ----
+
+// In Ana's body (7, at the rack of her camp), the simulation reporting on it.
+function inBody(t, more = {}) {
+    t.modes.become(7);
+    t.world.player = { id: 7, x: 100, y: 102, heading: 0, reload: 0, carry: 0, energy: 100, gathering: false, butchering: 0, ...more };
+    t.frame();
+    return t;
+}
+const lastAct = (world) => world.acts.at(-1);
+
+test('a tap throws light, a hold heavy, aimed where you look or at the lock', () => {
+    const { world, modes, state, frame } = inBody(play());
+    modes.body.yaw = Math.PI / 2;
+    modes.action('attack', { heavy: false, power: 0 });
+    let a = lastAct(world);
+    assert.equal(a.action, 'attack');
+    assert.equal(a.heavy, false);
+    assert.ok(Math.abs(a.dx) < 1e-9 && Math.abs(a.dy - 1) < 1e-9, 'where you look');
+    assert.equal(a.target, 0);
+    assert.equal(modes.body.stamina, 90);
+    assert.ok(Math.abs(modes.body.heading - Math.PI / 2) < 1e-9, 'it turns to throw');
+    assert.deepEqual(state.poses.at(-1), ['pose', 7, POSE.THROW]);
+    // The simulation takes it; the spear comes back.
+    world.player.reload = 30;
+    frame();
+    world.player.reload = 0;
+    frame();
+    world.add('herbivores', { id: 60, x: 130, y: 102 });
+    modes.lock = 60;
+    modes.action('attack', { heavy: true, power: 0.8 });
+    a = lastAct(world);
+    assert.deepEqual([a.heavy, a.power, a.target, a.lock], [true, 0.8, 60, true], 'led onto the lock by the simulation');
+    assert.equal(modes.body.stamina, 65);
+    // Something within reach in front: a jab, and that is what it goes for.
+    world.player.reload = 30;
+    frame();
+    world.player.reload = 0;
+    frame();
+    modes.lock = 0;
+    modes.body.yaw = Math.PI / 2;
+    world.add('herbivores', { id: 61, x: 100, y: 105 }); // 3 ahead
+    modes.action('attack', { heavy: false, power: 0 });
+    assert.deepEqual(state.poses.at(-1), ['pose', 7, POSE.JAB]);
+    a = lastAct(world);
+    assert.deepEqual([a.target, a.lock], [61, false]);
+    // Not locked on, a throw at what is under the aim says so (not led).
+    world.player.reload = 30;
+    frame();
+    world.player.reload = 0;
+    frame();
+    modes.body.yaw = 0;
+    world.add('herbivores', { id: 62, x: 125, y: 104 }); // 25 ahead, a little aside
+    modes.action('attack', { heavy: false, power: 0 });
+    a = lastAct(world);
+    assert.deepEqual([a.target, a.lock], [62, false]);
+    assert.deepEqual(state.poses.at(-1), ['pose', 7, POSE.THROW]);
+});
+
+test('charging holds the throw drawn back', () => {
+    const t = inBody(play());
+    const { input, modes, state, frame } = t;
+    input.charging = true;
+    frame();
+    assert.deepEqual(state.poses.at(-1), ['hold', 7, POSE.THROW]);
+    input.charging = false;
+    modes.action('attack', { heavy: true, power: 0.5 });
+    assert.deepEqual(state.poses.at(-1), ['pose', 7, POSE.THROW], 'let go into the throw');
+    frame();
+    assert.ok(!state.poses.some((p) => p[0] === 'release'), 'the throw carries on from the hold');
+    // Charged, then let go of without a throw (the window lost): it lowers.
+    t.world.player.reload = 30;
+    frame();
+    t.world.player.reload = 0;
+    frame();
+    input.charging = true;
+    frame();
+    input.charging = false;
+    frame();
+    assert.deepEqual(state.poses.at(-1), ['release', 7]);
+});
+
+test('attacks cost stamina, wait for the reload; children cannot', () => {
+    const { world, modes, frame } = inBody(play());
+    const attacks = () => world.acts.filter((a) => a.action === 'attack').length;
+    modes.action('attack', {});
+    assert.equal(attacks(), 1);
+    modes.action('attack', {});
+    assert.equal(attacks(), 1, 'not until the simulation has the spear back');
+    world.player.reload = 12;
+    frame();
+    modes.action('attack', {});
+    assert.equal(attacks(), 1, 'reloading');
+    world.player.reload = 0;
+    frame();
+    modes.body.stamina = 0;
+    modes.action('attack', {});
+    assert.equal(attacks(), 1, 'no stamina');
+    modes.body.stamina = 5;
+    modes.action('attack', {});
+    assert.equal(attacks(), 2, 'a little is enough');
+    assert.equal(modes.body.stamina, 0);
+    // An attack the simulation never took up does not hold the spear back for long.
+    frame(1);
+    modes.body.stamina = 100;
+    modes.action('attack', {});
+    assert.equal(attacks(), 3);
+    // A child: no.
+    const c = play();
+    c.world.add('humans', { id: 30, x: 100, y: 105, age: 300 });
+    c.modes.become(30);
+    c.world.player = { id: 30, x: 100, y: 105, heading: 0, reload: 0, carry: 0, energy: 100 };
+    c.frame();
+    c.modes.action('attack', {});
+    assert.equal(c.world.acts.filter((a) => a.action === 'attack').length, 0);
+    assert.equal(c.modes.body.stamina, 100);
+});
+
+test('E does what the place offers, in order', () => {
+    const { world, modes } = inBody(play());
+    const what = () => modes.interaction();
+    assert.deepEqual(what(), { kind: 'take', amount: 40 }, 'at the rack, empty-handed');
+    world.player.carry = 30.7;
+    assert.deepEqual(what(), { kind: 'store', amount: 30 });
+    world.carcasses = [{ id: 77, kind: 'herbivore', x: 110, y: 102, meat: 40, cut: 0 }];
+    assert.deepEqual(what(), { kind: 'store', amount: 30 }, '10 away: too far to butcher');
+    world.carcasses[0].x = 103;
+    assert.deepEqual(what(), { kind: 'butcher', id: 77 }, 'your kill first');
+    world.carcasses = [];
+    world.player.carry = 0;
+    world.tribeById.get(1).store = 0;
+    assert.deepEqual(what(), { kind: 'rest' }, 'nothing to take');
+    world.tribeById.get(1).store = 120;
+    modes.body.x = 112;
+    assert.deepEqual(what(), { kind: 'rest' }, 'in camp, away from the rack');
+    modes.body.x = 150;
+    assert.deepEqual(what(), { kind: 'gather' }, 'on grass outside camp');
+    world.grass.g[0] = 0.05;
+    assert.equal(what(), null, 'grass too thin');
+    // And E does it.
+    modes.body.x = 100;
+    world.player.carry = 30;
+    modes.action('interact');
+    assert.equal(lastAct(world).action, 'store');
+    world.player.carry = 0;
+    modes.action('interact');
+    assert.equal(lastAct(world).action, 'take');
+});
+
+test('holding E butchers until let go', () => {
+    const { world, modes, state, frame } = inBody(play());
+    world.carcasses = [{ id: 77, kind: 'herbivore', x: 103, y: 102, meat: 40, cut: 0 }];
+    modes.action('interact');
+    let a = lastAct(world);
+    assert.deepEqual([a.action, a.on, a.id], ['butcher', true, 77]);
+    assert.deepEqual(state.poses.at(-1), ['hold', 7, POSE.BUTCHER]);
+    world.player.butchering = 77;
+    frame();
+    modes.action('interact-end');
+    a = lastAct(world);
+    assert.deepEqual([a.action, a.on], ['butcher', false]);
+    assert.deepEqual(state.poses.at(-1), ['release', 7]);
+    world.player.butchering = 0;
+    frame();
+    // Held to the end: the simulation says it is done.
+    modes.action('interact');
+    world.player.butchering = 77;
+    frame();
+    world.player.butchering = 0;
+    world.carcasses = [];
+    frame();
+    assert.equal(modes.doing, null);
+    assert.deepEqual(state.poses.at(-1), ['release', 7]);
+    const n = world.acts.length;
+    modes.action('interact-end');
+    assert.equal(world.acts.length, n, 'nothing more to stop');
+});
+
+test('E gathers until E again or a move', () => {
+    const { world, modes, state, frame } = inBody(play());
+    modes.body.x = 150;
+    modes.action('interact');
+    let a = lastAct(world);
+    assert.deepEqual([a.action, a.on], ['gather', true]);
+    assert.deepEqual(state.poses.at(-1), ['hold', 7, POSE.GATHER]);
+    world.player.gathering = true;
+    frame();
+    modes.action('interact');
+    a = lastAct(world);
+    assert.deepEqual([a.action, a.on], ['gather', false], 'E again');
+    assert.deepEqual(state.poses.at(-1), ['release', 7]);
+    modes.action('interact');
+    frame();
+    modes.action('move');
+    a = lastAct(world);
+    assert.deepEqual([a.action, a.on], ['gather', false], 'a move');
+    // Turned down (the simulation never starts): let go of after a moment.
+    world.player.gathering = false;
+    modes.action('interact');
+    frame(1);
+    assert.equal(modes.doing, null);
+    assert.deepEqual(state.poses.at(-1), ['release', 7]);
+});
+
+test('R eats from the pouch, once a second', () => {
+    const { world, modes, state, frame } = inBody(play(), { carry: 50 });
+    const eats = () => world.acts.filter((a) => a.action === 'eat').length;
+    modes.action('eat');
+    assert.equal(eats(), 1);
+    assert.deepEqual(state.poses.at(-1), ['pose', 7, POSE.EAT]);
+    modes.action('eat');
+    assert.equal(eats(), 1, 'a second between bites');
+    frame(0.5);
+    frame(0.6);
+    modes.action('eat');
+    assert.equal(eats(), 2);
+    frame(1.1);
+    world.player.carry = 0;
+    modes.action('eat');
+    assert.equal(eats(), 2, 'nothing in the pouch');
+    world.player.carry = 10;
+    world.player.energy = 150;
+    modes.action('eat');
+    assert.equal(eats(), 2, 'full');
+});
+
+test("the prompt lists E's action and R", () => {
+    const { world, modes, hud, state } = inBody(play());
+    const prompt = () => {
+        modes.drawHud(1 / 60);
+        return hud.prompt;
+    };
+    assert.deepEqual(prompt(), ['E Take 40 food']);
+    world.player.carry = 30;
+    assert.deepEqual(prompt(), ['E Store 30 food', 'R Eat']);
+    world.carcasses = [{ id: 77, x: 103, y: 102 }];
+    assert.deepEqual(prompt(), ['E Butcher', 'R Eat']);
+    world.carcasses = [];
+    world.player.carry = 0;
+    world.tribeById.get(1).store = 0;
+    assert.deepEqual(prompt(), ['E Rest at camp']);
+    modes.action('interact');
+    assert.deepEqual(prompt(), ['E Rise']);
+    modes.action('move');
+    modes.body.x = 150;
+    assert.deepEqual(prompt(), ['E Gather']);
+    modes.action('interact');
+    assert.deepEqual(prompt(), ['E Stop gathering']);
+    state.paused = true;
+    assert.deepEqual(prompt(), ['P Resume']);
+});
+
+test('the weapon slot sweeps while reloading', () => {
+    const { world, modes, hud, frame } = inBody(play(), { carry: 12.5 });
+    modes.drawHud(1 / 60);
+    assert.equal(hud.reload, 0);
+    assert.equal(hud.carry, 12.5, 'the pouch');
+    modes.action('attack', {});
+    modes.drawHud(1 / 60);
+    assert.equal(hud.reload, 1, 'thrown: the spear is gone');
+    world.player.reload = 15;
+    frame();
+    modes.drawHud(1 / 60);
+    assert.equal(hud.reload, 0.5);
+    world.player.reload = 0;
+    frame();
+    modes.drawHud(1 / 60);
+    assert.equal(hud.reload, 0);
 });
 
 // ---- With the simulation (player.js), as the page runs it ----
@@ -933,6 +1293,38 @@ test('a minute in a body at 1×: the simulation takes every move', async () => {
     assert.ok(Math.hypot(start[0] - modes.body.x, start[1] - modes.body.y) > 20, 'and it went somewhere');
 });
 
+test('entering at 4× while the person walks: no snap', async () => {
+    const { sim, world, input, modes, frames } = together(5);
+    const tribe = world.tribes[0].id;
+    const id = mostExperienced(world, tribe);
+    // Faster than 1× the page draws a moment some steps behind the
+    // simulation, which has walked the person on since: here, 6 units.
+    const w = sim.world;
+    const f = w.find(id);
+    let moved = false;
+    for (let k = 0; k < 8 && !moved; k++) {
+        const nx = (f.pop.x[f.i] + 6 * Math.cos(k * 0.8) + w.width) % w.width;
+        const ny = (f.pop.y[f.i] + 6 * Math.sin(k * 0.8) + w.height) % w.height;
+        if (w.terrain && w.terrain.blocked(nx, ny)) continue;
+        f.pop.x[f.i] = nx;
+        f.pop.y[f.i] = ny;
+        moved = true;
+    }
+    assert.ok(moved);
+    assert.equal(modes.startPlay(tribe), true);
+    // The page's first frame in the body, then a step before its next one
+    // (the worker steps on its own clock).
+    modes.move(1 / 60);
+    await world.run(1);
+    world.update(performance.now(), 16);
+    modes.after(1 / 60);
+    await frames(8);
+    input.y = 1;
+    await frames(120);
+    assert.equal(modes.stats.snaps, 0, 'no move turned down');
+    assert.ok(Math.hypot(world.player.x - modes.body.x, world.player.y - modes.body.y) < 2);
+});
+
 test('on the map the person walks on under the AI; coming back jumps to it', async () => {
     const { world, input, modes, frames } = together(6);
     modes.startPlay(world.tribes[0].id);
@@ -954,9 +1346,68 @@ test('on the map the person walks on under the AI; coming back jumps to it', asy
     await frames(8);
     assert.equal(world.player.auto, false);
     assert.ok(Math.hypot(world.player.x - modes.body.x, world.player.y - modes.body.y) < 0.5, 'the body is where the person is');
-    assert.ok(modes.stats.snaps <= 1, 'one jump back at most (autopilot off)');
+    assert.equal(modes.stats.snaps, 0, 'coming back places the body: nothing was turned down');
     const snaps = modes.stats.snaps;
     input.y = 1;
     await frames(240);
     assert.equal(modes.stats.snaps, snaps, 'then every move is taken again');
+});
+
+test('the mirror keeps the spears and carcasses', async () => {
+    const host = { local: true, onmessage: null, send: (msg) => sim.handle(msg) };
+    const sim = new Sim((msg) => host.onmessage(msg));
+    const mirror = new Mirror(host);
+    mirror.reset(structuredClone(defaults), 3, 1.6);
+    assert.deepEqual([mirror.spears, mirror.carcasses], [[], []]);
+    mirror.update(performance.now(), 16);
+    await mirror.run(1);
+    const w = sim.world;
+    w.spears.add(100, 100, 3, 0, 20, 1, 1);
+    w.carcasses.set(5, { id: 5, kind: 'herbivore', x: 50, y: 60, meat: 30, total: 30, done: 0, cut: 0, by: 1, born: 0 });
+    sim.dirty = true;
+    sim.handle({ type: 'want' });
+    assert.deepEqual([...mirror.spears], [100, 100, 3, 0, 0]);
+    assert.equal(mirror.spearsAt, 1);
+    assert.deepEqual(mirror.carcasses, [{ id: 5, kind: 'herbivore', x: 50, y: 60, meat: 30, cut: 0 }]);
+    mirror.reset(structuredClone(defaults), 4, 1.6);
+    assert.deepEqual([mirror.spears, mirror.carcasses], [[], []], 'a new world: none');
+});
+
+test('an attack from the page throws a spear in the simulation', async () => {
+    const { sim, world, modes, frames } = together(5);
+    modes.startPlay(world.tribes[0].id);
+    await frames(8);
+    assert.equal(world.player.id, modes.self);
+    assert.equal(modes.attack({}), true);
+    await frames(8);
+    assert.ok(world.player.reload > 0, `the spear is gone: reload ${world.player.reload}`);
+    assert.equal(sim.world.spears.n, 1, 'and flies');
+});
+
+test('events come into view at their own moment', async () => {
+    const host = { local: true, onmessage: null, send: (msg) => sim.handle(msg) };
+    const sim = new Sim((msg) => host.onmessage(msg));
+    const mirror = new Mirror(host);
+    mirror.reset(structuredClone(defaults), 3, 1.6);
+    mirror.update(performance.now(), 16); // (asks for the next snapshot)
+    // Two things that happened during steps 2 and 7 reach the page in one
+    // snapshot, of step 8.
+    sim.events.push({ type: 'early', time: 2 }, { type: 'late', time: 7 });
+    await mirror.run(8);
+    sim.handle({ type: 'want' });
+    assert.equal(mirror.history.at(-1).time, 8);
+    const mine = () => mirror.events.filter((e) => e.type === 'early' || e.type === 'late').map((e) => e.type);
+    mirror.shown = 1.5;
+    mirror.release();
+    assert.deepEqual(mine(), []);
+    mirror.shown = 2.25;
+    mirror.release();
+    assert.deepEqual(mine(), ['early'], 'shown as its own step is drawn, not the snapshot’s');
+    mirror.shown = 6;
+    mirror.release();
+    assert.deepEqual(mine(), []);
+    mirror.shown = 7;
+    mirror.release();
+    assert.deepEqual(mine(), ['late']);
+    assert.ok(mirror.events.every((e) => e.time <= 7));
 });

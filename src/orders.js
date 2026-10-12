@@ -162,7 +162,10 @@ export function follow(world, r, i, tribe, e, c) {
         } else if (pop.timer[i] === 0) {
             pop.timer[i] = P.reload;
             const mates = world.humanHash.count(x[i], y[i], P.groupRadius, i, pop.tribe, pop.tribe[i], true);
-            if (world.rng.next() < hitChance(P, tribe, mates)) {
+            const hit = world.rng.next() < hitChance(P, tribe, mates);
+            // (For the page, which draws the spear: nothing reads it here.)
+            world.events.push({ type: 'throw', id: pop.id[i], x: x[i], y: y[i], tx: G.x[j], ty: G.y[j], hit, time: world.time });
+            if (hit) {
                 const food = G.energy[j] * P.efficiency;
                 world.die(G, j, 'hunted', pop.id[i]);
                 pop.kills[i]++;

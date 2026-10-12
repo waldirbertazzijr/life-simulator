@@ -18,11 +18,15 @@
 //                                            (the newest is checked at the next step)
 //        act {seq, action, ...}              a one-off action of the controlled person: 'roll', 'rest' {on},
 //                                            'auto' {on} (autopilot: the AI runs it while the page is on the map),
-//                                            'call' {kind, x, y} (a call to its tribe: orders.js)
+//                                            'call' {kind, x, y} (a call to its tribe: orders.js);
+//                                            the hands': 'attack' {heavy, dx, dy, power, target, lock}, 'butcher' {on, id},
+//                                            'gather' {on}, 'eat', 'store', 'take' (player.js)
 //   out  started {gen, hash}                 the new world's first moment, hashed
 //        snapshot {...}                      see pack() below; with `events`, everything that happened
-//                                            since the last one (World.events, oldest first), and
-//                                            `player`, the controlled person (playerSnapshot in player.js)
+//                                            since the last one (World.events, oldest first),
+//                                            `player`, the controlled person (playerSnapshot in player.js),
+//                                            `spears` (x, y, vx, vy, progress each) and `carcasses`, the
+//                                            player's spears in flight and kills not yet butchered (spears.js)
 //        reply {id, value}
 //
 // Snapshots are pulled, not pushed: the main thread asks for one each frame
@@ -30,6 +34,7 @@
 // display's rate, never pile up, and stop when the page is not drawing.
 import { World } from './world.js';
 import { takeControl, applyInput, applyAct, playerSnapshot } from './player.js';
+import { packCarcasses } from './spears.js';
 import { ORDER_KINDS } from './orders.js';
 
 // Steps per second at 1×: a calm pace, at which a person walks about six
@@ -41,6 +46,7 @@ const SAMPLE_EVERY = 50;          // steps between sparkline samples
 export const FRAME_BUDGET_MS = 12; // ?noworker: most stepping per frame (the rest waits for the next)
 const MAX_BEHIND_MS = 100;        // a backlog longer than this (real time) is dropped: the world runs slower
 const MAX_EVENTS = 2000;          // events kept for the next snapshot at most (the oldest are let go)
+const NONE = Object.freeze([]);
 
 export const KINDS = ['herbivore', 'carnivore', 'human'];
 
@@ -197,6 +203,9 @@ export class Sim {
         snap.fate = w.fate;
         snap.heir = w.fate && w.fate.id === w.watch ? w.descendant(w.watch) : 0;
         snap.player = playerSnapshot(w);
+        // The player's spears in flight and kills not yet butchered (spears.js).
+        snap.spears = w.spears.n ? w.spears.pack() : NONE;
+        snap.carcasses = w.carcasses.size ? packCarcasses(w) : NONE;
         snap.samples = this.samples;
         this.samples = [];
         snap.events = this.events;

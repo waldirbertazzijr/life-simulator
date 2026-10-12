@@ -266,7 +266,10 @@ export function stepHumans(world) {
                 s = STATE.FIGHTING;
                 if (timer[i] === 0 && predators.d2 <= throw2) {
                     timer[i] = P.reload;
-                    if (rng.next() < hitChance(P, tribe, mates)) {
+                    const hit = rng.next() < hitChance(P, tribe, mates);
+                    // (For the page, which draws the spear: nothing reads it here.)
+                    world.events.push({ type: 'throw', id: id[i], x: x[i], y: y[i], tx: carnivores.x[threat], ty: carnivores.y[threat], hit, time: world.time });
+                    if (hit) {
                         c += carnivores.energy[threat] * P.efficiency;
                         world.die(carnivores, threat, 'killed', id[i]);
                         kills[i]++;
@@ -401,7 +404,9 @@ export function stepHumans(world) {
                         if (timer[i] === 0) {
                             timer[i] = P.reload;
                             const mates = people.count(x[i], y[i], P.groupRadius, i, tribeOf, tribeOf[i], true);
-                            if (rng.next() < hitChance(P, tribe, mates)) {
+                            const hit = rng.next() < hitChance(P, tribe, mates);
+                            world.events.push({ type: 'throw', id: id[i], x: x[i], y: y[i], tx: herbivores.x[target], ty: herbivores.y[target], hit, time: world.time });
+                            if (hit) {
                                 const food = herbivores.energy[target] * P.efficiency;
                                 world.die(herbivores, target, 'hunted', id[i]);
                                 kills[i]++;

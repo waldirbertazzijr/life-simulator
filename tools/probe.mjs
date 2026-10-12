@@ -4,6 +4,9 @@
 // the panel and saves a screenshot to .shots/<name>-<ms>.png. Console errors
 // and exceptions are printed at the end.
 //
+// The JavaScript can also take screenshots of its own at the right moment:
+// `await shot('label')` saves .shots/<name>-label.png then and there.
+//
 //   make shot                                         # 1440x900, ?seed=7, one shot at 4s
 //   make shot ARGS="--size 390x844 --dpr 2 --mobile"  # a phone
 //   make shot ARGS="--speed 16 --at 4000,20000"       # 16x, shots at 4s and 20s
@@ -82,7 +85,16 @@ ws.addEventListener('message', (ev) => {
     if (m.method === 'Log.entryAdded' && ['error', 'warning'].includes(m.params.entry.level)) {
         logs.push(`log.${m.params.entry.level}: ${m.params.entry.text} ${m.params.entry.url || ''}`);
     }
+    if (m.method === 'Runtime.bindingCalled' && m.params.name === 'probeShot') snap(m.params.payload);
 });
+// A screenshot the page asked for (shot(label)); then the page carries on.
+async function snap(label) {
+    const shot = await send('Page.captureScreenshot', { format: 'png' });
+    const file = `${NAME}-${label.replace(/[^\w.-]/g, '_')}.png`;
+    fs.writeFileSync(path.join(OUT, file), Buffer.from(shot.result.data, 'base64'));
+    out(`shot → .shots/${file}`);
+    await send('Runtime.evaluate', { expression: 'window.__probeShotDone?.()' });
+}
 const send = (method, params = {}) => new Promise((r) => {
     const i = ++id;
     pending.set(i, r);
@@ -96,6 +108,10 @@ const evaluate = async (expression) => {
 await send('Runtime.enable');
 await send('Log.enable');
 await send('Page.enable');
+await send('Runtime.addBinding', { name: 'probeShot' });
+await send('Page.addScriptToEvaluateOnNewDocument', {
+    source: 'window.shot = (label) => new Promise((resolve) => { window.__probeShotDone = resolve; window.probeShot(String(label)); });',
+});
 await send('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: DPR, mobile: MOBILE });
 await send('Page.navigate', { url: URL_ || `http://127.0.0.1:8080/${QUERY}` });
 await sleep(1000);

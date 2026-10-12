@@ -328,7 +328,7 @@ test('the controlled person ages and eats at camp like anyone', () => {
     w.step();
     i = at(w, id);
     assert.equal(w.humans.age[i], age + 1);
-    assert.equal(w.humans.carry[i], 0, 'drops its food off at camp');
+    assert.equal(w.humans.carry[i], 20, 'keeps its food at camp: E stores it (package 2)');
     assert.ok(Math.abs(w.humans.energy[i] - (0.9 * P.maxEnergy - cost)) < 1e-9, 'eats from the store when hungry');
     assert.equal(w.humans.state[i], STATE.AT_CAMP);
 

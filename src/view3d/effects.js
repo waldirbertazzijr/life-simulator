@@ -1,14 +1,17 @@
 // Death and blood: the dead lying where they fell, dark sprays and pools.
 //
 // Drawing only, like the rest of the view. What happens comes from the
-// world's events (a death; later packages add hits and butchering strokes),
+// world's events (a death, a spear or a jab striking, a butchering stroke),
 // and the marks it leaves fade with the world's time. Everything lives in
 // rings of a fixed size, so a massacre at 256× costs no more than a quiet
 // day: past the cap, the oldest go first (and the oldest few are already
 // sinking away, so none vanishes at once).
 //
 // - Carcasses: only their record is kept here; creatures.js draws them as
-//   extra instances of their species, fallen over (the FALL pose).
+//   extra instances of their species, fallen over (the FALL pose). The
+//   player's kills wait in the simulation to be butchered (spears.js), so
+//   while it lists one (follow) its body stays (keep), shrinking as it is
+//   cut up (cut), and goes when it is done (removeCarcass) or fades if left.
 // - Sprays: a few small faceted droplets thrown up and out, which fall back
 //   and lie on the ground for a moment.
 // - Pools: dark, matte patches on the ground that spread, then fade.
@@ -37,6 +40,10 @@ const POOL_ALPHA = 0.85;
 const POOL_MIN_PX = 4;           // in the map view, pools stay at least this wide
 const LIFT = 0.06;               // pools float this far above the ground (with a polygon offset)
 const VIOLENT = new Set(['eaten', 'hunted', 'killed']);
+const HIT = 0.8;                 // a spray's amount for a spear or a jab striking...
+const STROKE = 0.4;              // ...and for a butchering stroke
+const WOUND = 0.3;               // a blow goes in this far (× the body's length) from its middle
+const KEEP_AGE = LIFE / 2;       // a kept carcass this old moves to the young end of the ring
 
 // The Blood setting until the page says otherwise (main.js keeps it and
 // calls setBlood): on, unless `?noblood` or switched off before (in
@@ -123,10 +130,14 @@ export class Effects {
         this.clock = 0; // seconds at 1× (Motion's clock)
         this.shown = 0; // the moment drawn, in steps
 
+        // (gone: not drawn any more; cut: how much of it is butchered, 0..1)
         this.dead = ring(CAPS.carcasses, {
             kind: Uint8Array, id: Float64Array, x: Float64Array, y: Float64Array, heading: Float64Array,
             gy: Float64Array, born: Float64Array, t0: Float64Array, scale: Float64Array, tribe: Float64Array, fade: Float64Array,
+            gone: Uint8Array, cut: Float64Array,
         });
+        this.kept = new Map();   // the player's kills the simulation still has: id → slot in `dead`
+        this.listed = new Set(); // (scratch for follow)
         this.drops = ring(CAPS.droplets, {
             x: Float64Array, y: Float64Array, h: Float64Array, vx: Float64Array, vy: Float64Array, vh: Float64Array,
             t0: Float64Array, land: Float64Array, size: Float64Array, gy: Float64Array,
@@ -186,6 +197,7 @@ export class Effects {
             r.start = 0;
             r.count = 0;
         }
+        this.kept.clear();
         this.clock = 0;
         this.shown = 0;
     }
@@ -199,6 +211,7 @@ export class Effects {
     tick(clock, shown) {
         this.clock = clock;
         this.shown = shown;
+        if (this.kept.size) this.renew(shown);
         expire(this.dead, shown);
         expire(this.pools, shown);
         const d = this.drops;
@@ -211,11 +224,93 @@ export class Effects {
             const j = (c.start + q) % c.cap;
             c.fade[j] = fadeOf(shown - c.born[j], q + c.cap - c.count);
         }
+        for (const j of this.kept.values()) c.fade[j] = 0;
+    }
+
+    // Kept carcasses do not age: one half its life old moves to the young
+    // end of the ring, as if it had just died (still lying, not falling).
+    renew(shown) {
+        const c = this.dead;
+        for (const [id, j] of this.kept) {
+            if (shown - c.born[j] <= KEEP_AGE) continue;
+            if (c.count === c.cap) {
+                // (The ring is full: the oldest makes way, and if it was kept, it is lost.)
+                const lost = c.id[c.start];
+                if (this.kept.get(lost) === c.start && lost !== id) this.kept.delete(lost);
+            }
+            const to = push(c);
+            if (to !== j) {
+                for (const f of ['kind', 'id', 'x', 'y', 'heading', 'gy', 't0', 'scale', 'tribe', 'cut']) c[f][to] = c[f][j];
+                c.gone[j] = 1;
+            }
+            c.gone[to] = 0;
+            c.born[to] = shown;
+            this.kept.set(id, to);
+        }
+    }
+
+    // The slot of the carcass of `id` in the ring, or -1.
+    slotOf(id) {
+        const c = this.dead;
+        for (let q = c.count - 1; q >= 0; q--) {
+            const j = (c.start + q) % c.cap;
+            if (c.id[j] === id && !c.gone[j]) return j;
+        }
+        return -1;
+    }
+
+    // The player's kill `id` stays until let go (release, removeCarcass).
+    // False if its body is not lying here (yet).
+    keep(id) {
+        if (this.kept.has(id)) return true;
+        const j = this.slotOf(id);
+        if (j < 0) return false;
+        this.kept.set(id, j);
+        return true;
+    }
+
+    // How much of it is butchered (0..1): it shrinks as it is cut up.
+    cut(id, fraction) {
+        const j = this.kept.get(id) ?? this.slotOf(id);
+        if (j >= 0) this.dead.cut[j] = fraction;
+    }
+
+    // Gone at once (cut up).
+    removeCarcass(id) {
+        const j = this.kept.get(id) ?? this.slotOf(id);
+        this.kept.delete(id);
+        if (j >= 0) this.dead.gone[j] = 1;
+    }
+
+    // Let go: it fades from now, as any carcass at the end of its time.
+    release(id) {
+        const j = this.kept.get(id);
+        if (j === undefined) return;
+        this.kept.delete(id);
+        this.dead.born[j] = Math.min(this.dead.born[j], this.shown - LIFE * 0.7);
+    }
+
+    // The simulation's list of the player's kills (world.carcasses): keep
+    // and cut each one listed; let go of any it no longer lists.
+    follow(list) {
+        const listed = this.listed;
+        listed.clear();
+        for (let k = 0; k < list.length; k++) {
+            const c = list[k];
+            listed.add(c.id);
+            if (this.keep(c.id)) this.cut(c.id, c.cut ?? 0);
+        }
+        if (this.kept.size > listed.size) {
+            for (const id of this.kept.keys()) if (!listed.has(id)) this.release(id);
+        }
     }
 
     // What happened (world.events, this frame's): the dead fall where they
-    // died, a violent death bloodies the ground, and the killer strikes.
-    handle(events) {
+    // died, a violent death bloodies the ground, and the killer strikes; a
+    // spear or a jab striking sprays blood along the blow, and so, a little,
+    // does each butchering stroke; a carcass cut up is gone. `self`: the body
+    // the page plays, which strikes by itself (play/modes.js).
+    handle(events, self = 0) {
         const m = this.motion;
         // At high speed a frame can bring hundreds of deaths: only the newest
         // that fit in the ring leave a body (the others would go at once).
@@ -223,14 +318,38 @@ export class Effects {
         for (let k = 0; k < events.length; k++) if (events[k].type === 'death') older++;
         for (let k = 0; k < events.length; k++) {
             const e = events[k];
-            if (e.type !== 'death') continue;
+            if (e.type !== 'death') {
+                this.mark(e);
+                continue;
+            }
             if (older-- <= 0) this.carcass(e.kind, e.id, e.x, e.y, e.heading, VIOLENT.has(e.cause));
             if (!m) continue;
             m.forget(e.id);
-            if (!e.by) continue;
+            if (!e.by || e.by === self) continue;
             if (e.cause === 'eaten') m.pose(e.by, POSE.POUNCE);
             else if (e.cause === 'hunted') m.pose(e.by, POSE.THROW);
             else if (e.cause === 'killed') m.pose(e.by, e.kind === 'human' ? POSE.JAB : POSE.THROW); // in a fight, or a spear at a predator
+        }
+    }
+
+    // The marks of the hands' events (package 2): blood where a blow went
+    // in, splashing back toward whoever struck it (who is watching); a
+    // little at each butchering stroke; and a carcass cut up, or left to
+    // spoil, goes.
+    mark(e) {
+        if (e.type === 'hit') {
+            const s = SPECIES[e.kind];
+            if (!s || !this.seen(e.x, e.y, this.ground(e.x, e.y))) return;
+            const dx = e.dx ?? 0;
+            const dy = e.dy ?? 0;
+            const near = s.size * WOUND; // (its near side: the body would hide a splash from inside it)
+            this.spray(e.x - dx * near, e.y - dy * near, s.center, -dx, -dy, HIT);
+        } else if (e.type === 'butcher') {
+            if (this.seen(e.x, e.y, this.ground(e.x, e.y))) this.spray(e.x, e.y, 0.9, 0, 0, STROKE);
+        } else if (e.type === 'butchered') {
+            this.removeCarcass(e.carcass);
+        } else if (e.type === 'spoiled') {
+            this.release(e.carcass);
         }
     }
 
@@ -251,6 +370,9 @@ export class Effects {
         d.scale[j] = look ? look.scale : 1;
         d.tribe[j] = look ? look.tribe : 0;
         d.fade[j] = 0;
+        d.gone[j] = 0;
+        d.cut[j] = 0;
+        for (const [kept, slot] of this.kept) if (slot === j) this.kept.delete(kept); // (pushed out of the ring)
         if (bloody) {
             const s = d.scale[j];
             this.pool(x, y, POOL_SIZE[kind] * s);

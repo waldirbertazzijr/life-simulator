@@ -442,6 +442,7 @@ export function statePose(kind, state, still) {
         // The controlled person's postures (if the simulation has them).
         case STATE.CREEPING: return POSE.CROUCH;
         case STATE.ROLLING: return POSE.ROLL;
+        case STATE.BUTCHERING: return POSE.BUTCHER;
         default: return POSE.NONE;
     }
 }

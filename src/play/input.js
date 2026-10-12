@@ -6,12 +6,15 @@
 //   move                    a movement key went down (it stands you up from resting)
 //   roll                    Space tapped: released within TAP_MS
 //   crouch lock interact eat craft call view map pause
+//   interact-end            E let go (butchering is done holding E)
 //   cycle-weapon cycle-tool cycle-pouch cycle-call      (the arrow keys)
-//   attack {heavy}          left click (held past TAP_MS: heavy)
+//   attack {heavy, power}   left click; held past TAP_MS, heavy: power is how
+//                           long it was held, up to CHARGE_MS (0..1)
 //   tool, art               right click, Shift + right click
 //
-// Held past TAP_MS, Space sprints (`sprinting`). Keys go by physical key
-// (event.code), so WASD sits under the same fingers on any layout.
+// Held past TAP_MS, Space sprints (`sprinting`), and the left button
+// charges (`charging`, `charge`). Keys go by physical key (event.code), so
+// WASD sits under the same fingers on any layout.
 //
 // The mouse: click the view to lock the pointer, and the mouse looks around;
 // Esc frees it (the browser's rule). Where the pointer cannot be locked (or
@@ -25,6 +28,7 @@
 // or hiding the tab lets go of everything.
 
 export const TAP_MS = 250;
+export const CHARGE_MS = 1000; // a heavy attack charges this long, at most
 
 // A key that means one thing when tapped and another when held.
 export class TapHold {
@@ -163,9 +167,12 @@ export class Input {
     keyup(e) {
         const move = MOVE[e.code];
         if (move) this.held.delete(move);
-        if (e.code === 'Space' && this.mode === 'body' && !typing(e)) {
+        if (this.mode !== 'body' || typing(e)) return;
+        if (e.code === 'Space') {
             e.preventDefault();
             if (this.space.up(this.now()) === 'tap') this.onAction('roll');
+        } else if (e.code === 'KeyE') {
+            this.onAction('interact-end');
         }
     }
 
@@ -186,9 +193,22 @@ export class Input {
     pointerup(e) {
         if (this.drag && e.pointerId === this.drag.id) this.drag = null;
         if (this.mode === 'body' && this.locked && e.button === 0) {
+            const power = this.charge;
             const how = this.click.up(this.now());
-            if (how) this.onAction('attack', { heavy: how === 'hold' });
+            if (how) this.onAction('attack', { heavy: how === 'hold', power: how === 'hold' ? power : 0 });
         }
+    }
+
+    // The left button held past a tap: a heavy attack being charged...
+    get charging() {
+        return this.click.held(this.now());
+    }
+
+    // ...and how far, 0..1 (full after CHARGE_MS); 0 while it is a tap.
+    get charge() {
+        if (!this.charging) return 0;
+        const t = (this.now() - this.click.since) / CHARGE_MS;
+        return t < 1 ? t : 1;
     }
 
     // Ask for the pointer. Browsers may refuse (a headless one always does),

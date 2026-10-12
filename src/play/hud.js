@@ -3,12 +3,13 @@
 // (red Life, blue Spirit, green Stamina) with a trailing segment for what
 // was just lost; top centre, a compass strip with your camp, your tribe's
 // standing order and your locked target; bottom left, the equipment cross
-// (its top slot: your call); bottom centre, what E (or P) would do, and
-// above it your tribe's answer to a call; bottom right, your tribe's store;
-// a dot in the middle, a ring on the locked target, and a red edge when you
-// are bitten. Banners (YOU DIED, your line continuing, your line ended,
-// with the story) sit in a layer of their own, also seen from the map, as
-// are the answers to calls.
+// (the spear, swept over while it comes back; the pouch, with what it
+// holds; the top slot, your call); bottom centre, what E and R (or P) would
+// do, and above it your tribe's answer to a call; bottom right, your
+// tribe's store; a dot in the middle, a ring on the locked target, and a red
+// edge when you are bitten. Banners (YOU DIED, your line continuing, your
+// line ended, with the story) sit in a layer of their own, also seen from
+// the map, as are the answers to calls.
 //
 // The markup and styles are in index.html; this fills them in. What it
 // shows comes each frame from modes.js (drawHud) as one plain object.
@@ -76,6 +77,7 @@ export class Hud {
         const $ = (id) => doc.getElementById(id);
         this.$ = $;
         this.root = $('hud');
+        this.weapon = $('hud-weapon');
         this.flagCanvas = $('hud-flag');
         this.compass = $('hud-compass');
         this.flashEl = $('hud-flash');
@@ -86,7 +88,7 @@ export class Hud {
             const el = this.root.querySelector(`.vbar.${k}`);
             this.bars[k] = { bar: new TrailBar(), fill: el.querySelector('.fill'), trail: el.querySelector('.trail') };
         }
-        this.shown = { name: null, age: null, flag: null, carry: null, store: null, prompt: null, call: null };
+        this.shown = { name: null, age: null, flag: null, carry: null, store: null, prompt: null, reload: null, charge: null, call: null };
         this.callSlot = this.root.querySelector('.slot.up');
         this.callName = $('hud-call');
         this.noticeEl = $('notice');
@@ -127,16 +129,29 @@ export class Hud {
         if (carry !== shown.carry) $('hud-carry').textContent = shown.carry = carry;
         const store = Math.round(s.store);
         if (store !== shown.store) $('hud-store').textContent = shown.store = store;
-        const prompt = s.prompt ? s.prompt.join(' ') : '';
+        // The prompt: each key with what it would do ([['E', 'Gather'], ['R', 'Eat']]).
+        const prompt = s.prompt ? s.prompt.map((p) => p.join(' ')).join(' / ') : '';
         if (prompt !== shown.prompt) {
             shown.prompt = prompt;
             const el = $('hud-prompt');
             el.hidden = !s.prompt;
-            if (s.prompt) {
-                el.querySelector('kbd').textContent = s.prompt[0];
-                el.querySelector('span').textContent = s.prompt[1];
-            }
+            el.replaceChildren(...(s.prompt ?? []).map(([key, what]) => {
+                const pair = this.doc.createElement('span');
+                pair.className = 'pair';
+                const kbd = this.doc.createElement('kbd');
+                kbd.textContent = key;
+                const label = this.doc.createElement('span');
+                label.textContent = what;
+                pair.append(kbd, label);
+                return pair;
+            }));
         }
+        // The weapon: a dark sweep over it while the spear comes back, a warm
+        // glow inside it while a throw is charged.
+        const reload = Math.round((s.reload ?? 0) * 200) / 200;
+        if (reload !== shown.reload) this.weapon.style.setProperty('--reload', String((shown.reload = reload)));
+        const charge = Math.round((s.charge ?? 0) * 50) / 50;
+        if (charge !== shown.charge) this.weapon.style.setProperty('--charge', String((shown.charge = charge)));
         const ring = $('hud-ring');
         ring.hidden = !s.ring;
         if (s.ring) ring.style.transform = `translate(${s.ring.x.toFixed(1)}px, ${s.ring.y.toFixed(1)}px)`;

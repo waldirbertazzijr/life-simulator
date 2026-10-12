@@ -19,10 +19,10 @@
 //
 // Draw calls stay few: a handful of ground copies, two instanced meshes for
 // all the trees (one per kind), one for all the tufts, three more (one per
-// species, the dead included), two for blood (droplets and pools), the water
-// sheet, the sky, two per visible camp, two for all the camps' racks, and
-// two for a tribe's standing order (its pole and a hunt's range:
-// order-marker.js).
+// species, the dead included), two for blood (droplets and pools), one for
+// spears in the air (thrown.js), the water sheet, the sky, two per visible
+// camp, two for all the camps' racks, and two for a tribe's standing order
+// (its pole and a hunt's range: order-marker.js).
 import * as THREE from 'three';
 import { CameraRig } from './camera.js';
 import { Ground } from './terrain-mesh.js';
@@ -30,6 +30,7 @@ import { Forest } from './forest.js';
 import { Tufts } from './tufts.js';
 import { Creatures } from './creatures.js';
 import { Effects } from './effects.js';
+import { Thrown } from './thrown.js';
 import { Camps } from './camps.js';
 import { Marker } from './marker.js';
 import { OrderMarkers } from './order-marker.js';
@@ -47,6 +48,7 @@ const ZENITH = '#6f90ad';
 // height, so the map stays crisp and only its far edge, toward the horizon,
 // fades.
 const FOG_NEAR = { ground: 0.5, map: 0.62 };
+const NONE = Object.freeze([]);
 
 // A dome around the camera with the sky's gradient, drawn behind everything.
 // Below the horizon it is the fog's colour. Above, it turns blue quickly
@@ -112,6 +114,7 @@ export class View3D {
         this.tufts = new Tufts(this.scene);
         this.creatures = new Creatures(this.scene);
         this.effects = new Effects(this.scene, this.creatures.motion); // the dead, and blood
+        this.thrown = new Thrown(this.scene); // spears in the air
         this.camps = new Camps(this.scene, this.gl);
         this.orders = new OrderMarkers(this.scene); // a tribe's standing order (orders.js)
         this.marker = new Marker(this.scene);
@@ -140,6 +143,7 @@ export class View3D {
         this.tufts.attach(world, this.terrain, this.ground);
         this.creatures.attach();
         this.effects.attach(this.heightAt);
+        this.thrown.attach();
         this.camps.attach();
         this.orders.attach();
         this.rig.attach(world, this.terrain);
@@ -180,11 +184,19 @@ export class View3D {
         const inside = target && this.rig.mode === 'first' && this.rig.pose.dist < 6;
         // Strides, poses and the marks of death keep the moment drawn.
         const shown = world.shown ?? world.time;
-        this.creatures.motion.tick(shown, t0);
-        this.effects.tick(this.creatures.motion.clock, shown);
-        this.effects.handle(world.events ?? []);
+        const motion = this.creatures.motion;
+        motion.tick(shown, t0);
+        this.effects.tick(motion.clock, shown);
+        // (The body the page plays strikes and throws by itself: play/modes.js.)
+        const player = world.player ?? null;
+        const self = player !== null && !player.auto ? player.id : 0;
+        const events = world.events ?? NONE;
+        this.effects.handle(events, self);
+        this.effects.follow(world.carcasses ?? NONE);
+        this.thrown.handle(events, motion, self);
         this.creatures.update(world, view, this.heightAt, inside ? target.pop.id[target.i] : 0, this.effects);
         this.effects.update(view);
+        this.thrown.update(world, view, this.heightAt, motion.clock);
         this.camps.update(world, view, this.heightAt);
         this.orders.update(world, view, this.heightAt);
         this.marker.update(world, view, this.heightAt, target, focus, senseRadius);

@@ -17,6 +17,7 @@ import { Grass } from './grass.js';
 import { Terrain, BIOME } from './terrain.js';
 import { seedTribes, stepHumans, stepTribes, driveOff } from './humans.js';
 import { caught, afterStep } from './player.js';
+import { Spears, stepSpears, spoilCarcasses } from './spears.js';
 import { fighting } from './orders.js';
 
 export { STATE, STATE_LABEL } from './population.js';
@@ -55,6 +56,10 @@ export class World {
         // The person the page controls (src/player.js), or null: nobody, and
         // then the world runs exactly as if player.js did not exist.
         this.player = null;
+        // The player's spears in flight, and its kills waiting to be butchered
+        // (src/spears.js): empty unless someone is played.
+        this.spears = new Spears();
+        this.carcasses = new Map(); // the dead creature's id → its carcass
 
         this.terrain = params.terrain.enabled ? new Terrain(width, height, params.terrain, this.rng) : null;
         // Biomes draw from a random stream of their own, so the land and the
@@ -128,7 +133,8 @@ export class World {
     }
 
     // Mark individual i as dead. If it is the one being followed, keep a note
-    // of how its story ended.
+    // of how its story ended. (The event also says, for drawing, a person's
+    // tribe and whether a child died.)
     die(pop, i, cause, by = 0) {
         pop.energy[i] = 0;
         const kind = this.kindOf(pop);
@@ -136,6 +142,7 @@ export class World {
         tally[cause] = (tally[cause] || 0) + 1;
         this.events.push({
             type: 'death', kind, id: pop.id[i], x: pop.x[i], y: pop.y[i], heading: pop.heading[i], cause, by, time: this.time,
+            tribe: pop === this.humans ? pop.tribe[i] : 0, child: pop.age[i] < this.p[kind].maturity,
         });
         if (pop.id[i] !== this.watch) return;
         this.fate = {
@@ -227,6 +234,8 @@ export class World {
         if (this.hidden !== null) this.markCover();
         this.stepCarnivores();
         if (this.humans.n) stepHumans(this);
+        if (this.spears.n) stepSpears(this);            // the player's, in flight (spears.js)
+        if (this.carcasses.size) spoilCarcasses(this);  // the player's kills, left too long
         this.grass.regrow(this.p.grass.regrowth);
         this.herbivores.compact();
         this.carnivores.compact();

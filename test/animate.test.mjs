@@ -587,3 +587,123 @@ test('nothing is drawn inside personal space', () => {
     c.update(deadWorld(), away, () => 0, 0, fx);
     assert.equal(c.herds.herbivore.mesh.count, 1);
 });
+
+// ---- Spears in the air (thrown.js), and the marks of the hands ----
+
+const { Thrown } = await import('../src/view3d/thrown.js');
+
+function thrown() {
+    const t = new Thrown(new THREE.Scene());
+    t.attach();
+    return t;
+}
+// The world a Thrown reads: the player's spears as of step `spearsAt`, drawn at `shown`.
+const spearWorld = (spears = [], spearsAt = 0, shown = 0) => ({ p: params, spears, spearsAt, shown, time: spearsAt });
+// Where the k-th spear drawn is (render coordinates: x, height, z).
+const placed = (t, k = 0) => t.mesh.instanceMatrix.array.slice(k * 16 + 12, k * 16 + 15);
+
+test("others' throws are drawn as arcs and pose the thrower", () => {
+    const m = motion();
+    const t = thrown();
+    const v = view(); // (the origin at 100, 100)
+    const draw = () => t.update(spearWorld(), v, () => 0, m.clock);
+    t.handle([{ type: 'throw', id: 5, x: 100, y: 100, tx: 110, ty: 100, hit: true, time: 0 }], m);
+    assert.equal(m.oneShots.get(5).code, POSE.THROW, 'the thrower throws');
+    draw();
+    assert.equal(t.mesh.count, 1, 'in the air');
+    for (let f = 0; f < 12; f++) frame(m); // 0.2 s
+    draw();
+    const [x, h] = placed(t);
+    assert.ok(Math.abs(x - 5) < 0.3, `halfway there: ${x}`);
+    assert.ok(h > 3, `arcing: ${h}`);
+    for (let f = 0; f < 20; f++) frame(m);
+    draw();
+    assert.equal(t.mesh.count, 0, 'a hit: into its target, and gone');
+    // A miss flies a little past and sticks in the ground for a while.
+    t.handle([{ type: 'throw', id: 6, x: 100, y: 100, tx: 110, ty: 100, hit: false, time: 1 }], m);
+    for (let f = 0; f < 30; f++) frame(m);
+    draw();
+    assert.equal(t.mesh.count, 1);
+    assert.ok(placed(t)[0] > 10, `past the target: ${placed(t)[0]}`);
+    for (let f = 0; f < 150; f++) frame(m);
+    draw();
+    assert.equal(t.mesh.count, 0, 'then gone');
+});
+
+test("the player's spears are drawn where they are at the moment shown", () => {
+    const m = motion();
+    const t = thrown();
+    const v = view();
+    const s = [110, 100, 3, 0, 0.45]; // as of step 10: 9 of its 20 units out
+    t.update(spearWorld(s, 10, 9), v, () => 0, m.clock);
+    assert.equal(t.mesh.count, 1);
+    assert.ok(Math.abs(placed(t)[0] - 7) < 1e-9, 'a step back along its flight');
+    t.update(spearWorld(s, 10, 6.5), v, () => 0, m.clock);
+    assert.equal(t.mesh.count, 0, 'not yet thrown at that moment');
+    // Its throw event draws nothing more, and the page poses its own body.
+    t.handle([{ type: 'throw', id: 7, x: 100, y: 100, tx: 120, ty: 100, time: 9 }], m, 7);
+    t.update(spearWorld(), v, () => 0, m.clock);
+    assert.equal(t.mesh.count, 0);
+    assert.equal(m.oneShots.size, 0);
+    // Come down, it stands in the ground a moment.
+    t.handle([{ type: 'miss', x: 120, y: 100, dx: 1, dy: 0, by: 7, time: 12 }], m, 7);
+    t.update(spearWorld(), v, () => 0, m.clock);
+    assert.equal(t.mesh.count, 1);
+    assert.ok(placed(t)[0] < 20 && placed(t)[1] > 0.5, 'leaning back the way it came, its point in the ground');
+});
+
+test('a hit splashes blood back from where the blow went in; a stroke a little', () => {
+    const fx = effects();
+    fx.handle([{ type: 'hit', id: 3, by: 9, kind: 'herbivore', x: 100, y: 100, dx: 1, dy: 0, time: 0 }]);
+    const n = fx.drops.count;
+    assert.ok(n >= 8 && n <= 14, `${n} droplets`);
+    let vx = 0;
+    for (let q = 0; q < n; q++) {
+        const j = (fx.drops.start + q) % fx.drops.cap;
+        vx += fx.drops.vx[j];
+        assert.ok(fx.drops.x[j] < 100, 'from the side it was struck on (toward the thrower)');
+    }
+    assert.ok(vx / n < -1, 'splashing back toward the thrower, who sees it');
+    assert.equal(fx.dead.count, 0, 'a hit is not a death');
+    fx.handle([{ type: 'butcher', id: 9, carcass: 3, x: 100, y: 100, time: 1 }]);
+    const stroke = fx.drops.count - n;
+    assert.ok(stroke >= 2 && stroke < n, `a stroke: ${stroke}`);
+});
+
+test("the player's kill stays until butchered, shrinking", () => {
+    const m = motion();
+    const fx = effects(m);
+    const c = new Creatures(new THREE.Scene());
+    const herd = c.herds.herbivore;
+    const draw = () => {
+        c.update(deadWorld(), view(), () => 0, 0, fx);
+        return herd.mesh.count ? Math.hypot(herd.matrices[0], herd.matrices[2]) : 0;
+    };
+    fx.handle([death(10, 'hunted', { by: 9 }), death(11, 'eaten')], 9);
+    assert.equal(m.oneShots.get(9), undefined, 'the player poses itself');
+    fx.follow([{ id: 10, cut: 0 }]);
+    assert.ok(fx.kept.has(10));
+    // Long past a carcass's time, it still lies there (and the other is gone).
+    for (const shown of [200, 400, 650, 900]) {
+        fx.tick(m.clock, shown);
+        fx.follow([{ id: 10, cut: 0 }]);
+    }
+    const whole = draw();
+    assert.equal(herd.mesh.count, 1);
+    assert.equal(herd.matrices[13], 0, 'not sinking');
+    fx.follow([{ id: 10, cut: 0.5 }]);
+    const half = draw();
+    assert.ok(half < whole * 0.85 && half > whole * 0.6, `shrinking as it is cut up: ${whole} → ${half}`);
+    fx.handle([{ type: 'butchered', id: 9, carcass: 10, time: 950 }]);
+    fx.follow([]);
+    draw();
+    assert.equal(herd.mesh.count, 0, 'cut up: gone');
+    // One the simulation no longer lists (spoilt) fades from then on.
+    fx.handle([death(12, 'hunted', { by: 9 })]);
+    fx.follow([{ id: 12, cut: 0 }]);
+    fx.follow([]);
+    assert.equal(fx.kept.size, 0);
+    fx.tick(m.clock, 1000);
+    const j = fx.slotOf(12);
+    assert.ok(fx.dead.fade[j] > 0 && fx.dead.fade[j] < 1, `fading: ${fx.dead.fade[j]}`);
+});

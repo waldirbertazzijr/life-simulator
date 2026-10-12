@@ -300,7 +300,7 @@ export class Creatures {
         const near2 = view.personalSpace * view.personalSpace;
         for (let q = 0; q < d.count; q++) {
             const j = (d.start + q) % d.cap;
-            if (d.kind[j] !== which) continue;
+            if (d.kind[j] !== which || d.gone[j] || d.fade[j] >= 1) continue;
             const dx = wrapDelta(d.x[j] - fx, W);
             const ax0 = Math.ceil((minX - dx) / W);
             const ax1 = Math.floor((maxX - dx) / W);
@@ -312,7 +312,9 @@ export class Creatures {
             const c = Math.cos(d.heading[j]);
             const s = Math.sin(d.heading[j]);
             const progress = Math.min(1, Math.max(0, (effects.clock - d.t0[j]) / fall));
-            const sink = d.fade[j] * spec.center * 1.4;
+            // (Being butchered, it shrinks and sinks a little.)
+            const sink = (d.fade[j] + 0.15 * d.cut[j]) * spec.center * 1.4;
+            const whole = 1 - 0.45 * d.cut[j];
             const rgb = herd.tinted ? this.tribeColor(world, d.tribe[j]) : null;
             for (let ax = ax0; ax <= ax1; ax++) {
                 for (let az = az0; az <= az1; az++) {
@@ -323,7 +325,7 @@ export class Creatures {
                     const ez = rz - camZ;
                     const d2 = ex * ex + ey * ey + ez * ez;
                     if (d2 < near2) continue;
-                    let sc = d.scale[j];
+                    let sc = d.scale[j] * whole;
                     if (grow > 0) {
                         const up = Math.sqrt(d2) * grow;
                         if (up > 1) sc *= up;

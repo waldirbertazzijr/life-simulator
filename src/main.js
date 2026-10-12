@@ -223,6 +223,10 @@ const modes = new Modes({
     },
     openPicker: () => panel.openPicker(world),
     changed: () => showPlay(),
+    // Poses on bodies (the 3D view's; the flat one has none).
+    pose: (id, code, seconds) => renderer.pose?.(id, code, seconds),
+    hold: (id, code) => renderer.hold?.(id, code),
+    release: (id) => renderer.release?.(id),
     // Where a call goes in a body: the ground under the crosshair (the
     // middle of the view), or null for the sky.
     crosshair: () => renderer.groundAt?.(window.innerWidth / 2, window.innerHeight / 2) ?? null,
@@ -382,11 +386,12 @@ window.sim = {
 //   play.view('first' | 'shoulder'), play.look(yaw, pitch)
 //   play.hold(code, ms)  hold a key (e.g. 'KeyW') for ms; resolves when let go
 //   play.press(code)     tap a key
+//   play.attack({heavy, power})   left click (a headless browser has no pointer lock to click with)
 //   play.banner(kind, text), play.over()   show a banner; end the line now
 //   play.call(kind)      put a call in the slot (G gives it: play.press('KeyG'))
 //   play.arm(kind), play.mapClick(x, y)    on the map: ready a call, and click
 //                        the world point (x, y) through the view
-//   play.state           who, where, stamina, snaps (moves turned down)...
+//   play.state           who, where, stamina, snaps (moves turned down), the hands...
 //   play.modes
 const key = (type, code) => window.dispatchEvent(new KeyboardEvent(type, { code, key: code, bubbles: true }));
 window.play = {
@@ -419,6 +424,7 @@ window.play = {
         key('keydown', code);
         key('keyup', code);
     },
+    attack: (info = {}) => modes.action('attack', info),
     banner: (kind, text) => hud.banner(kind, text),
     over: () => modes.gameOver(),
     call: (kind) => modes.calls.select(kind),
@@ -439,6 +445,10 @@ window.play = {
             snaps: modes.stats.snaps, placed: modes.stats.placed, speed, paused,
             call: modes.calls.call.kind, armed: modes.calls.armed,
             player: p ? { id: p.id, x: +p.x.toFixed(2), y: +p.y.toFixed(2), auto: p.auto, spirit: +p.spirit.toFixed(1), resting: p.resting } : null,
+            hands: p ? {
+                carry: +p.carry.toFixed(1), energy: +p.energy.toFixed(1), reload: p.reload, gathering: p.gathering, butchering: p.butchering,
+                doing: modes.doing?.kind ?? null, can: modes.interaction()?.kind ?? null,
+            } : null,
         };
     },
     modes,

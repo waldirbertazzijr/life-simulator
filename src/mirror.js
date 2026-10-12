@@ -7,7 +7,8 @@
 //
 // The one exception is the body you play (play/): the page moves it, so it
 // is drawn where the page has it (`pose`), and the simulation, told by
-// control(), input() and act(), follows and reports on it (`player`).
+// control(), input() and act(), follows and reports on it (`player`, and its
+// spears in flight and kills: `spears`, `carcasses`).
 //
 // The land never changes, so it is not sent at all: it is a pure function of
 // the seed and the parameters, and reset() builds the same World here, keeps
@@ -90,6 +91,12 @@ export class Mirror {
         // drawn there instead of where the snapshots have it. Null: nobody.
         this.pose = null;
         this.posed = false;     // the blended positions hold a pose
+        // The player's spears in flight (five numbers each: x, y, vx, vy,
+        // progress), as of step `spearsAt`, and its kills not yet butchered
+        // ([{id, kind, x, y, meat, cut}]): the latest snapshot's (spears.js).
+        this.spears = NO_EVENTS;
+        this.spearsAt = 0;
+        this.carcasses = NO_EVENTS;
 
         // Plumbing.
         this.pops = [this.herbivores, this.carnivores, this.humans];
@@ -97,7 +104,7 @@ export class Mirror {
         this.gen = 0;           // which world (snapshots from an older one are dropped)
         this.asked = 0;         // follow() calls so far: a snapshot's watch and fate count once it has seen the last one
         this.history = [];      // snapshots not yet drawn past, oldest first, each a different moment
-        this.pending = [];      // [time, events] from snapshots, until that moment is drawn
+        this.pending = [];      // events from snapshots, oldest first, until their moment is drawn
         this.spare = [];        // buffers of dropped snapshots, to hand back
         this.known = new Map(); // tribe id → tribe object (static fields sent once)
         this.base = null;       // the snapshot the populations and tribes currently show
@@ -217,6 +224,9 @@ export class Mirror {
         this.snapped = false;
         this.pose = null;
         this.posed = false;
+        this.spears = NO_EVENTS;
+        this.spearsAt = 0;
+        this.carcasses = NO_EVENTS;
         this.base = null;
         this.known = new Map();
         this.watch = 0;
@@ -291,9 +301,19 @@ export class Mirror {
             this.known.set(d.id, { ...d, camp: { ...d.camp }, store: 0, members: 0, adults: 0, births: 0, alive: true, order: null });
         }
         if (snap.samples.length && this.onSamples) this.onSamples(snap.samples);
-        if (snap.events?.length) this.pending.push(snap.time, snap.events);
+        if (snap.events?.length) {
+            // Each comes into view with the step it happened in (World.events
+            // are oldest first, and snapshots come in order).
+            for (const e of snap.events) {
+                if (!(e.time <= snap.time)) e.time = snap.time;
+                this.pending.push(e);
+            }
+        }
         this.player = snap.player ?? null;
         if (this.player?.snap) this.snapped = true;
+        this.spears = snap.spears ?? NO_EVENTS;
+        this.spearsAt = snap.time;
+        this.carcasses = snap.carcasses ?? NO_EVENTS;
 
         const hist = this.history;
         const latest = hist[hist.length - 1];
@@ -357,15 +377,7 @@ export class Mirror {
             this.shown = a ? a.time + (b.time - a.time) * alpha : b.time; // the step being drawn, with its fraction
             this.applyPose();
         }
-        // Events come into view with the moment they happened at.
-        const pending = this.pending;
-        let k = 0;
-        while (k < pending.length && pending[k] <= this.shown) k += 2;
-        if (k === 0) this.events = NO_EVENTS;
-        else {
-            this.events = k === 2 ? pending[1] : pending.slice(0, k).filter((_, j) => j % 2 === 1).flat();
-            pending.splice(0, k);
-        }
+        this.release();
         // Ask for the next one now, so it is computed while we draw.
         if (!this.waiting) {
             this.waiting = true;
@@ -373,6 +385,16 @@ export class Mirror {
             this.spare = [];
             this.host.send({ type: 'want', recycle }, recycle);
         }
+    }
+
+    // Events come into view with the moment they happened at: each at its own
+    // step (a death during step t, as the drawing moves past t, which is
+    // when the one who died stops being drawn), not when its snapshot came.
+    release() {
+        const pending = this.pending;
+        let k = 0;
+        while (k < pending.length && pending[k].time <= this.shown) k++;
+        this.events = k ? pending.splice(0, k) : NO_EVENTS;
     }
 
     // Show snapshot s: its populations (but positions, see blend), grass,

@@ -1,15 +1,21 @@
 // A bot that plays the simulation the way the page does: it takes control of
 // a person through a real Sim (as the worker runs it), moves the body itself
 // and sends it as `input` and `act` messages, and reads snapshot.player back.
-// It walks and sprints after grazers, creeps up on them, rolls away from
-// predators and goes home to rest when hungry. Each seed is played once in
-// God mode and once in Play mode. Halfway through it leaves the body to the
-// AI for a while (autopilot, as on the map view) and takes it back. At the
-// end it kills off the line and the tribe it leads, which must release it
-// (God) or end the game (Play).
+// It walks and sprints after grazers, creeps up on them and throws (or
+// jabs), butchers its kills, gathers when there is nothing to hunt, eats
+// from the pouch when hungry, takes a full pouch home to the rack, rolls
+// away from predators and goes home to rest when weak. Each seed is played
+// once in God mode and once in Play mode. Halfway through it leaves the body
+// to the AI for a while (autopilot, as on the map view) and takes it back.
+// At the end it kills off the line and the tribe it leads, which must
+// release it (God) or end the game (Play).
 //
 // It fails (exit code 1) on an exception, more than 1% of its moves turned
-// down, anyone alive with no energy, or a snapshot.player field missing.
+// down, anyone alive with no energy, a snapshot.player field missing, food
+// moving as it should not (the pouch out of bounds, a store that is not all
+// that was carried, eating more than there is or past full, butchering more
+// than a kill held), or, over all sessions, no kill, none butchered, or
+// nothing stored.
 //
 //   make bot                                     # seeds 1-6 × 6000 steps
 //   make bot ARGS="--seeds 1-20 --steps 20000"
@@ -23,10 +29,11 @@ const FIELDS = {
     id: 'number', mode: 'string', tribe: 'number', energy: 'number', carry: 'number', spirit: 'number',
     crouch: 'boolean', resting: 'boolean', dodging: 'boolean', snap: 'boolean', heir: 'number', over: 'boolean',
     x: 'number', y: 'number', heading: 'number', seq: 'number', auto: 'boolean',
+    reload: 'number', gathering: 'boolean', butchering: 'number',
 };
 
 // Stamina lives on the page and only limits what it sends (SPEC §5).
-const STAMINA = { max: 100, sprint: 1, roll: 20, regen: 2, rest: 7 }; // rest: steps without spending before it regenerates
+const STAMINA = { max: 100, sprint: 1, roll: 20, light: 10, regen: 2, rest: 7 }; // rest: steps without spending before it regenerates
 const NOTICE = 120;    // grazers the bot goes after are at most this far
 const CREEP = 25;      // and it creeps up on them from this close
 const DANGER = 6;      // a predator this close: roll away
@@ -34,6 +41,11 @@ const PROBE_AT = 200;  // the step of the deliberate teleport, which must be tur
 const AWAY = 500;      // steps on autopilot, halfway through
 const CALLS = ['rally', 'hunt', 'gather', 'defend', 'move']; // given in turn...
 const CALL_EVERY = 600;                                      // ...this often
+const THROW_AT = 14;   // a grazer this close: throw (locked on to it), or jab within reach
+const STORE_AT = 60;   // carrying this much: home to the rack to store it
+const EAT_BELOW = 0.6; // hungry below this fraction: eat from the pouch
+const GATHER_EVERY = 1500; // out of every this many steps...
+const GATHER_FOR = 300;    // ...it gathers for this many, hunting or not
 
 const wrapDelta = (d, size) => (d > size / 2 ? d - size : d < -size / 2 ? d + size : d);
 const wrapPos = (v, size) => (v >= 0 && v < size ? v : ((v % size) + size) % size);
@@ -70,6 +82,19 @@ function nearest(w, pop, x, y, r) {
     return best;
 }
 
+// The nearest of the player's kills (snapshot.carcasses) within 60 of (x, y):
+// its id and offset, or null.
+function nearestCarcass(w, list, x, y) {
+    let best = null;
+    for (const c of list) {
+        const dx = wrapDelta(c.x - x, w.width);
+        const dy = wrapDelta(c.y - y, w.height);
+        const d = Math.hypot(dx, dy);
+        if (d < 60 && (!best || d < best.d)) best = { id: c.id, dx, dy, d };
+    }
+    return best;
+}
+
 // Who the bot plays: in Play, the first tribe's most experienced adult (most
 // kills; ties: the eldest), as the page picks; in God, any adult.
 function choose(w, mode, rng) {
@@ -94,6 +119,9 @@ function play(params, seed, mode, steps) {
         seed, mode, controlled: 0, moves: 0, rejected: 0, bites: 0, dodges: 0, heirs: 0, deaths: 0,
         rests: 0, auto: 0, probe: '—', end: '—', problems: [],
         calls: 0, answers: { call: 0, rally: 0, refused: 0 }, // calls given, and the tribe's answers
+        // The hands: spears thrown, jabs, blows that struck, kills; and food:
+        // butchered, gathered, eaten from the pouch, put in the store, taken.
+        throws: 0, jabs: 0, hits: 0, kills: 0, carcasses: 0, butchered: 0, gathered: 0, eaten: 0, stored: 0, taken: 0,
     };
     const problem = (what) => {
         if (stats.problems.length < 10) stats.problems.push(what);
@@ -120,6 +148,10 @@ function play(params, seed, mode, steps) {
 
     // The body, as the page has it.
     const body = { id: 0, x: 0, y: 0, heading: 0, crouch: false, stamina: STAMINA.max, idle: 0, rolling: 0, rx: 0, ry: 0, resting: false, rested: 0 };
+    // The hands: when each was last asked for (a step), the carcass being
+    // butchered, what the person held before this step (for the checks),
+    // and each kill's meat when first seen, with what butchering it gave.
+    const hands = { attackAt: -99, butcher: 0, butcherAt: -99, storeAt: -99, gatherAt: -99, eatAt: -99, pre: null, meat: new Map(), cut: new Map() };
     let seq = 0;
     let probing = false;
     let resuming = false; // just back from autopilot: the snap that follows is expected
@@ -222,12 +254,51 @@ function play(params, seed, mode, steps) {
                 v = Math.min(d, top * P.cruise);
             }
         } else {
-            // After the nearest grazer: sprint when it is far, walk nearer,
-            // creep up on it at the end.
+            // The hands (package 2): a kill of its own to butcher first, then
+            // a full pouch to take home to the rack; otherwise after the
+            // nearest grazer (sprint when it is far, walk nearer, creep up on
+            // it at the end, and throw, or jab); with none in sight, gather.
             const prey = nearest(w, w.herbivores, body.x, body.y, NOTICE);
-            if (prey) {
+            const kill = nearestCarcass(w, snap.carcasses, body.x, body.y);
+            const gathering = w.time % GATHER_EVERY < GATHER_FOR; // (a spell of gathering now and then)
+            const cdx = wrapDelta(tribe.camp.x - body.x, w.width);
+            const cdy = wrapDelta(tribe.camp.y - body.y, w.height);
+            const campD = Math.hypot(cdx, cdy) || 1;
+            if (p.butchering) {
+                v = 0; // (at it: a move would stop it)
+            } else if (kill) {
+                ux = kill.dx / (kill.d || 1);
+                uy = kill.dy / (kill.d || 1);
+                if (kill.d < 2.5) {
+                    if (hands.butcher !== kill.id || w.time > hands.butcherAt + 5) {
+                        send({ type: 'act', seq: ++seq, action: 'butcher', on: true, id: kill.id });
+                        hands.butcher = kill.id;
+                        hands.butcherAt = w.time;
+                    }
+                } else v = Math.min(kill.d - 1.5, top * P.cruise);
+            } else if (p.carry >= STORE_AT) {
+                if (campD < Q.rackReach - 2) {
+                    if (w.time > hands.storeAt + 5) {
+                        send({ type: 'act', seq: ++seq, action: 'store' });
+                        hands.storeAt = w.time;
+                    }
+                } else {
+                    if (T !== null) {
+                        T.way(tribe.paths, body.x, body.y, cdx, cdy, campD);
+                        ux = T.ux;
+                        uy = T.uy;
+                    } else {
+                        ux = cdx / campD;
+                        uy = cdy / campD;
+                    }
+                    v = Math.min(campD, top * P.cruise);
+                }
+            } else if (prey && !gathering) {
                 ux = prey.dx / (prey.d || 1);
                 uy = prey.dy / (prey.d || 1);
+                // Every third hunt, an ambush: creep to just beyond its
+                // notice, then roll in and jab in the same step.
+                const ambush = stats.kills % 3 === 2;
                 if (prey.d < 3) v = 0;
                 else if (prey.d < CREEP) {
                     body.crouch = true;
@@ -236,6 +307,26 @@ function play(params, seed, mode, steps) {
                     v = top;
                     spend = STAMINA.sprint;
                 } else v = top * P.cruise;
+                const ready = p.reload === 0 && body.stamina > 0 && w.time > hands.attackAt + 2;
+                if (ambush && ready && prey.d < Q.jabRange + Q.rollSpeed - 0.1 && prey.d > Q.jabRange && body.stamina >= STAMINA.roll) {
+                    send({ type: 'act', seq: ++seq, action: 'roll' });
+                    body.rolling = Q.rollSteps - 1;
+                    body.rx = ux;
+                    body.ry = uy;
+                    v = Q.rollSpeed; // (still crouched this step: it has not seen us yet)
+                    spend += STAMINA.roll;
+                }
+                if (ready && (ambush ? prey.d - v < Q.jabRange - 0.1 : prey.d < THROW_AT)) {
+                    send({ type: 'act', seq: ++seq, action: 'attack', heavy: false, dx: ux, dy: uy, power: 0, target: w.herbivores.id[prey.k], lock: true });
+                    hands.attackAt = w.time;
+                    spend += STAMINA.light;
+                    if (!ambush) v = 0;
+                }
+            } else if (p.gathering) {
+                v = 0;
+            } else if (campD > P.campRadius && w.grass.g[w.grass.index(body.x, body.y)] >= P.gatherMin && p.carry < P.carryMax && w.time > hands.gatherAt + 5) {
+                send({ type: 'act', seq: ++seq, action: 'gather', on: true });
+                hands.gatherAt = w.time;
             } else {
                 const h = body.heading + (rng.next() - 0.5) * 0.6;
                 ux = Math.cos(h);
@@ -243,6 +334,12 @@ function play(params, seed, mode, steps) {
                 v = top * P.cruise;
             }
         }
+        // Hungry, with food in hand: R (once a second).
+        if (p.energy < EAT_BELOW * P.maxEnergy && p.carry >= 1 && w.time >= hands.eatAt + 15 && !p.butchering) {
+            send({ type: 'act', seq: ++seq, action: 'eat' });
+            hands.eatAt = w.time;
+        }
+        hands.pre = { id: p.id, carry: p.carry, energy: p.energy, butchering: p.butchering, gathering: p.gathering };
 
         // Move, around water and cliffs, as the page does with its own terrain.
         if (v > 0) {
@@ -319,6 +416,61 @@ function play(params, seed, mode, steps) {
         for (let k = 0; k < pop.n; k++) {
             if (!(pop.energy[k] > 0)) problem(`step ${w.time}: person ${pop.id[k]} alive with energy ${pop.energy[k]}`);
         }
+        hand();
+    };
+
+    // The hands' bookkeeping, after each step the bot played: what its
+    // blows did, and that food only moves as it should. `pre`: the person
+    // as the step began.
+    const hand = () => {
+        const pre = hands.pre;
+        hands.pre = null;
+        const p = snap.player;
+        const struck = new Set();
+        let moved = false; // food in or out of the pouch by an act this step
+        for (const e of snap.events) {
+            const by = e.by ?? e.id;
+            if (e.type === 'throw' && e.hit === undefined && mine.has(e.id)) stats.throws++;
+            else if (e.type === 'jab' && mine.has(e.id)) stats.jabs++;
+            else if (e.type === 'hit' && mine.has(by)) {
+                stats.hits++;
+                struck.add(e.id);
+            } else if (e.type === 'death' && struck.has(e.id) && mine.has(e.by)) stats.kills++;
+            else if (e.type === 'butchered' && mine.has(e.id)) {
+                stats.carcasses++;
+                const gave = hands.cut.get(e.carcass) ?? 0;
+                const had = hands.meat.get(e.carcass);
+                if (had !== undefined && gave > had + 1e-6) problem(`step ${w.time}: butchering gave ${gave.toFixed(2)} from a kill of ${had.toFixed(2)}`);
+            } else if (e.type === 'store' && mine.has(e.id)) {
+                moved = true;
+                stats.stored += e.amount;
+                if (pre && pre.id === e.id && Math.abs(e.amount - pre.carry) > 1e-9) problem(`step ${w.time}: stored ${e.amount}, carrying ${pre.carry}`);
+            } else if (e.type === 'take' && mine.has(e.id)) {
+                moved = true;
+                stats.taken += e.amount;
+            } else if (e.type === 'eat' && mine.has(e.id)) {
+                moved = true;
+                stats.eaten += e.amount;
+                if (pre && pre.id === e.id) {
+                    const most = Math.min(Q.eatMax, pre.carry, P.maxEnergy - pre.energy);
+                    if (e.amount > most + 1e-9 || !(e.amount > 0)) problem(`step ${w.time}: ate ${e.amount}, at most ${most}`);
+                    const bitten = snap.events.some((b) => b.type === 'bite' && b.id === e.id);
+                    if (!bitten && p && p.id === e.id && p.energy < pre.energy + e.amount - 1) problem(`step ${w.time}: ate ${e.amount}, energy ${pre.energy} → ${p.energy}`);
+                }
+            }
+        }
+        for (const c of snap.carcasses) if (!hands.meat.has(c.id)) hands.meat.set(c.id, c.meat);
+        if (!p || !pre || p.id !== pre.id || p.auto) return;
+        if (!(p.carry >= 0 && p.carry <= P.carryMax + 1e-9)) problem(`step ${w.time}: carrying ${p.carry}`);
+        // What butchering or gathering put in the pouch (when nothing else
+        // moved food, nor starving ate some).
+        const gain = p.carry - pre.carry;
+        if (moved || pre.energy < P.starving * P.maxEnergy || gain <= 0) return;
+        const cutting = pre.butchering || p.butchering;
+        if (cutting) {
+            stats.butchered += gain;
+            hands.cut.set(cutting, (hands.cut.get(cutting) ?? 0) + gain);
+        } else if (pre.gathering || p.gathering) stats.gathered += gain;
     };
 
     // Leave the body to the AI (on) or take it back (off); back by hand, the
@@ -404,9 +556,19 @@ for (const seed of opts.seeds) {
         );
         const a = s.answers;
         console.log(`        calls: ${s.calls} given; orders taken ${a.call}, rallies ${a.rally}, refused ${a.refused}`);
+        console.log(
+            `        hands: ${s.throws} throws, ${s.jabs} jabs, ${s.hits} struck, ${s.kills} kills, ${s.carcasses} butchered; food: `
+            + `${s.butchered.toFixed(0)} cut, ${s.gathered.toFixed(0)} gathered, ${s.eaten.toFixed(0)} eaten, ${s.stored.toFixed(0)} stored`,
+        );
         for (const msg of s.problems) console.log(`        ✗ ${msg}`);
     }
 }
 const bad = all.filter((s) => s.problems.length);
-console.log(`\n${all.length - bad.length}/${all.length} sessions clean · ${(all.reduce((a, s) => a + s.ms, 0) / 1000).toFixed(1)} s\n`);
-process.exit(bad.length ? 1 : 0);
+// Over all the sessions, the hands must have done their work: kills, cut
+// up, and the meat home in the store.
+const sum = (k) => all.reduce((t, s) => t + s[k], 0);
+const idle = ['kills', 'carcasses', 'stored'].filter((k) => !(sum(k) > 0));
+if (idle.length) console.log(`        ✗ no ${idle.join(', no ')} in any session`);
+console.log(`\n${all.length - bad.length}/${all.length} sessions clean · ${sum('kills')} kills, ${sum('carcasses')} butchered, `
+    + `${sum('stored').toFixed(0)} food stored · ${(all.reduce((a, s) => a + s.ms, 0) / 1000).toFixed(1)} s\n`);
+process.exit(bad.length || idle.length ? 1 : 0);
