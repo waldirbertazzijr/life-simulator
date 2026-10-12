@@ -10,7 +10,7 @@ worktree and reviewed before it is merged.
 | [WP-B](wp-b-3d.md) ✅ | the three.js renderer: terrain mesh, creatures, camps, three cameras, picking | the terrain interface below (not WP-A's code) |
 | WP-C | simulation in a Web Worker, interpolated drawing | A and B merged |
 | [WP-D](wp-d-look.md) | grass tufts where the grass is dense; a blue sky | B |
-| WP-E | biomes on the terrain: meadow, steppe, forest, snowy peaks | A |
+| [WP-E](wp-e-biomes.md) | biomes on the terrain: meadow, steppe, forest, snowy peaks | A |
 
 A and B run in parallel. They meet only through the **terrain interface** below.
 
