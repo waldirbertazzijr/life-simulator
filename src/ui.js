@@ -1,6 +1,7 @@
 // The one panel: controls, the individual being followed, population
 // sparklines, average genes and the list of tribes.
-import { COLORS, drawFlag } from './render.js';
+import { COLORS } from './render.js';
+import { drawFlag } from './flag.js';
 import { STATE, STATE_LABEL } from './world.js';
 
 // States shown in the alarm colour.

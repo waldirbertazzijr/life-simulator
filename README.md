@@ -28,17 +28,21 @@ a time. Where it's heading: [docs/ROADMAP.md](docs/ROADMAP.md).
   energy (more of a trait costs disproportionately more), so each settles at an optimum
   instead of running away.
 
-**Follow anyone.** Click any dot, triangle or diamond, or click a tribe in the panel to
+**Follow anyone.** Click any animal or person, or click a tribe in the panel to
 follow its eldest. The panel tells their story: what they are doing (grazing, fleeing,
 hunting, raiding…), energy, age, genes against the population average, children and
 kills, and for a person, their tribe and what they carry. When they die you learn how,
 and you can carry on with one of their descendants. Pick a camera:
 
-- **map**: the whole world;
-- **follow**: zoomed in on them;
-- **first person**: the world turns so they always face up. You see their sense range
-  and a line to whatever they are reacting to: the predator they flee, the prey they
-  chase, the stranger they fight.
+- **map**: a god view over the land (it keeps whoever you follow centred until you pan);
+- **follow**: behind and above them, turning as they turn;
+- **first person**: through their eyes, looking where they are heading.
+
+You see their sense range and a line to whatever they are reacting to: the predator
+they flee, the prey they chase, the stranger they fight.
+
+The world is drawn in 3D with three.js. `?2d` in the URL gives the flat canvas view
+(also used if the browser has no WebGL).
 
 ## Run it
 
@@ -65,6 +69,13 @@ is the live world and `sim.follow(id)` follows anyone.
 | R | new world |
 | H | hide the panel |
 
+| mouse / touch (3D) | map | follow | first person |
+|---|---|---|---|
+| drag (one finger) | pan | swing around them | look around (drifts back) |
+| right-drag, ctrl- or shift-drag | turn and tilt | swing around them | look around |
+| wheel (pinch) | zoom | closer / farther | |
+| two-finger twist | turn | swing around them | |
+
 ## How stable?
 
 Without people, 20 seeds × 300,000 steps (about 28 simulated hours each at 1×): all
@@ -87,9 +98,11 @@ Details and the theory behind each mechanism are in [docs/THEORY.md](docs/THEORY
 | `src/humans.js` | people and tribes: foraging, camps, births, raids, splits |
 | `src/population.js`, `src/spatial.js`, `src/grass.js` | typed-array populations, the spatial hash, the grass field |
 | `src/identity.js` | generated tribe names and flags |
-| `src/render.js` | canvas drawing and the camera (reads the world, never changes it) |
+| `src/view3d/` | the 3D view (three.js): ground, creatures, camps, cameras and controls (reads the world, never changes it) |
+| `src/render.js` | the flat canvas view, `?2d` (reads the world, never changes it) |
+| `src/flag.js` | paints a tribe's flag (shared by both views and the panel) |
 | `src/ui.js` | the panel: controls, followed individual, sparklines, genes, tribes |
-| `src/main.js` | frame loop (fixed timestep, speed, pause), clicking and following |
+| `src/main.js` | frame loop (fixed timestep, speed, pause), choosing the view, clicking and following |
 | `headless/check.mjs` | runs the same engine headlessly over many seeds and reports stability |
 
 The browser and the checks share the engine, so what is verified headlessly is

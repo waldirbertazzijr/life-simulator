@@ -1,4 +1,5 @@
-// Entry point: owns the world, the frame loop, speed/pause and who is followed.
+// Entry point: owns the world, the frame loop, speed/pause, who is followed,
+// and which view draws it all (3D, or the flat canvas with `?2d`).
 import { params } from './config.js';
 import { World } from './world.js';
 import { Renderer } from './render.js';
@@ -9,9 +10,10 @@ const SAMPLE_EVERY = 50;     // steps between sparkline samples
 const FRAME_BUDGET_MS = 12;  // max simulation time per frame before slowing down
 const VIEWS = ['map', 'follow', 'first'];
 
-const canvas = document.getElementById('world');
-const renderer = new Renderer(canvas);
+const query = new URLSearchParams(location.search);
+const { renderer, canvas } = await createRenderer(document.getElementById('world'));
 let world;
+let frameMs = 0; // JavaScript time per frame spent drawing (smoothed)
 let speed = 1;
 let paused = false;
 let followId = 0;
@@ -95,27 +97,29 @@ function start(seed) {
     unfollow();
 }
 
+// The 3D view by default; `?2d` (or a browser without WebGL) gets the canvas
+// renderer. Both offer attach / resize / updateCamera / draw / pick / mode.
+async function createRenderer(canvas) {
+    if (!query.has('2d')) {
+        try {
+            const { View3D } = await import('./view3d/scene.js');
+            return { renderer: new View3D(canvas), canvas };
+        } catch (err) {
+            console.warn('3D view unavailable, using the 2D one:', err);
+            // A canvas keeps the first kind of context it hands out, so start afresh.
+            const fresh = canvas.cloneNode();
+            canvas.replaceWith(fresh);
+            canvas = fresh;
+        }
+    }
+    return { renderer: new Renderer(canvas), canvas };
+}
+
 // Click (or tap) anyone to follow them.
 canvas.addEventListener('click', (e) => {
     const rect = canvas.getBoundingClientRect();
-    const p = renderer.screenToWorld(world, e.clientX - rect.left, e.clientY - rect.top);
-    const reach = 16 / renderer.cam.scale; // 16 screen pixels
-    let best = 0;
-    let bestD2 = reach * reach;
-    for (const pop of [world.herbivores, world.carnivores, world.humans]) {
-        for (let i = 0; i < pop.n; i++) {
-            let dx = Math.abs(pop.x[i] - p.x);
-            let dy = Math.abs(pop.y[i] - p.y);
-            dx = Math.min(dx, world.width - dx);
-            dy = Math.min(dy, world.height - dy);
-            const d2 = dx * dx + dy * dy;
-            if (d2 < bestD2) {
-                bestD2 = d2;
-                best = pop.id[i];
-            }
-        }
-    }
-    if (best) follow(best);
+    const id = renderer.pick(world, e.clientX - rect.left, e.clientY - rect.top);
+    if (id) follow(id);
 });
 
 // Fixed-timestep loop: the simulation advances by real elapsed time, so a
@@ -146,8 +150,10 @@ function frame(now) {
     const focusId = target ? target.pop.focus[target.i] : 0;
     const focus = focusId ? world.find(focusId) : null;
     const sense = target ? world.p[target.kind].sense * target.pop.senseGene[target.i] : 0;
+    const t0 = performance.now();
     renderer.updateCamera(world, target, dt / 1000);
     renderer.draw(world, target, focus, sense);
+    frameMs += (performance.now() - t0 - frameMs) * 0.05;
 
     if (now - lastUi > 250) {
         panel.update(world);
@@ -157,12 +163,13 @@ function frame(now) {
     requestAnimationFrame(frame);
 }
 
-const seedParam = Number(new URLSearchParams(location.search).get('seed'));
+const seedParam = Number(query.get('seed'));
 start(Number.isInteger(seedParam) && seedParam > 0 ? seedParam : Math.floor(Math.random() * 1e6));
 panel.setSpeed(speed);
 panel.setPaused(paused);
 window.addEventListener('resize', () => renderer.resize(world));
 requestAnimationFrame(frame);
 
-// For tinkering from the browser console: sim.world, sim.follow(id), sim.params.
-window.sim = { get world() { return world; }, follow, params };
+// For tinkering from the browser console: sim.world, sim.follow(id), sim.params,
+// sim.frameMs (JavaScript time per frame spent drawing), sim.renderer.
+window.sim = { get world() { return world; }, follow, params, get frameMs() { return frameMs; }, renderer };

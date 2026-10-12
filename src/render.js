@@ -10,6 +10,8 @@
 //   first  — zoomed further, rotated so the animal always faces up
 // The world wraps around (a torus), so each animal is drawn at its copy
 // nearest the camera, and the grass image is tiled as needed.
+import { drawFlag } from './flag.js';
+
 const TAU = Math.PI * 2;
 
 export const COLORS = {
@@ -42,68 +44,8 @@ function grassPalette() {
 // Shortest signed difference on a ring of size `size`.
 const wrapDelta = (d, size) => (d > size / 2 ? d - size : d < -size / 2 ? d + size : d);
 
-// Paint a tribe's flag into the rectangle (x, y, w, h).
-export function drawFlag(ctx, flag, x, y, w, h) {
-    const [a, b, c] = flag.colors;
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(x, y, w, h);
-    ctx.clip();
-    const fill = (color, fx, fy, fw, fh) => {
-        ctx.fillStyle = color;
-        ctx.fillRect(fx, fy, fw, fh);
-    };
-    switch (flag.pattern) {
-        case 'bands':
-            fill(a, x, y, w, h / 2);
-            fill(b, x, y + h / 2, w, h / 2);
-            break;
-        case 'stripes':
-            fill(a, x, y, w / 3, h);
-            fill(b, x + w / 3, y, w / 3, h);
-            fill(c, x + (2 * w) / 3, y, w / 3, h);
-            break;
-        case 'tricolor':
-            fill(a, x, y, w, h / 3);
-            fill(b, x, y + h / 3, w, h / 3);
-            fill(c, x, y + (2 * h) / 3, w, h / 3);
-            break;
-        case 'diagonal':
-            fill(a, x, y, w, h);
-            ctx.fillStyle = b;
-            ctx.beginPath();
-            ctx.moveTo(x + w, y);
-            ctx.lineTo(x + w, y + h);
-            ctx.lineTo(x, y + h);
-            ctx.fill();
-            break;
-        case 'cross':
-            fill(a, x, y, w, h);
-            fill(b, x + w * 0.3, y, w * 0.16, h);
-            fill(b, x, y + h * 0.4, w, h * 0.2);
-            break;
-        case 'disc':
-            fill(a, x, y, w, h);
-            ctx.fillStyle = b;
-            ctx.beginPath();
-            ctx.arc(x + w / 2, y + h / 2, h * 0.3, 0, TAU);
-            ctx.fill();
-            break;
-        case 'chevron':
-            fill(a, x, y, w, h);
-            ctx.fillStyle = b;
-            ctx.beginPath();
-            ctx.moveTo(x, y);
-            ctx.lineTo(x + w * 0.5, y + h / 2);
-            ctx.lineTo(x, y + h);
-            ctx.fill();
-            break;
-        default: // 'border'
-            fill(b, x, y, w, h);
-            fill(a, x + w * 0.2, y + h * 0.22, w * 0.6, h * 0.56);
-    }
-    ctx.restore();
-}
+// Flags are painted by flag.js (shared with the 3D view and the panel).
+export { drawFlag };
 
 export class Renderer {
     constructor(canvas) {
@@ -192,6 +134,29 @@ export class Renderer {
         const x = cam.x + (dx * c - dy * s) / cam.scale;
         const y = cam.y + (dx * s + dy * c) / cam.scale;
         return { x: (x % world.width + world.width) % world.width, y: (y % world.height + world.height) % world.height };
+    }
+
+    // Who is under this screen pixel? The nearest individual within 16 pixels
+    // of it, or 0.
+    pick(world, px, py) {
+        const p = this.screenToWorld(world, px, py);
+        const reach = 16 / this.cam.scale; // 16 screen pixels
+        let best = 0;
+        let bestD2 = reach * reach;
+        for (const pop of [world.herbivores, world.carnivores, world.humans]) {
+            for (let i = 0; i < pop.n; i++) {
+                let dx = Math.abs(pop.x[i] - p.x);
+                let dy = Math.abs(pop.y[i] - p.y);
+                dx = Math.min(dx, world.width - dx);
+                dy = Math.min(dy, world.height - dy);
+                const d2 = dx * dx + dy * dy;
+                if (d2 < bestD2) {
+                    bestD2 = d2;
+                    best = pop.id[i];
+                }
+            }
+        }
+        return best;
     }
 
     // Each patch is grazed on its own, so the raw field is speckled. A 3×3 box

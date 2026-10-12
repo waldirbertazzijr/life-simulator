@@ -24,7 +24,8 @@
             color: var(--text);
             -webkit-font-smoothing: antialiased;
         }
-        canvas#world { display: block; cursor: crosshair; }
+        /* touch-action: none — drags and pinches move the camera, not the page. */
+        canvas#world { display: block; cursor: crosshair; touch-action: none; }
 
         #panel {
             position: fixed;
@@ -213,6 +214,7 @@
         </div>
     </aside>
 
+    <script type="importmap">{ "imports": { "three": "./vendor/three/three.module.min.js" } }</script>
     <script type="module" src="src/main.js"></script>
 </body>
 </html>
