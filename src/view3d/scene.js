@@ -6,17 +6,19 @@
 //   draw(world, target, focus, senseRadius)  pick(world, px, py)  mode
 //
 // Coordinates: world x → three.js X, world y → Z, height → Y; one world unit
-// is one three.js unit. The parts: the ground (terrain-mesh.js), the grass
-// tufts near the camera (tufts.js), creatures, camps, the followed creature's
-// marker, the sky, and the camera with its controls (camera.js), which also
-// keeps the floating origin (see util.js).
+// is one three.js unit. The parts: the ground (terrain-mesh.js), the forests
+// (forest.js), the grass tufts near the camera (tufts.js), creatures, camps,
+// the followed creature's marker, the sky, and the camera with its controls
+// (camera.js), which also keeps the floating origin (see util.js). How each
+// biome looks in all of them is in biomes.js.
 //
-// Draw calls stay few: a handful of ground copies, one instanced mesh for all
-// the tufts, three more (one per species), the water sheet, the sky, and two
-// per visible camp.
+// Draw calls stay few: a handful of ground copies, two instanced meshes for
+// all the trees (one per kind), one for all the tufts, three more (one per
+// species), the water sheet, the sky, and two per visible camp.
 import * as THREE from 'three';
 import { CameraRig } from './camera.js';
 import { Ground } from './terrain-mesh.js';
+import { Forest } from './forest.js';
 import { Tufts } from './tufts.js';
 import { Creatures } from './creatures.js';
 import { Camps } from './camps.js';
@@ -91,6 +93,7 @@ export class View3D {
 
         this.rig = new CameraRig(canvas);
         this.ground = new Ground(this.scene, this.gl);
+        this.forest = new Forest(this.scene);
         this.tufts = new Tufts(this.scene);
         this.creatures = new Creatures(this.scene);
         this.camps = new Camps(this.scene, this.gl);
@@ -115,7 +118,8 @@ export class View3D {
         this.heightAt = groundOf(this.terrain, world.width, world.height);
         this.resize(world);
         this.ground.attach(world, this.terrain);
-        this.tufts.attach(world, this.terrain, this.ground.rock);
+        this.forest.attach(world, this.terrain, this.ground);
+        this.tufts.attach(world, this.terrain, this.ground);
         this.creatures.attach();
         this.camps.attach();
         this.rig.attach(world, this.terrain);
@@ -144,6 +148,7 @@ export class View3D {
         this.dome.scale.setScalar(view.fogFar * 0.9);
         this.ground.update(world);
         this.ground.place(view);
+        this.forest.update(view, this.rig.pose.fy);
         this.tufts.update(world, view, this.rig.camera, this.heightAt);
         // In first person we look out of the followed creature's eyes, so its
         // own body is not drawn (once the camera is close enough to be inside it).

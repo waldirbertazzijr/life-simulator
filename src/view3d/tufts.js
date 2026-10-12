@@ -24,9 +24,15 @@
 // - With terrain, the disc's patches skip water, cliffs, rock and steep slopes:
 //   each slot's ground height (and whether it may hold a tuft) is worked out
 //   once per world.
+// - With biomes, each slot also gets its biome's grass colours (biomes.js):
+//   deep green in meadows and wetland, yellowing on the steppe, brownish on
+//   the tundra. Under the forest canopy most slots stay empty, and along
+//   wetland shores some tufts are reeds: taller, darker, with straw heads.
+//   That too is decided once per world; a tuft's colours are picked on the
+//   graphics card from a small table, by a number packed into its seed.
 import * as THREE from 'three';
-import { COLORS } from '../render.js';
-import { wrap, wrapDelta } from './util.js';
+import { TUFT_PALETTES, REEDS, biomeLook } from './biomes.js';
+import { wrap, wrapDelta, hash, meshHeight, smoothstep } from './util.js';
 
 const GRID = 5;           // places for a tuft in each grass patch: a GRID × GRID grid
 const SLOTS = GRID * GRID;
@@ -36,23 +42,10 @@ const MIN_PX = 2;         // a tuft shorter than this on screen (CSS pixels) is 
 const REFRESH = 8;        // frames between refills while the grass is changing
 const SHOW = 0.12;        // grass below this has no tufts...
 const FULL = 0.8;         // ...and from this up every slot has one
-// The tuft's colours come from the grass palette (render.js): the root a bit
-// darker than lush ground, the tip the lush green lifted toward pale straw.
-const mix = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
-const ROOT = mix(COLORS.bare, COLORS.lush, 0.6);
-const TIP = mix(COLORS.lush, [200, 208, 160], 0.38);
-
-const smoothstep = (a, b, v) => {
-    const t = Math.min(1, Math.max(0, (v - a) / (b - a)));
-    return t * t * (3 - 2 * t);
-};
-
-// A 32-bit integer hash (lowbias32): neighbouring inputs give unrelated outputs.
-function hash(n) {
-    n = Math.imul(n ^ (n >>> 16), 0x7feb352d);
-    n = Math.imul(n ^ (n >>> 15), 0x846ca68b);
-    return (n ^ (n >>> 16)) >>> 0;
-}
+const UNDER_TREES = 0.75; // share of the slots left empty under a full forest canopy
+const REED_H = 2.3;       // reeds are this much taller than a tuft
+const REED_SHARE = 0.5;   // share of the wetland slots by the water that are reeds
+const PALETTES = TUFT_PALETTES.length;
 
 // Where slot s of a patch has its tuft, as a fraction (0..1) of the patch
 // across and down: somewhere in its own cell of the GRID × GRID grid, chosen
@@ -63,8 +56,10 @@ const slotV = (s, h) => (((s / GRID) | 0) + 0.1 + 0.8 * (((h >>> 8) & 255) / 255
 
 // One tuft at the origin: a few thin blades fanned out around the middle and
 // leaning outward, about one unit tall. Every vertex has an upward normal, so
-// a tuft is lit like the flat ground it stands on, and a colour that runs
-// from the root to the tip (each blade a slightly different shade).
+// a tuft is lit like the flat ground it stands on. Its `color` attribute is
+// not a colour but (shade, root 0 or tip 1, unused): the vertex shader turns
+// it into a colour that runs from the root to the tip of its palette (each
+// blade a slightly different shade).
 function tuftGeometry() {
     const blades = [
         // angle around the middle, height, lean (how far out the tip goes), shade
@@ -77,8 +72,6 @@ function tuftGeometry() {
         [5.5, 0.86, 0.27, 1.04],
         [1.2, 1.1, 0.08, 1.1],
     ];
-    const root = new THREE.Color().setRGB(ROOT[0] / 255, ROOT[1] / 255, ROOT[2] / 255, THREE.SRGBColorSpace);
-    const tip = new THREE.Color().setRGB(TIP[0] / 255, TIP[1] / 255, TIP[2] / 255, THREE.SRGBColorSpace);
     const pos = [];
     const col = [];
     const r0 = 0.1;   // blades start this far from the middle...
@@ -89,8 +82,7 @@ function tuftGeometry() {
         const bx = c * r0;
         const bz = s * r0;
         pos.push(bx - s * w, 0, bz + c * w, bx + s * w, 0, bz - c * w, c * (r0 + lean), h, s * (r0 + lean));
-        for (let v = 0; v < 2; v++) col.push(root.r * shade, root.g * shade, root.b * shade);
-        col.push(tip.r * shade, tip.g * shade, tip.b * shade);
+        col.push(shade, 0, 0, shade, 0, 0, shade, 1, 0);
     }
     const g = new THREE.InstancedBufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
@@ -99,43 +91,12 @@ function tuftGeometry() {
     return g;
 }
 
-// The ground's height where the ground mesh (terrain-mesh.js) really is: its
-// triangles, not the bilinear heightAt, so tufts neither float nor sink.
-// Also returns the slope (rise over run) of that triangle in `out[1]`.
-function meshHeight(T, x, y, out) {
-    const { cols, rows, cellW, cellH, height: h } = T;
-    const fx = x / cellW;
-    const fy = y / cellH;
-    const i = Math.floor(fx);
-    const j = Math.floor(fy);
-    const tx = fx - i;
-    const ty = fy - j;
-    const i0 = ((i % cols) + cols) % cols;
-    const j0 = ((j % rows) + rows) % rows;
-    const i1 = i0 + 1 === cols ? 0 : i0 + 1;
-    const j1 = j0 + 1 === rows ? 0 : j0 + 1;
-    const a = h[i0 + j0 * cols];
-    const b = h[i1 + j0 * cols];
-    const c = h[i0 + j1 * cols];
-    const d = h[i1 + j1 * cols];
-    let gx;
-    let gy;
-    if (tx + ty <= 1) {
-        out[0] = a + (b - a) * tx + (c - a) * ty; // triangle a, b, c
-        gx = (b - a) / cellW;
-        gy = (c - a) / cellH;
-    } else {
-        out[0] = d + (c - d) * (1 - tx) + (b - d) * (1 - ty); // triangle b, c, d
-        gx = (d - c) / cellW;
-        gy = (d - b) / cellH;
-    }
-    out[1] = Math.sqrt(gx * gx + gy * gy);
-}
-
 // The extra vertex shader code. `tuft` and `seed` are per instance.
 const VERTEX_PARS = /* glsl */ `
 attribute vec4 tuft;   // where it stands (x, y, z, from the disc's centre) and how tall it is
-attribute float seed;  // 0..1, the same for a tuft every time it is drawn
+attribute float seed;  // whole part: its palette; fraction: 0..1, the same for a tuft every time it is drawn
+uniform vec3 uRoot[ ${PALETTES} ]; // the palettes: colour at the root of a blade...
+uniform vec3 uTip[ ${PALETTES} ];  // ...and at its tip
 uniform vec2 uCenter;  // the disc's centre now (it moves on between refills)
 uniform vec2 uDisc;    // tufts shrink away between these distances from it...
 uniform vec3 uCam;     // the camera
@@ -149,27 +110,34 @@ uniform vec2 uWind;    // phases of the slow gusts and the quick flutter
 const VERTEX_MAIN = /* glsl */ `
 vec3 transformed = vec3( position );
 {
+    int palette = int( seed );
+    float sd = fract( seed );
     float fade = 1.0 - smoothstep( uDisc.x, uDisc.y, distance( tuft.xz, uCenter ) );
     fade *= ( 1.0 - smoothstep( uFar.x, uFar.y, distance( tuft.xyz, uCam ) ) ) * uShow;
-    float a = seed * 6.2831853;
+    float a = sd * 6.2831853;
     float c = cos( a );
     float s = sin( a );
     transformed.xz = vec2( c * transformed.x - s * transformed.z, s * transformed.x + c * transformed.z );
     // A short tuft (thin grass, or one just growing in) is narrower too.
-    float wide = ( 0.8 + 0.45 * fract( seed * 13.7 ) ) * min( 1.0, sqrt( tuft.w / ${TUFT_H.toFixed(2)} ) );
+    float wide = ( 0.8 + 0.45 * fract( sd * 13.7 ) ) * min( 1.0, sqrt( tuft.w / ${TUFT_H.toFixed(2)} ) );
     transformed *= vec3( wide, tuft.w, wide ) * fade;
     // The whole tuft leans a little, each its own way; the wind bends it
     // more toward the tip (the base stays put), downwind and back.
-    vec2 lean = vec2( cos( a * 5.0 ), sin( a * 5.0 ) ) * 0.22 * fract( seed * 7.31 );
+    vec2 lean = vec2( cos( a * 5.0 ), sin( a * 5.0 ) ) * 0.22 * fract( sd * 7.31 );
     vec2 here = tuft.xz + uOrigin;
     float gust = 0.55 + 0.45 * sin( dot( uWaveK, here ) - uWind.x );
-    float flutter = sin( uWind.y + seed * 6.2831853 );
+    float flutter = sin( uWind.y + sd * 6.2831853 );
     float bend = transformed.y * transformed.y;
     transformed.xz += lean * transformed.y + normalize( uWaveK ) * bend * ( 0.12 * gust + 0.025 * flutter );
     transformed += tuft.xyz;
-    vColor *= 0.88 + 0.24 * fract( seed * 31.17 );
+    // Its palette's root-to-tip colour (color.g: 0 at the root, 1 at the tip),
+    // the blade's shade (color.r) and a little of its own.
+    vColor = mix( uRoot[ palette ], uTip[ palette ], color.g ) * color.r * ( 0.88 + 0.24 * fract( sd * 31.17 ) );
 }
 `;
+
+// A palette's colours as three.js colours (linear, as the shader wants them).
+const linear = (rgb) => new THREE.Color().setRGB(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255, THREE.SRGBColorSpace);
 
 export class Tufts {
     constructor(scene) {
@@ -182,6 +150,8 @@ export class Tufts {
             uOrigin: { value: new THREE.Vector2() },
             uWaveK: { value: new THREE.Vector2(0.05, 0.02) },
             uWind: { value: new THREE.Vector2() },
+            uRoot: { value: TUFT_PALETTES.map((p) => linear(p.root)) },
+            uTip: { value: TUFT_PALETTES.map((p) => linear(p.tip)) },
         };
         this.material = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
         this.material.onBeforeCompile = (shader) => {
@@ -225,9 +195,10 @@ export class Tufts {
     }
 
     // A new world: where each slot's tuft stands on the ground, or that it has
-    // none (water, cliffs, rock, steep slopes). `rock` is the ground's own
-    // per-patch rockiness (terrain-mesh.js), so tufts avoid what looks like rock.
-    attach(world, terrain, rock) {
+    // none (water, cliffs, rock, steep slopes). From the ground (terrain-mesh.js)
+    // come its per-patch rockiness, so tufts avoid what looks like rock, and
+    // with biomes its tree cover and where the water is.
+    attach(world, terrain, ground) {
         const { cols, rows, cellW, cellH } = world.grass;
         this.W = world.width;
         this.H = world.height;
@@ -237,10 +208,12 @@ export class Tufts {
         this.geometry.instanceCount = 0;
         this.mesh.visible = false;
         this.Y = null;
+        this.palette = null;
         if (terrain) {
             const Y = new Float32Array(cols * rows * SLOTS);
             const out = this.out;
             const sea = terrain.seaLevel;
+            const rock = ground.rock;
             for (let j = 0; j < rows; j++) {
                 for (let i = 0; i < cols; i++) {
                     const k = i + j * cols;
@@ -258,6 +231,7 @@ export class Tufts {
                 }
             }
             this.Y = Y;
+            if (terrain.biomeGrid && ground.cover) this.attachBiomes(world, terrain, ground);
         }
         // The gusts: waves about 90 units long rolling across from the west
         // (a little north of it, as the map is drawn), every 4.5 seconds. Their
@@ -268,6 +242,52 @@ export class Tufts {
         const nx = Math.max(1, Math.round((this.W / len) * Math.cos(dir)));
         const nz = Math.max(1, Math.round((this.H / len) * Math.sin(dir)));
         this.uniforms.uWaveK.value.set((2 * Math.PI * nx) / this.W, (2 * Math.PI * nz) / this.H);
+    }
+
+    // With biomes: each slot's palette (its biome's grass, or reeds), and the
+    // slots left empty under the trees.
+    attachBiomes(world, terrain, ground) {
+        const { cols, rows } = world.grass;
+        const { biomeGrid } = terrain;
+        const { cover, depth } = ground;
+        const looks = terrain.biomes.map(biomeLook);
+        const wetland = terrain.biomes.findIndex((b) => b.name === 'wetland');
+        // Patches by the water: any water within two patches.
+        const shore = new Uint8Array(cols * rows);
+        for (let j = 0; j < rows; j++) {
+            for (let i = 0; i < cols; i++) {
+                let near = 0;
+                for (let dj = -2; dj <= 2 && !near; dj++) {
+                    const row = ((j + dj + rows) % rows) * cols;
+                    for (let di = -2; di <= 2 && !near; di++) if (depth[row + ((i + di + cols) % cols)] >= 0) near = 1;
+                }
+                shore[i + j * cols] = near;
+            }
+        }
+        const Y = this.Y;
+        const palette = new Uint8Array(cols * rows * SLOTS);
+        for (let j = 0; j < rows; j++) {
+            for (let i = 0; i < cols; i++) {
+                const k = i + j * cols;
+                for (let s = 0; s < SLOTS; s++) {
+                    const slot = k * SLOTS + s;
+                    const h1 = hash(slot);
+                    const h3 = hash(hash(h1 ^ 0x9e3779b9) ^ 0x85ebca6b);
+                    // The biome a little way off (up to half a patch, by the
+                    // hash): near a border, tufts of both sides mingle in a
+                    // ragged band instead of meeting along the patch grid.
+                    const pi = Math.floor(i + slotU(s, h1) + ((h3 & 255) / 255 - 0.5));
+                    const pj = Math.floor(j + slotV(s, h1) + (((h3 >>> 8) & 255) / 255 - 0.5));
+                    const b = biomeGrid[((pi + cols) % cols) + ((pj + rows) % rows) * cols];
+                    let p = looks[b].tuft;
+                    if (b === wetland && shore[k] && ((h3 >>> 24) & 255) / 255 < REED_SHARE) p = REEDS;
+                    palette[slot] = p;
+                    // Under the canopy, most slots stay empty.
+                    if (((h3 >>> 16) & 255) / 255 < UNDER_TREES * cover[k]) Y[slot] = NaN;
+                }
+            }
+        }
+        this.palette = palette;
     }
 
     // Every frame: choose the disc for this view, refill it if needed, and
@@ -357,6 +377,7 @@ export class Tufts {
         const { cols, rows, cellW, cellH } = grass;
         const G = grass.g;
         const Y = this.Y;
+        const P = this.palette;
         const { data, seeds, capacity } = this;
         const R2 = R * R;
         const reach = R + Math.hypot(cellW, cellH) / 2;
@@ -418,13 +439,14 @@ export class Tufts {
                     if (here <= thr) continue;
                     const h2 = hash(h1 ^ 0x9e3779b9);
                     const grow = Math.min(1, (here - thr) / 0.12);
-                    const size = 0.8 + 0.4 * ((h2 >>> 24) / 255);
+                    const p = P !== null ? P[k * SLOTS + s] : 0;
+                    const size = (0.8 + 0.4 * ((h2 >>> 24) / 255)) * (p === REEDS ? REED_H : 1);
                     const o = n * 4;
                     data[o] = x;
                     data[o + 1] = y;
                     data[o + 2] = z;
                     data[o + 3] = TUFT_H * size * (0.55 + 0.45 * here) * grow * (2 - grow);
-                    seeds[n] = (h2 & 0xffff) / 65536;
+                    seeds[n] = p + (h2 & 0xffff) / 65536;
                     if (++n >= capacity) break;
                 }
             }

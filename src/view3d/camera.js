@@ -9,6 +9,15 @@
 //   first  — from its eyes, looking where it is heading. Dragging looks
 //            around; the view drifts back to straight ahead when you let go.
 //
+// The keyboard (WASD or the arrow keys, the same) does the same as dragging,
+// for as long as a key is held:
+//   map    — W/S pan forward and back (the way the camera faces), A/D pan
+//            left and right, Q/E turn; faster when zoomed out.
+//   follow — A/D swing the camera around the creature, so the view turns
+//            left or right; W/S move it closer or further.
+//   first  — A/D look left and right, W/S look up and down; the view drifts
+//            back to straight ahead once the keys are let go.
+//
 // All three are the same kind of camera: it looks at a focus point from a
 // direction (yaw, pitch) and a distance. Switching views glides those numbers
 // toward the new view's values, so every transition is smooth. In first
@@ -42,8 +51,72 @@ const TURN = { follow: 1.0, first: 0.35 }; // seconds: how calmly the view turns
 const FOG = { map: 2.4, follow: 1100, first: 700 };
 const MAX_MAP_ZOOM = 1.3;     // × the distance that frames the whole world
 
+// Held keys, per second: the map pans this many times the camera's distance
+// (about a screen's height a second, at any zoom) and turns this fast; the
+// follow camera swings round and zooms; first person looks around.
+const KEY_RATE = { pan: 0.8, turn: 1.6, orbit: 1.8, zoom: 1.2, lookYaw: 1.6, lookPitch: 1.0 };
+
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const CORNERS = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
+
+// Which held keys mean what. By physical key (event.code), so WASD sits under
+// the same fingers on any keyboard layout. None of them is one of the panel's
+// shortcuts (ui.js: space, 1–4, R, H, V, F, Esc).
+const KEY_MAP = {
+    KeyW: 'forward', ArrowUp: 'forward',
+    KeyS: 'back', ArrowDown: 'back',
+    KeyA: 'left', ArrowLeft: 'left',
+    KeyD: 'right', ArrowRight: 'right',
+    KeyQ: 'turnLeft',
+    KeyE: 'turnRight',
+};
+
+// The keys held down, as three axes from −1 to 1: `x` (right − left), `y`
+// (forward − back) and `turn` (E − Q). It knows nothing of cameras, so the
+// same axes can steer something else later (in stage 3, the player's own
+// person). Keys typed into a text field, or pressed with Ctrl/Cmd/Alt (the
+// browser's own shortcuts), are left alone.
+export class HeldKeys {
+    constructor(target = window) {
+        this.held = new Set();
+        const typing = (e) => {
+            const el = e.target;
+            return el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName));
+        };
+        target.addEventListener('keydown', (e) => {
+            const action = KEY_MAP[e.code];
+            if (!action || typing(e) || e.ctrlKey || e.metaKey || e.altKey) return;
+            this.held.add(action);
+            e.preventDefault(); // arrows would scroll the panel
+        });
+        target.addEventListener('keyup', (e) => {
+            const action = KEY_MAP[e.code];
+            if (action) this.held.delete(action);
+        });
+        // A key released while the window is not looking would stay held.
+        window.addEventListener('blur', () => this.held.clear());
+    }
+
+    get any() {
+        return this.held.size > 0;
+    }
+
+    axis(plus, minus) {
+        return (this.held.has(plus) ? 1 : 0) - (this.held.has(minus) ? 1 : 0);
+    }
+
+    get x() {
+        return this.axis('right', 'left');
+    }
+
+    get y() {
+        return this.axis('forward', 'back');
+    }
+
+    get turn() {
+        return this.axis('turnRight', 'turnLeft');
+    }
+}
 
 export class CameraRig {
     constructor(canvas) {
@@ -81,6 +154,7 @@ export class CameraRig {
         this.pointers = new Map();
         this.dragged = false;
         this.bindInput();
+        this.keys = new HeldKeys();
     }
 
     setMode(mode) {
@@ -154,6 +228,7 @@ export class CameraRig {
     // creature ({ kind, pop, i }) or null; `dt` is real seconds.
     update(world, target, dt) {
         const { pose, map, W, H } = this;
+        if (this.keys.any) this.steer(dt);
         const k = 1 - Math.exp(-dt / GLIDE);
         const id = target ? target.pop.id[target.i] : 0;
         const tracking = id !== 0 && (this.mode !== 'map' || map.track);
@@ -240,8 +315,9 @@ export class CameraRig {
         pose.fogFar *= Math.pow(want.fogFar / pose.fogFar, k);
         pose.mapness += (want.mapness - pose.mapness) * k;
 
-        // First-person look-around drifts back once the pointer lets go.
-        if (!this.pointers.size) {
+        // First-person look-around drifts back once the pointer (or the
+        // keys) let go.
+        if (!this.pointers.size && !(this.mode === 'first' && (this.keys.x || this.keys.y))) {
             const s = Math.exp(-dt / 0.8);
             this.look.yaw *= s;
             this.look.pitch *= s;
@@ -422,5 +498,32 @@ export class CameraRig {
     zoom(f) {
         if (this.mode === 'map') this.map.dist = clamp(this.map.dist * f, 25, this.map.fit * MAX_MAP_ZOOM);
         else if (this.mode === 'follow') this.orbit.zoom = clamp(this.orbit.zoom * f, 0.3, 3);
+    }
+
+    // Held keys, for `dt` seconds (see the header). They move what the mouse
+    // moves (the map's focus, the follow orbit, the first-person look), so
+    // the view glides after them just as it does after a drag.
+    steer(dt) {
+        const { x, y, turn } = this.keys;
+        if (this.mode === 'map') {
+            const map = this.map;
+            if (x || y) {
+                // Forward is the way the camera faces, flattened onto the ground.
+                const step = KEY_RATE.pan * this.pose.dist * dt;
+                const c = Math.cos(this.pose.yaw);
+                const s = Math.sin(this.pose.yaw);
+                map.fx = wrap(map.fx + (c * y - s * x) * step, this.W);
+                map.fz = wrap(map.fz + (s * y + c * x) * step, this.H);
+                map.track = false; // like a drag, it lets go of whoever was centred
+            }
+            map.yaw += turn * KEY_RATE.turn * dt;
+        } else if (this.mode === 'follow') {
+            // A larger yaw turns the view right (the camera swings left round the creature).
+            this.orbit.yaw += x * KEY_RATE.orbit * dt;
+            this.orbit.zoom = clamp(this.orbit.zoom * Math.exp(-y * KEY_RATE.zoom * dt), 0.3, 3);
+        } else {
+            this.look.yaw = clamp(this.look.yaw + x * KEY_RATE.lookYaw * dt, -120 * DEG, 120 * DEG);
+            this.look.pitch = clamp(this.look.pitch - y * KEY_RATE.lookPitch * dt, -40 * DEG, 50 * DEG);
+        }
     }
 }

@@ -12,8 +12,17 @@
 // from the texture and shape from the mesh. Rock on steep or high ground and
 // the dark beds of lakes come from the terrain and are baked into the same
 // texture once; a flat, slightly see-through sheet at sea level is the water.
+//
+// With biomes, each patch has its own bare ground (earth, leaf litter, mud,
+// dry sand, tundra, rock; see biomes.js) and grass greens it from there, as
+// in 2D. That is baked once per world into two numbers per colour channel,
+// the bare ground and how far full grass moves it, so the refresh stays one
+// multiply-add per channel. Snowfields ride in the texture's alpha channel
+// (see SNOW_FRAGMENT).
 import * as THREE from 'three';
 import { COLORS } from '../render.js';
+import { biomeLook, SNOW, CANOPY } from './biomes.js';
+import { smoothstep, blurGrid } from './util.js';
 
 const ROCK = COLORS.rock;        // muted warm grey, as on the 2D map
 const SHORE = [44, 56, 52];      // lake bed near the shore...
@@ -22,10 +31,28 @@ const WATER = '#2e4a56';
 const REFRESH = 6;               // frames between grass texture updates
 const MAX_TILES = 25;
 
-const smoothstep = (a, b, v) => {
-    const t = Math.min(1, Math.max(0, (v - a) / (b - a)));
-    return t * t * (3 - 2 * t);
-};
+// With biomes: how far along from bare ground to lush grass a patch with
+// grass g looks, indexed by g × 255. Steeper at first than the 2D view's
+// curve: the bare ground here is light earth rather than near-black, and a
+// pasture grazed short (g ≈ 0.25, where herbivores keep most of it) should
+// still read as green-olive turf; only ground grazed nearly bare shows earth.
+const GREEN = Float32Array.from({ length: 256 }, (_, i) => 1 - (1 - i / 255) ** 2);
+
+// The ground's colour, with snow. The texture's alpha is 1 where there is no
+// snow (everywhere, without biomes) and falls smoothly to 0 across the edge
+// of a snowfield, blurred over a few patches. Cutting it at one half draws a
+// crisp, rounded snow line through the middle of the patches, rather than a
+// grey smear: the peaks look capped. The cut is about a pixel wide on screen
+// at any distance (fwidth: how much the alpha changes from one pixel to the
+// next), so the line is sharp up close and not jagged far away.
+const SNOW_FRAGMENT = /* glsl */ `
+#ifdef USE_MAP
+    vec4 sampledDiffuseColor = texture2D( map, vMapUv );
+    float edge = max( fwidth( sampledDiffuseColor.a ), 0.002 );
+    float snow = 1.0 - smoothstep( 0.5 - edge, 0.5 + edge, sampledDiffuseColor.a );
+    diffuseColor.rgb *= mix( sampledDiffuseColor.rgb, uSnow, snow );
+#endif
+`;
 
 // Grass amount (0..255) → colour, as in the 2D view.
 function grassPalette() {
@@ -95,6 +122,14 @@ export class Ground {
         this.scene = scene;
         this.anisotropy = Math.min(8, gl.capabilities.getMaxAnisotropy());
         this.material = new THREE.MeshLambertMaterial({ flatShading: true });
+        const snow = new THREE.Color().setRGB(SNOW[0] / 255, SNOW[1] / 255, SNOW[2] / 255, THREE.SRGBColorSpace);
+        this.material.onBeforeCompile = (shader) => {
+            shader.uniforms.uSnow = { value: snow };
+            shader.fragmentShader = shader.fragmentShader
+                .replace('#include <common>', '#include <common>\nuniform vec3 uSnow;')
+                .replace('#include <map_fragment>', SNOW_FRAGMENT);
+        };
+        this.material.customProgramCacheKey = () => 'ground';
         this.tiles = [];
         this.geometry = null;
         this.texture = null;
@@ -134,6 +169,7 @@ export class Ground {
         for (const t of this.tiles) t.geometry = this.geometry;
 
         this.bakeTerrain(world, terrain);
+        this.bakeBiomes(terrain);
         this.water.visible = !!terrain;
         this.seaLevel = terrain ? terrain.seaLevel : 0;
         this.frame = 0;
@@ -141,7 +177,8 @@ export class Ground {
     }
 
     // Per grass patch, once: how much rock shows (steep or high ground) and
-    // how deep the water is (−1 on dry land).
+    // how deep the water is (−1 on dry land). With biomes, the high ground's
+    // rock and snow are biomes of their own, so only cliffs show rock here.
     bakeTerrain(world, terrain) {
         const n = this.cols * this.rows;
         this.rock = new Float32Array(n);
@@ -157,6 +194,7 @@ export class Ground {
         const high0 = sea + 0.62 * (top - sea);
         const high1 = sea + 0.9 * (top - sea);
         const d = Math.max(terrain.cellW, terrain.cellH);
+        const byHeight = !terrain.biomeGrid;
         for (let j = 0; j < this.rows; j++) {
             for (let i = 0; i < this.cols; i++) {
                 const k = j * this.cols + i;
@@ -170,9 +208,69 @@ export class Ground {
                 const sx = (at(x + d, y) - at(x - d, y)) / (2 * d);
                 const sy = (at(x, y + d) - at(x, y - d)) / (2 * d);
                 const slope = Math.sqrt(sx * sx + sy * sy); // rise per unit run
-                this.rock[k] = 0.7 * Math.max(smoothstep(0.55, 1.1, slope), smoothstep(high0, high1, h));
+                this.rock[k] = 0.7 * Math.max(smoothstep(0.55, 1.1, slope), byHeight ? smoothstep(high0, high1, h) : 0);
             }
         }
+    }
+
+    // With biomes, per grass patch, once: the colour of its bare ground (with
+    // the cliffs' rock) in `base`, how far full grass moves it toward lush
+    // green in `diff` (less under the forest canopy), the tree cover in `cover`
+    // (0..1, for the trees and tufts), and the snow in the texture's alpha.
+    bakeBiomes(terrain) {
+        this.base = null;
+        this.diff = null;
+        this.cover = null;
+        if (!terrain || !terrain.biomeGrid) return;
+        const { cols, rows, rock, depth, pixels: px } = this;
+        const n = cols * rows;
+        const looks = terrain.biomes.map(biomeLook);
+        const water = new Uint8Array(n);
+        // Bare ground (r, g, b), trees and snow, per land patch.
+        const look = new Float32Array(n * 5);
+        for (let k = 0; k < n; k++) {
+            if (depth[k] >= 0) {
+                water[k] = 1;
+                continue;
+            }
+            const L = looks[terrain.biomeGrid[k]];
+            look.set(L.ground, k * 5);
+            look[k * 5 + 3] = L.trees;
+            look[k * 5 + 4] = L.snow ? 1 : 0;
+        }
+        // Biomes are decided patch by patch, so their borders run along the
+        // patch grid in steps. Two passes of a 3×3 blur over the land (water
+        // keeps out of it, as in 2D) round them off into soft margins.
+        blurGrid(look, 5, cols, rows, water);
+        blurGrid(look, 5, cols, rows, water);
+
+        const base = new Float32Array(n * 3);
+        const diff = new Float32Array(n * 3);
+        const cover = new Float32Array(n);
+        const lush = COLORS.lush;
+        for (let k = 0; k < n; k++) {
+            const q = k * 3;
+            if (water[k]) {
+                const t = Math.min(1, depth[k] / 25);
+                for (let c = 0; c < 3; c++) base[q + c] = SHORE[c] + (DEEP[c] - SHORE[c]) * t;
+                px[k * 4 + 3] = 255;
+                continue;
+            }
+            const s = rock[k];
+            cover[k] = look[k * 5 + 3];
+            const show = (1 - CANOPY * cover[k]) * (1 - s);
+            for (let c = 0; c < 3; c++) {
+                const bare = look[k * 5 + c];
+                base[q + c] = bare + (ROCK[c] - bare) * s;
+                diff[q + c] = (lush[c] - bare) * show;
+            }
+            // Snow does not lie on the steepest faces: rock shows through.
+            const snow = look[k * 5 + 4] * (1 - 0.8 * smoothstep(0.2, 0.5, s));
+            px[k * 4 + 3] = Math.round(255 * (1 - snow));
+        }
+        this.base = base;
+        this.diff = diff;
+        this.cover = cover;
     }
 
     // Each patch is grazed on its own, so the raw field is speckled. A 3×3 box
@@ -199,6 +297,21 @@ export class Ground {
     refresh(world) {
         const g = this.soften(world.grass.g);
         const { pixels: px, palette: lut, rock, depth } = this;
+        if (this.base !== null) {
+            // Biomes: bare ground plus grass, one multiply-add per channel.
+            // (Water has no grass to add; the alpha, snow, was set once.)
+            const { base, diff } = this;
+            for (let k = 0, n = g.length; k < n; k++) {
+                const t = GREEN[Math.min(255, (g[k] * 255) | 0)];
+                const q = k * 3;
+                const o = k * 4;
+                px[o] = base[q] + diff[q] * t;
+                px[o + 1] = base[q + 1] + diff[q + 1] * t;
+                px[o + 2] = base[q + 2] + diff[q + 2] * t;
+            }
+            this.texture.needsUpdate = true;
+            return;
+        }
         for (let k = 0, n = g.length; k < n; k++) {
             let r, gr, b;
             if (depth[k] >= 0) {
