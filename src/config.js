@@ -178,6 +178,25 @@ export const params = {
         cultureDrift: 0.08,  // how much a daughter tribe's culture differs from its parent's
     },
 
+    // The person the page controls (src/player.js). These rules apply to the
+    // player alone; with nobody controlled, none of them is ever read.
+    play: {
+        bite: 60,            // a predator that catches the player bites this much energy off, and backs off
+        rollSteps: 5,        // a dodge roll lasts this many steps, and a bite misses during it...
+        rollSpeed: 1.2,      // ...covering this much ground a step (about 6 units in all)
+        crouchSense: 0.5,    // grazers notice a crouching player only within this fraction of their range
+        crouchSpeed: 0.35,   // crouching pace, as a fraction of top speed (the page moves the body)
+        // The page moves the body; a move is accepted if it is no farther than
+        // top speed × the steps since the last accepted one (at most maxCatchUp
+        // of them) + slack, and does not end on water or a cliff.
+        slack: 1.5,
+        maxCatchUp: 4,
+        // Spirit (for weapon skills and calls, in later packages)
+        spiritMax: 100,
+        spiritRegen: 0.05,   // regained each step...
+        spiritRest: 1,       // ...plus this much while resting at camp
+    },
+
     evolution: {
         enabled: true,
         // Children inherit each gene × e^(σ·N(0,1)) — symmetric in log space, so

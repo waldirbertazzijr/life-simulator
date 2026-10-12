@@ -13,15 +13,22 @@
 //                                            old snapshot buffers to reuse
 //        set {path, value}                   change a parameter, e.g. 'herbivore.speed'
 //        run {id, steps}                     test hook: step now, reply with a digest
+//        control {id, mode}                  take over person `id` ('god' | 'play'); 0 lets go
+//        input {seq, x, y, heading, speed, crouch}  where the page has moved the controlled body
+//                                            (the newest is checked at the next step)
+//        act {seq, action, ...}              a one-off action of the controlled person: 'roll', 'rest' {on},
+//                                            'auto' {on} (autopilot: the AI runs it while the page is on the map)
 //   out  started {gen, hash}                 the new world's first moment, hashed
 //        snapshot {...}                      see pack() below; with `events`, everything that happened
-//                                            since the last one (World.events, oldest first)
+//                                            since the last one (World.events, oldest first), and
+//                                            `player`, the controlled person (playerSnapshot in player.js)
 //        reply {id, value}
 //
 // Snapshots are pulled, not pushed: the main thread asks for one each frame
 // it draws, and gets it as soon as the world has moved on. So they come at the
 // display's rate, never pile up, and stop when the page is not drawing.
 import { World } from './world.js';
+import { takeControl, applyInput, applyAct, playerSnapshot } from './player.js';
 
 // Steps per second at 1×: a calm pace, at which a person walks about six
 // units (a little over a body length) a second and runs at ten. (It used to
@@ -93,6 +100,17 @@ export class Sim {
                 break;
             case 'run':
                 this.run(msg);
+                break;
+            case 'control':
+                if (this.world) takeControl(this.world, msg.id, msg.mode);
+                this.dirty = true;
+                break;
+            case 'input':
+                if (this.world) applyInput(this.world, msg);
+                break;
+            case 'act':
+                if (this.world) applyAct(this.world, msg);
+                this.dirty = true;
                 break;
         }
         this.offer();
@@ -171,6 +189,7 @@ export class Sim {
         snap.watch = w.watch;
         snap.fate = w.fate;
         snap.heir = w.fate && w.fate.id === w.watch ? w.descendant(w.watch) : 0;
+        snap.player = playerSnapshot(w);
         snap.samples = this.samples;
         this.samples = [];
         snap.events = this.events;

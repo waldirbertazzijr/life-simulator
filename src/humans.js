@@ -14,6 +14,7 @@
 // change. Tribes that fail die out. So culture evolves between groups.
 import { STATE } from './population.js';
 import { tribeIdentity } from './identity.js';
+import { stepPlayer } from './player.js';
 
 const TAU = Math.PI * 2;
 const wrapDelta = (d, size) => (d > size / 2 ? d - size : d < -size / 2 ? d + size : d);
@@ -205,9 +206,14 @@ export function stepHumans(world) {
     const g = grass.g;
     const throw2 = P.throwRange * P.throwRange;
     const home2 = P.homeRange * P.homeRange;
+    const player = world.player; // the person the page controls, or null (player.js)
 
     for (let i = 0; i < n; i++) {
         if (energy[i] <= 0) continue; // killed earlier this step
+        if (player !== null && id[i] === player.id && !player.auto) {
+            stepPlayer(world, i); // the page decides where it goes (on autopilot, the AI below)
+            continue;
+        }
         if (++age[i] > lifespan[i]) {
             world.die(pop, i, 'old age');
             continue;

@@ -16,6 +16,7 @@ import { SpatialHash } from './spatial.js';
 import { Grass } from './grass.js';
 import { Terrain, BIOME } from './terrain.js';
 import { seedTribes, stepHumans, stepTribes, driveOff } from './humans.js';
+import { caught, afterStep } from './player.js';
 
 export { STATE, STATE_LABEL } from './population.js';
 
@@ -50,6 +51,9 @@ export class World {
         // x, y, heading, cause, by, time }. Cleared as each step begins; the
         // simulation never reads it.
         this.events = [];
+        // The person the page controls (src/player.js), or null: nobody, and
+        // then the world runs exactly as if player.js did not exist.
+        this.player = null;
 
         this.terrain = params.terrain.enabled ? new Terrain(width, height, params.terrain, this.rng) : null;
         // Biomes draw from a random stream of their own, so the land and the
@@ -227,6 +231,7 @@ export class World {
         this.carnivores.compact();
         this.humans.compact();
         if (this.tribes.length) stepTribes(this);
+        if (this.player !== null) afterStep(this); // if the controlled person died: its heir (player.js)
         this.time++;
     }
 
@@ -241,6 +246,10 @@ export class World {
         const predatorIds = this.carnivores.id;
         const hunterIds = this.humans.id;
         const anyHunters = this.humans.n > 0;
+        // A crouching player (player.js) is noticed only from closer: its id
+        // (0: nobody crouches), and that fraction of a grazer's range.
+        const creeper = this.player !== null && this.player.crouch ? this.player.id : 0;
+        const creep = creeper ? this.p.play.crouchSense : 0;
 
         for (let i = 0; i < n; i++) {
             if (++age[i] > lifespan[i]) {
@@ -264,7 +273,10 @@ export class World {
             let threatId = threat >= 0 ? predatorIds[threat] : 0;
             if (anyHunters) {
                 const k = hunters.nearest(x[i], y[i], P.sense * vg);
-                if (k >= 0 && (threat < 0 || hunters.d2 < threats.d2)) {
+                // (If the nearest person is the player creeping up from farther
+                // than it can tell, it takes no notice of people this step.)
+                if (k >= 0 && (threat < 0 || hunters.d2 < threats.d2)
+                    && (hunterIds[k] !== creeper || hunters.d2 < (creep * P.sense * vg) ** 2)) {
                     threat = k;
                     tdx = hunters.dx;
                     tdy = hunters.dy;
@@ -420,6 +432,10 @@ export class World {
                                 humans.kills[j]++;
                                 continue;
                             }
+                        } else if (victims === humans && this.player !== null && humans.id[j] === this.player.id
+                            && !this.player.auto && caught(this, i, j)) {
+                            // The person the page steers is only bitten, or
+                            // missed mid-roll (player.js), and lives on.
                         } else {
                             e += victims.energy[j] * P.efficiency;
                             this.die(victims, j, 'eaten', id[i]);
