@@ -23,6 +23,10 @@
 // spears in the air (thrown.js), the water sheet, the sky, two per visible
 // camp, two for all the camps' racks, and two for a tribe's standing order
 // (its pole and a hunt's range: order-marker.js).
+//
+// On the warm lakes float giant water lilies (lilies.js: pads and flowers,
+// two draw calls), with frogs among them (frogs.js: the frogs and their
+// ripples, two more). Both are scenery only: nothing in the world knows them.
 import * as THREE from 'three';
 import { CameraRig } from './camera.js';
 import { Ground } from './terrain-mesh.js';
@@ -37,6 +41,8 @@ import { OrderMarkers } from './order-marker.js';
 import { Lineup } from './poses.js';
 import { groundOf } from './util.js';
 import { stubTerrain } from './terrain-stub.js';
+import { Lilies } from './lilies.js';
+import { Frogs } from './frogs.js';
 
 // A soft daytime sky: a light hazy blue at the horizon, a muted blue
 // overhead. The fog has the horizon's colour, so the far ground fades into the
@@ -112,6 +118,8 @@ export class View3D {
         this.ground = new Ground(this.scene, this.gl);
         this.forest = new Forest(this.scene);
         this.tufts = new Tufts(this.scene);
+        this.lilies = new Lilies(this.scene);
+        this.frogs = new Frogs(this.scene);
         this.creatures = new Creatures(this.scene);
         this.effects = new Effects(this.scene, this.creatures.motion); // the dead, and blood
         this.thrown = new Thrown(this.scene); // spears in the air
@@ -141,6 +149,8 @@ export class View3D {
         this.ground.attach(world, this.terrain);
         this.forest.attach(world, this.terrain, this.ground);
         this.tufts.attach(world, this.terrain, this.ground);
+        this.lilies.attach(world, this.terrain);
+        this.frogs.attach(world, this.terrain, this.lilies.places);
         this.creatures.attach();
         this.effects.attach(this.heightAt);
         this.thrown.attach();
@@ -179,6 +189,8 @@ export class View3D {
         this.ground.place(view);
         this.forest.update(view, this.rig.pose.fy);
         this.tufts.update(world, view, this.rig.camera, this.heightAt);
+        this.lilies.update(view);
+        this.frogs.update(world, view, this.creatures.motion);
         // In first person we look out of the followed creature's eyes, so its
         // own body is not drawn (once the camera is close enough to be inside it).
         const inside = target && this.rig.mode === 'first' && this.rig.pose.dist < 6;
