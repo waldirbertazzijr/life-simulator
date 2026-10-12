@@ -26,15 +26,16 @@ import { Marker } from './marker.js';
 import { groundOf } from './util.js';
 import { stubTerrain } from './terrain-stub.js';
 
-// A soft daytime sky: pale and a little hazy at the horizon, a muted blue
+// A soft daytime sky: a light hazy blue at the horizon, a muted blue
 // overhead. The fog has the horizon's colour, so the far ground fades into the
 // haze the way distant hills do (aerial perspective).
-const SKY = '#c4d0d4';
+const SKY = '#b3c9da';
 const ZENITH = '#6f90ad';
-// The fog starts at this fraction of the far distance: near the ground, and
-// later from the map's height, so the map stays crisp and only its far edge,
-// toward the horizon, fades.
-const FOG_NEAR = { ground: 0.35, map: 0.62 };
+// The fog starts at this fraction of the far distance: about halfway near the
+// ground, so the near and middle ground stay crisp, and later from the map's
+// height, so the map stays crisp and only its far edge, toward the horizon,
+// fades.
+const FOG_NEAR = { ground: 0.5, map: 0.62 };
 
 // A dome around the camera with the sky's gradient, drawn behind everything.
 // Below the horizon it is the fog's colour. Above, it turns blue quickly

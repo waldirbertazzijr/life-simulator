@@ -3,7 +3,8 @@
 //   map    — a god view over the land. Drag pans, the wheel zooms, right-drag
 //            (or ctrl/shift-drag) turns and tilts; on a phone one finger pans,
 //            a pinch zooms and a two-finger twist turns. While someone is
-//            followed the map keeps them centred, until you pan away.
+//            followed the map keeps them centred, until you pan away. Zoomed
+//            in close, it tilts toward the horizon, so the sky comes into view.
 //   follow — behind and above the followed creature, turning as it turns.
 //            Dragging swings the camera around it; the wheel moves closer.
 //   first  — from its eyes, looking where it is heading. Dragging looks
@@ -27,7 +28,7 @@
 // only that offset glides: the camera never trails behind a running animal,
 // even at 64×.
 import * as THREE from 'three';
-import { wrap, wrapDelta, angleDelta, groundOf } from './util.js';
+import { wrap, wrapDelta, angleDelta, groundOf, meshHeight, smoothstep } from './util.js';
 
 const DEG = Math.PI / 180;
 
@@ -41,15 +42,28 @@ const BODY = {
 };
 
 const MAP_PITCH = 52 * DEG;   // the map's starting tilt (90° looks straight down)
+const MAP_TILT = [18 * DEG, 86 * DEG]; // how far right-drag tilts the map, zoomed out
 const FOLLOW_PITCH = 28 * DEG;
 const FIRST_PITCH = 5 * DEG;  // first person looks a little down
 const GLIDE = 0.3;            // seconds: view changes and zoom settle in about this long
 const PAN_GLIDE = 0.06;       // seconds: dragging the map follows the pointer closely
 const TURN = { follow: 1.0, first: 0.35 }; // seconds: how calmly the view turns with the creature
-// How far you can see (the fog's far end): proportional to the height in the
-// map, fixed when close to the ground.
-const FOG = { map: 2.4, follow: 1100, first: 700 };
+// How far you can see (the fog's far end): in the map, proportional to the
+// distance (a little beyond the screen's far corners, which are about 2.4×
+// away at the starting tilt), but never less than the follow view's, so the
+// map zoomed in still sees the hills on the horizon; fixed near the ground.
+const FOG = { map: 3.0, follow: 1100, first: 700 };
 const MAX_MAP_ZOOM = 1.3;     // × the distance that frames the whole world
+const CLOSEST = 25;           // the map's closest zoom (its distance to the ground it looks at)
+// Zoomed in close, the map tilts toward the horizon, as in Google Earth. As
+// its distance falls from TILT_FROM to CLOSEST (eased, in log scale, as the
+// wheel zooms), the slope of its line of sight (the tangent of the tilt)
+// shrinks to FLATTEN times that of the user's tilt, the one right-drag sets
+// and the map keeps zoomed out. That takes the starting 52° down to 15° at
+// the closest zoom, and keeps every tilt reachable: right-drag's 18°–86°
+// becomes 4°–72° there.
+const TILT_FROM = 400;
+const FLATTEN = Math.tan(15 * DEG) / Math.tan(MAP_PITCH);
 
 // Held keys, per second: the map pans this many times the camera's distance
 // (about a screen's height a second, at any zoom) and turns this fast; the
@@ -58,6 +72,15 @@ const KEY_RATE = { pan: 0.8, turn: 1.6, orbit: 1.8, zoom: 1.2, lookYaw: 1.6, loo
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const CORNERS = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
+
+// The tilt the map shows at distance `dist`, given the user's tilt, and back
+// (see TILT_FROM).
+const flattening = (dist) => FLATTEN ** smoothstep(Math.log(TILT_FROM), Math.log(CLOSEST), Math.log(dist));
+const tiltAt = (pitch, dist) => Math.atan(Math.tan(pitch) * flattening(dist));
+const userTilt = (seen, dist) => Math.atan(Math.tan(seen) / flattening(dist));
+
+// How far the map sees at distance `dist`.
+const mapFog = (dist) => Math.max(dist * FOG.map, FOG.follow);
 
 // Which held keys mean what. By physical key (event.code), so WASD sits under
 // the same fingers on any keyboard layout. None of them is one of the panel's
@@ -121,17 +144,18 @@ export class HeldKeys {
 export class CameraRig {
     constructor(canvas) {
         this.canvas = canvas;
-        this.camera = new THREE.PerspectiveCamera(45, 1, 1, 5000);
+        this.camera = new THREE.PerspectiveCamera(55, 1, 1, 5000);
         this.mode = 'map';
         this.w = 1;
         this.h = 1;
         this.W = 1;
         this.H = 1;
         this.ground = () => 0;
+        this.surface = () => 0;
         this.lowest = 0;
         // The camera now (`pose`), what the map view wants (`map`), the follow
         // view's user offsets (`orbit`) and the first-person look-around (`look`).
-        this.pose = { fx: 0, fz: 0, fy: 0, yaw: -Math.PI / 2, pitch: MAP_PITCH, dist: 1000, fov: 45, fogFar: 3000, mapness: 1 };
+        this.pose = { fx: 0, fz: 0, fy: 0, yaw: -Math.PI / 2, pitch: MAP_PITCH, dist: 1000, fov: 55, fogFar: 3000, mapness: 1 };
         this.map = { fx: 0, fz: 0, yaw: -Math.PI / 2, pitch: MAP_PITCH, dist: 1000, fit: 1000, track: false };
         this.orbit = { yaw: 0, pitch: FOLLOW_PITCH, zoom: 1 };
         this.look = { yaw: 0, pitch: 0 };
@@ -171,11 +195,12 @@ export class CameraRig {
         }
     }
 
-    // A vertical field of view per mode. On a tall phone screen it is widened
-    // so the view from side to side is not a slit.
+    // A vertical field of view per mode, wide enough to take in the land
+    // around. On a tall phone screen it is widened further so the view from
+    // side to side is not a slit.
     fovFor(mode) {
         const aspect = this.w / this.h;
-        const base = mode === 'map' ? 45 : mode === 'follow' ? 50 : 70;
+        const base = mode === 'map' ? 55 : mode === 'follow' ? 62 : 78;
         const across = mode === 'map' ? 0 : mode === 'follow' ? 34 : 62;
         const v = (2 * Math.atan(Math.tan((across * DEG) / 2) / aspect)) / DEG;
         return Math.min(Math.max(base, v), 90);
@@ -202,6 +227,10 @@ export class CameraRig {
         this.W = world.width;
         this.H = world.height;
         this.ground = groundOf(terrain, this.W, this.H);
+        // The ground as drawn (the mesh's triangles, see util.js), which the
+        // eye must stay above.
+        const out = [0, 0];
+        this.surface = terrain ? (x, z) => (meshHeight(terrain, x, z, out), out[0]) : () => 0;
         this.lowest = 0;
         if (terrain) {
             this.lowest = Infinity;
@@ -218,8 +247,8 @@ export class CameraRig {
         m.dist = m.fit;
         m.track = false;
         Object.assign(this.pose, {
-            fx: m.fx, fz: m.fz, fy: this.ground(m.fx, m.fz), yaw: m.yaw, pitch: m.pitch,
-            dist: m.dist, fov: this.fovFor('map'), fogFar: m.dist * FOG.map, mapness: 1,
+            fx: m.fx, fz: m.fz, fy: this.ground(m.fx, m.fz), yaw: m.yaw, pitch: tiltAt(m.pitch, m.dist),
+            dist: m.dist, fov: this.fovFor('map'), fogFar: mapFog(m.dist), mapness: 1,
         });
         this.place();
     }
@@ -259,10 +288,10 @@ export class CameraRig {
             want.fz = map.fz;
             want.fy = this.ground(map.fx, map.fz);
             want.yaw = map.yaw;
-            want.pitch = map.pitch;
+            want.pitch = tiltAt(map.pitch, map.dist);
             want.dist = map.dist;
             want.fov = this.fovFor('map');
-            want.fogFar = map.dist * FOG.map;
+            want.fogFar = mapFog(map.dist);
             want.mapness = 1;
         } else if (target) {
             const b = BODY[target.kind];
@@ -334,13 +363,19 @@ export class CameraRig {
         const ex = -Math.cos(pose.yaw) * cp * pose.dist;
         const ez = -Math.sin(pose.yaw) * cp * pose.dist;
         let ey = pose.fy + sp * pose.dist;
-        const floor = this.ground(pose.fx + ex, pose.fz + ez) + 1.5; // never look out from inside a hill
-        if (ey < floor) ey = floor;
+        const near = clamp(pose.dist * 0.02, 0.2, 40);
+        // Never look out from inside a hill: the eye stays above the ground as
+        // drawn, where it is and around it as far as the near edge of the view
+        // reaches (the map, zoomed in, skims the ground).
+        const reach = 2 * near;
+        let top = this.surface(pose.fx + ex, pose.fz + ez);
+        for (const [ax, az] of CORNERS) top = Math.max(top, this.surface(pose.fx + ex + ax * reach, pose.fz + ez + az * reach));
+        if (ey < top + 1.5) ey = top + 1.5;
         camera.position.set(ex, ey, ez);
         camera.lookAt(0, pose.fy, 0);
         camera.fov = pose.fov;
         camera.aspect = this.w / this.h;
-        camera.near = clamp(pose.dist * 0.02, 0.2, 40);
+        camera.near = near;
         camera.far = pose.fogFar * 1.05;
         camera.updateProjectionMatrix();
         camera.updateMatrixWorld();
@@ -484,8 +519,14 @@ export class CameraRig {
     // Right-drag (or any drag outside the map): turn and tilt.
     turn(dx, dy) {
         if (this.mode === 'map') {
-            this.map.yaw -= dx * 0.005;
-            this.map.pitch = clamp(this.map.pitch + dy * 0.004, 18 * DEG, 86 * DEG);
+            // The drag tilts what is seen at this zoom, at the same rate at
+            // any zoom, and is kept as the user's tilt it comes from.
+            const { map } = this;
+            map.yaw -= dx * 0.005;
+            const lo = tiltAt(MAP_TILT[0], map.dist);
+            const hi = tiltAt(MAP_TILT[1], map.dist);
+            const seen = clamp(tiltAt(map.pitch, map.dist) + dy * 0.004, lo, hi);
+            map.pitch = clamp(userTilt(seen, map.dist), MAP_TILT[0], MAP_TILT[1]);
         } else if (this.mode === 'follow') {
             this.orbit.yaw -= dx * 0.006;
             this.orbit.pitch = clamp(this.orbit.pitch + dy * 0.004, 4 * DEG, 85 * DEG);
@@ -496,7 +537,7 @@ export class CameraRig {
     }
 
     zoom(f) {
-        if (this.mode === 'map') this.map.dist = clamp(this.map.dist * f, 25, this.map.fit * MAX_MAP_ZOOM);
+        if (this.mode === 'map') this.map.dist = clamp(this.map.dist * f, CLOSEST, this.map.fit * MAX_MAP_ZOOM);
         else if (this.mode === 'follow') this.orbit.zoom = clamp(this.orbit.zoom * f, 0.3, 3);
     }
 
