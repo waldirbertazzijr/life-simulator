@@ -315,7 +315,7 @@ export function afterStep(world) {
     pl.x = pop.x[next];
     pl.y = pop.y[next];
     pl.heading = pop.heading[next];
-    world.events.push({ type: 'heir', from, to: pl.id, time });
+    world.events.push({ type: 'heir', from, to: pl.id, parent: pop.parent[next], time }); // parent: the heir's (an id, 0 if none)
     world.follow(pl.id);
 }
 

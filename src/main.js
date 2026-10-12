@@ -6,13 +6,24 @@
 // (mirror.js): the world as of the simulation's latest snapshots, with
 // positions blended for the moment being drawn. `?noworker` (or a browser
 // without module workers) runs the very same simulation code on this thread.
+//
+// Playing a person (play/): with a mouse and the 3D view, anyone's card
+// offers "become them", and Play leads a tribe. In a body the play keys
+// (play/input.js) move it (play/body.js), the camera looks over its shoulder
+// or from its eyes, the HUD shows (play/hud.js), and play/modes.js keeps
+// who you are and what happens to you.
 import { params } from './config.js';
 import { Renderer } from './render.js';
 import { Panel } from './ui.js';
 import { Mirror } from './mirror.js';
 import { localHost } from './sim.js';
+import { Input } from './play/input.js';
+import { Hud } from './play/hud.js';
+import { Modes } from './play/modes.js';
+import { personName } from './play/names.js';
 
 const VIEWS = ['map', 'follow', 'first'];
+const BLOOD_KEY = 'life-simulator.blood';
 
 const query = new URLSearchParams(location.search);
 const { renderer, canvas } = await createRenderer(document.getElementById('world'));
@@ -23,6 +34,11 @@ let speed = 1;
 let paused = false;
 let followId = 0;
 let followKind = 'herbivore';
+// You can play in the 3D view, on anything but a touch-only device (desktop
+// first: touch controls are for later). (A headless browser has no pointer
+// at all, and may play.)
+const touchOnly = matchMedia('(pointer: coarse)').matches && !matchMedia('(any-pointer: fine)').matches;
+const canPlay = !!renderer.rig && !touchOnly;
 
 // A Web Worker running the simulation, or (?noworker) the same simulation here.
 function createHost() {
@@ -60,13 +76,15 @@ function setView(view) {
     panel.setView(view);
 }
 
-function follow(id) {
+// Follow anyone (from the map, the camera comes down to them, unless
+// `keepView`).
+function follow(id, keepView = false) {
     const found = world.find(id);
     if (!found) return;
     followId = id;
     followKind = found.kind;
     world.follow(id);
-    if (renderer.mode === 'map') setView('follow');
+    if (renderer.mode === 'map' && !keepView) setView('follow');
     panel.showFollow(world, followId, found);
 }
 
@@ -106,12 +124,36 @@ function setSpeed(s) {
     panel.setSpeed(s);
 }
 
+// Blood sprays and pools (the 3D view draws them): on unless turned off, as
+// remembered by this browser, or `?noblood`.
+let blood = !query.has('noblood');
+if (blood) {
+    try {
+        blood = localStorage.getItem(BLOOD_KEY) !== 'off';
+    } catch {
+        // (no storage here: on)
+    }
+}
+function setBlood(on) {
+    blood = on;
+    try {
+        localStorage.setItem(BLOOD_KEY, on ? 'on' : 'off');
+    } catch {
+        // (no storage here: for this visit only)
+    }
+    renderer.setBlood?.(on);
+    panel.setBlood(on);
+}
+
 const panel = new Panel({
     togglePause() {
         setPaused(!paused);
     },
     setSpeed,
-    reset() {
+    // The R key never starts a new world while you play someone: in a body
+    // it means "eat", and a slip would wipe your game.
+    reset(byKey = false) {
+        if (byKey && modes.self) return;
         start(Math.floor(Math.random() * 1e6));
     },
     start,
@@ -132,7 +174,61 @@ const panel = new Panel({
         const id = eldest(tribeId);
         if (id) follow(id);
     },
+    // (Your own person's way back is the bar above the card: return.)
+    becomeLabel(id) {
+        return canPlay && modes.canBecome(id) ? 'become them' : null;
+    },
+    become(id) {
+        if (modes.become(id)) input.lock(); // (this click is a user gesture: the pointer can be locked now)
+    },
+    openPicker() {
+        panel.openPicker(world);
+    },
+    play(tribeId) {
+        if (modes.startPlay(tribeId)) input.lock();
+    },
+    back() {
+        if (modes.back()) input.lock();
+    },
+    stop() {
+        modes.stop();
+    },
+    setBlood,
 });
+panel.setBlood(blood);
+renderer.setBlood?.(blood);
+
+const input = new Input({ target: window, canvas, doc: document });
+const hud = new Hud(document);
+const modes = new Modes({
+    world, input, hud,
+    rig: () => renderer.rig ?? null,
+    follow,
+    followed: () => followId,
+    setView,
+    setSpeed,
+    getSpeed: () => speed,
+    setPaused,
+    getPaused: () => paused,
+    inBody(on) {
+        document.body.classList.toggle('in-body', on);
+        panel.suspend(on);
+        // The panel's buttons would otherwise keep the keyboard's focus.
+        if (on && document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    },
+    openPicker: () => panel.openPicker(world),
+    changed: () => showPlay(),
+});
+
+function showPlay() {
+    panel.showPlay(world, {
+        can: canPlay,
+        self: modes.self,
+        inBody: modes.inBody,
+        tribe: world.tribeById.get(modes.tribe) ?? null,
+        playing: modes.game === 'play',
+    });
+}
 
 // Sparkline samples, every 50 steps, come with the snapshots.
 world.onSamples = (s) => {
@@ -143,6 +239,7 @@ function start(seed) {
     world.reset(params, seed, window.innerWidth / window.innerHeight);
     renderer.attach(world);
     panel.reset(world);
+    modes.reset();
     unfollow();
     // Keep ?seed= in the address, so reloading or sharing it gives this world
     // (other flags, such as ?2d, stay as they were typed).
@@ -168,17 +265,20 @@ async function createRenderer(canvas) {
     return { renderer: new Renderer(canvas), canvas };
 }
 
-// Click (or tap) anyone to follow them.
+// Click (or tap) anyone to follow them. (In a body a click is the body's:
+// it locks the pointer, or attacks.)
 canvas.addEventListener('click', (e) => {
+    if (modes.inBody) return;
     const rect = canvas.getBoundingClientRect();
     const id = renderer.pick(world, e.clientX - rect.left, e.clientY - rect.top);
     if (id) follow(id);
 });
 
 // Each frame: (with ?noworker, step the simulation here, by real elapsed time
-// as before), bring the mirror up to this moment, draw. The worker keeps its
-// own fixed-timestep clock (sim.js), so a given speed looks the same at any
-// frame rate.
+// as before), move your body, bring the mirror up to this moment, see what
+// happened to you, draw, and the HUD over it. The worker keeps its own
+// fixed-timestep clock (sim.js), so a given speed looks the same at any frame
+// rate. (A frame is at most 100 ms: a hidden tab coming back does not jump.)
 let last = performance.now();
 let lastUi = 0;
 function frame(now) {
@@ -186,20 +286,29 @@ function frame(now) {
     const dt = Math.min(now - last, 100);
     last = now;
     world.host.tick?.(now);
+    modes.move(dt / 1000);
     world.update(now, dt);
+    modes.after(dt / 1000);
 
     const target = followId ? world.find(followId) : null;
-    const focusId = target ? target.pop.focus[target.i] : 0;
-    const focus = focusId ? world.find(focusId) : null;
-    const sense = target ? world.p[target.kind].sense * target.pop.senseGene[target.i] : 0;
     const t1 = performance.now();
     renderer.updateCamera(world, target, dt / 1000);
-    renderer.draw(world, target, focus, sense);
+    if (modes.inBody) {
+        // Your own body: no marker under it; from the eyes, not drawn at all.
+        renderer.draw(world, renderer.mode === 'first' ? target : null, null, 0);
+        modes.drawHud(dt / 1000);
+    } else {
+        const focusId = target ? target.pop.focus[target.i] : 0;
+        const focus = focusId ? world.find(focusId) : null;
+        const sense = target ? world.p[target.kind].sense * target.pop.senseGene[target.i] : 0;
+        renderer.draw(world, target, focus, sense);
+    }
     frameMs += (performance.now() - t1 - frameMs) * 0.05;
 
     if (now - lastUi > 250) {
         panel.update(world);
         panel.showFollow(world, followId, target);
+        showPlay();
         lastUi = now;
     }
     mainMs += (performance.now() - t0 - mainMs) * 0.05;
@@ -239,4 +348,62 @@ window.sim = {
     get worker() { return !world.host.local; },
     get timing() { return world.timing(); },
     renderer,
+};
+
+// And for playing from the console, or a headless browser (which cannot lock
+// the pointer: it drags, or sets the look here):
+//   play.become(id)      step into a person (default: the first one)
+//   play.start(tribeId)  Play: lead a tribe (default: the biggest)
+//   play.leave(), play.back(), play.stop()   to the map, back in, let go
+//   play.picker()        Play's choice of tribes
+//   play.view('first' | 'shoulder'), play.look(yaw, pitch)
+//   play.hold(code, ms)  hold a key (e.g. 'KeyW') for ms; resolves when let go
+//   play.press(code)     tap a key
+//   play.banner(kind, text), play.over()   show a banner; end the line now
+//   play.state           who, where, stamina, snaps (moves turned down)...
+//   play.modes
+const key = (type, code) => window.dispatchEvent(new KeyboardEvent(type, { code, key: code, bubbles: true }));
+window.play = {
+    // (Only in the 3D view: the flat one has no over-the-shoulder camera.)
+    become(id = world.humans.id[0]) {
+        return !!renderer.rig && modes.become(id);
+    },
+    start(tribeId = [...world.tribes].sort((a, b) => b.members - a.members)[0]?.id) {
+        return !!renderer.rig && modes.startPlay(tribeId);
+    },
+    leave: () => modes.leave(),
+    back: () => modes.back(),
+    stop: () => modes.stop(),
+    picker: () => panel.openPicker(world),
+    view(v) {
+        if (modes.inBody && v !== modes.view) modes.action('view');
+    },
+    look(yaw, pitch) {
+        modes.body.yaw = yaw;
+        if (pitch !== undefined) modes.body.pitch = pitch;
+    },
+    hold(code, ms) {
+        key('keydown', code);
+        return new Promise((resolve) => setTimeout(() => {
+            key('keyup', code);
+            resolve();
+        }, ms));
+    },
+    press(code) {
+        key('keydown', code);
+        key('keyup', code);
+    },
+    banner: (kind, text) => hud.banner(kind, text),
+    over: () => modes.gameOver(),
+    get state() {
+        const p = world.player;
+        return {
+            game: modes.game, self: modes.self, name: modes.self ? personName(modes.self) : null,
+            inBody: modes.inBody, view: modes.view, mode: renderer.mode, resting: modes.resting, lock: modes.lock,
+            stamina: Math.round(modes.body.stamina), x: +modes.body.x.toFixed(2), y: +modes.body.y.toFixed(2),
+            snaps: modes.stats.snaps, placed: modes.stats.placed, speed, paused,
+            player: p ? { id: p.id, x: +p.x.toFixed(2), y: +p.y.toFixed(2), auto: p.auto, spirit: +p.spirit.toFixed(1), resting: p.resting } : null,
+        };
+    },
+    modes,
 };

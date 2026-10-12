@@ -5,6 +5,10 @@
 // meanGenes(), descendant(), kindOf(), follow()), filled from the snapshots
 // the simulation sends (sim.js). It never steps.
 //
+// The one exception is the body you play (play/): the page moves it, so it
+// is drawn where the page has it (`pose`), and the simulation, told by
+// control(), input() and act(), follows and reports on it (`player`).
+//
 // The land never changes, so it is not sent at all: it is a pure function of
 // the seed and the parameters, and reset() builds the same World here, keeps
 // its terrain and grass grid, and checks it against the simulation's own
@@ -66,6 +70,15 @@ export class Mirror {
         // What happened (World.events) at moments that came into view this
         // frame, oldest first: read it each frame, it is replaced by the next.
         this.events = NO_EVENTS;
+        // The person you control (play/): the latest snapshot's `player`
+        // (null: nobody), and whether any snapshot since `snapped` was last
+        // cleared asked the page to jump its body to the simulation's.
+        this.player = null;
+        this.snapped = false;
+        // The body you are in, as the page has moved it: {id, x, y, heading},
+        // drawn there instead of where the snapshots have it. Null: nobody.
+        this.pose = null;
+        this.posed = false;     // the blended positions hold a pose
 
         // Plumbing.
         this.pops = [this.herbivores, this.carnivores, this.humans];
@@ -147,6 +160,21 @@ export class Mirror {
         this.host.send({ type: 'set', path, value });
     }
 
+    // Take over the person `id` ('god' or 'play' mode; 0 lets go), and steer
+    // it: the body's position and posture each frame, and one-off acts such
+    // as a roll (play/modes.js; the simulation side is player.js).
+    control(id, mode) {
+        this.host.send({ type: 'control', id, mode });
+    }
+
+    input(msg) {
+        this.host.send({ type: 'input', ...msg });
+    }
+
+    act(msg) {
+        this.host.send({ type: 'act', ...msg });
+    }
+
     // Test hook: run `steps` steps at once in the simulation; resolves to
     // { time, counts, digest } (see Sim.run).
     run(steps) {
@@ -174,6 +202,10 @@ export class Mirror {
         this.history = [];
         this.pending = [];
         this.events = NO_EVENTS;
+        this.player = null;
+        this.snapped = false;
+        this.pose = null;
+        this.posed = false;
         this.base = null;
         this.known = new Map();
         this.watch = 0;
@@ -249,6 +281,8 @@ export class Mirror {
         }
         if (snap.samples.length && this.onSamples) this.onSamples(snap.samples);
         if (snap.events?.length) this.pending.push(snap.time, snap.events);
+        this.player = snap.player ?? null;
+        if (this.player?.snap) this.snapped = true;
 
         const hist = this.history;
         const latest = hist[hist.length - 1];
@@ -308,8 +342,9 @@ export class Mirror {
             }
             if (b !== this.base) this.show(b);
             const drawn = this.drawn;
-            if (a !== drawn.a || b !== drawn.b || alpha !== drawn.alpha) this.blend(a, b, alpha);
+            if (a !== drawn.a || b !== drawn.b || alpha !== drawn.alpha || (this.posed && !this.pose)) this.blend(a, b, alpha);
             this.shown = a ? a.time + (b.time - a.time) * alpha : b.time; // the step being drawn, with its fraction
+            this.applyPose();
         }
         // Events come into view with the moment they happened at.
         const pending = this.pending;
@@ -429,6 +464,24 @@ export class Mirror {
                 else if (dh < -Math.PI) dh += TAU;
                 heading[i] = to.heading[i] - dh * (1 - alpha);
             }
+        }
+    }
+
+    // The body you are in is drawn where the page has moved it, over the
+    // blended position (which is a little behind: the simulation follows it).
+    applyPose() {
+        const pose = this.pose;
+        this.posed = false;
+        if (!pose) return;
+        const pop = this.humans;
+        const ids = pop.id;
+        for (let i = 0; i < pop.n; i++) {
+            if (ids[i] !== pose.id) continue;
+            pop.x[i] = pose.x;
+            pop.y[i] = pose.y;
+            pop.heading[i] = pose.heading;
+            this.posed = true;
+            return;
         }
     }
 

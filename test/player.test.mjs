@@ -675,7 +675,7 @@ test('death passes control to a child', () => {
         assert.equal(w.player.mode, mode);
         if (mode === 'play') assert.equal(w.player.tribe, other.id);
         const [heir] = happened(w, 'heir', id);
-        assert.deepEqual(heir, { type: 'heir', from: id, to: child, time: w.time - 1 });
+        assert.deepEqual(heir, { type: 'heir', from: id, to: child, parent: id, time: w.time - 1 });
         const p = playerSnapshot(w);
         assert.equal(p.id, child);
         assert.equal(p.heir, child);

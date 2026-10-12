@@ -1,8 +1,13 @@
 // The one panel: controls, the individual being followed, population
-// sparklines, average genes and the list of tribes.
+// sparklines, average genes and the list of tribes. And the way into play
+// (play/modes.js): "become them" on a person's card, Play with its choice of
+// tribe, and, while your person is on the map, a bar to return to them. In
+// a body the panel hides, and its shortcuts wait.
 import { COLORS } from './render.js';
 import { drawFlag } from './flag.js';
 import { STATE, STATE_LABEL } from './world.js';
+import { personName, ageText, years } from './play/names.js';
+import { mostExperienced, eldestOf } from './play/modes.js';
 
 // States shown in the alarm colour.
 const ALARM = new Set([STATE.FLEEING, STATE.CHASING, STATE.FIGHTING, STATE.RAIDING]);
@@ -76,12 +81,18 @@ class Sparkline {
 }
 
 export class Panel {
-    // actions: { togglePause, setSpeed(n), reset, start(seed), setView(v), cycleView,
-    //            unfollow, followDescendant, followAnother, followTribe(id) }
+    // actions: { togglePause, setSpeed(n), reset(byKey), start(seed), setView(v), cycleView,
+    //            unfollow, followDescendant, followAnother, followTribe(id),
+    //            becomeLabel(id) → 'become them' | null, become(id), openPicker,
+    //            play(tribeId), back(), stop(), setBlood(on) }
     constructor(actions) {
         this.$ = (id) => document.getElementById(id);
         this.actions = actions;
         this.tribeRows = new Map();
+        this.suspended = false; // in a body: the shortcuts are the body's (play/input.js)
+        this.blood = true;
+        this.followId = 0;
+        this.selfShown = null;
 
         this.lines = {
             grass: new Sparkline(this.$('spark-grass'), css('--grass'), 1),
@@ -106,6 +117,21 @@ export class Panel {
         for (const b of document.querySelectorAll('[data-view]')) {
             b.addEventListener('click', () => actions.setView(b.dataset.view));
         }
+        this.$('f-become').addEventListener('click', () => actions.become(this.followId));
+        this.$('play').addEventListener('click', () => {
+            if (this.$('picker').hidden) actions.openPicker();
+            else this.closePicker();
+        });
+        this.$('picker-close').addEventListener('click', () => this.closePicker());
+        this.$('picker-list').addEventListener('click', (e) => {
+            const row = e.target.closest('[data-tribe]');
+            if (!row) return;
+            this.closePicker();
+            actions.play(Number(row.dataset.tribe));
+        });
+        this.$('play-return').addEventListener('click', () => actions.back());
+        this.$('play-stop').addEventListener('click', () => actions.stop());
+        this.$('blood').addEventListener('click', () => actions.setBlood(!this.blood));
 
         // The seed field: type a number, Enter starts that world; Escape (or
         // clicking away) puts back the current one. Keys typed here are the
@@ -136,12 +162,12 @@ export class Panel {
         });
 
         window.addEventListener('keydown', (e) => {
-            if (e.metaKey || e.ctrlKey || e.altKey) return;
+            if (this.suspended || e.metaKey || e.ctrlKey || e.altKey) return;
             if (e.target instanceof Element && e.target.closest('input, textarea, select, [contenteditable]')) return;
             if (e.key === ' ') {
                 e.preventDefault();
                 actions.togglePause();
-            } else if (e.key === 'r') actions.reset();
+            } else if (e.key === 'r') actions.reset(true);
             else if (e.key === 'h') this.toggleCollapsed();
             else if (e.key === 'Escape') actions.unfollow();
             else if (e.key === 'v') actions.cycleView();
@@ -158,6 +184,74 @@ export class Panel {
     fitSeed() {
         const seed = this.$('seed');
         seed.style.width = `${Math.max(1, seed.value.length)}ch`;
+    }
+
+    // In a body the panel is hidden (index.html) and its shortcuts wait.
+    suspend(on) {
+        this.suspended = on;
+        if (on) this.closePicker();
+    }
+
+    setBlood(on) {
+        this.blood = on;
+        const b = this.$('blood');
+        b.title = on ? 'Blood: on' : 'Blood: off';
+        b.setAttribute('aria-pressed', String(on));
+    }
+
+    // Play and your person on the map: `play` = { can (the 3D view, not a
+    // touch-only device), self, inBody, tribe (yours, or null), playing }.
+    showPlay(world, play) {
+        const $ = this.$;
+        $('play').hidden = !play.can || !!play.self;
+        const bar = $('play-bar');
+        bar.hidden = !play.self || play.inBody;
+        if (bar.hidden) return;
+        const key = `${play.self}:${play.tribe?.id}`;
+        if (key === this.selfShown) return;
+        this.selfShown = key;
+        const flag = $('play-flag');
+        const ctx = flag.getContext('2d');
+        ctx.clearRect(0, 0, flag.width, flag.height);
+        if (play.tribe) drawFlag(ctx, play.tribe.flag, 0, 0, flag.width, flag.height);
+        $('play-who').textContent = `${play.playing ? 'leading as' : 'playing'} ${personName(play.self)}`;
+        $('play-who').title = play.tribe ? `${personName(play.self)} of the ${play.tribe.name}` : '';
+    }
+
+    // Play: the living tribes, each with who you would begin as.
+    openPicker(world) {
+        const list = this.$('picker-list');
+        list.textContent = '';
+        // (Counted here: a tribe's own count waits for the world's first step.)
+        const members = new Map();
+        const pop = world.humans;
+        for (let i = 0; i < pop.n; i++) members.set(pop.tribe[i], (members.get(pop.tribe[i]) ?? 0) + 1);
+        for (const t of [...world.tribes].sort((a, b) => (members.get(b.id) ?? 0) - (members.get(a.id) ?? 0))) {
+            const id = mostExperienced(world, t.id) || eldestOf(world, t.id);
+            if (!id) continue;
+            const found = world.find(id);
+            const row = document.createElement('button');
+            row.className = 'pick-row';
+            row.dataset.tribe = t.id;
+            row.title = `Lead the ${t.name}`;
+            row.innerHTML = '<canvas width="36" height="24"></canvas><span class="name"><span class="t"></span><span class="as"></span></span><span class="n"></span>'
+                + '<span class="bar aggr"><span></span></span><span class="bar soc"><span></span></span>';
+            drawFlag(row.querySelector('canvas').getContext('2d'), t.flag, 0, 0, 36, 24);
+            row.querySelector('.t').textContent = t.name;
+            const kills = found ? found.pop.kills[found.i] : 0;
+            row.querySelector('.as').textContent = `as ${personName(id)}${found ? `, ${ageText(found.pop.age[found.i])}` : ''}`
+                + `${kills ? `, ${kills} ${kills === 1 ? 'kill' : 'kills'}` : ''}`;
+            row.querySelector('.n').textContent = members.get(t.id) ?? 0;
+            row.querySelector('.aggr span').style.width = `${t.aggression * 100}%`;
+            row.querySelector('.soc span').style.width = `${t.sociality * 100}%`;
+            list.appendChild(row);
+        }
+        this.$('picker').hidden = false;
+        if (this.$('panel').classList.contains('collapsed')) this.toggleCollapsed();
+    }
+
+    closePicker() {
+        this.$('picker').hidden = true;
     }
 
     toggleCollapsed() {
@@ -190,6 +284,7 @@ export class Panel {
         const $ = this.$;
         const card = $('follow');
         card.hidden = !id;
+        this.followId = id;
         $('panel').classList.toggle('following', !!id);
         if (!id) return;
 
@@ -198,7 +293,15 @@ export class Panel {
         const P = world.p[kind];
         const person = kind === 'human';
         $('f-swatch').className = `swatch ${kind}`;
-        $('f-name').textContent = `${person ? 'person' : kind} #${id}`;
+        $('f-name').textContent = person ? personName(id) : `${kind} #${id}`;
+        // Become them.
+        const become = $('f-become');
+        const label = person && target ? this.actions.becomeLabel(id) : null;
+        become.hidden = !label;
+        if (label && become.textContent !== label) {
+            become.textContent = label;
+            become.title = 'Play as this person';
+        }
         for (const k of ['f-kills-k', 'f-kills-m', 'f-kills']) $(k).hidden = kind === 'herbivore';
         for (const k of ['f-carry-k', 'f-carry-m', 'f-carry']) $(k).hidden = !person || !target;
         $('f-fate').hidden = !!target;
@@ -227,7 +330,7 @@ export class Panel {
             $('f-energy').textContent = Math.round(e);
             $('f-energy-bar').style.width = `${Math.min(100, (e / P.maxEnergy) * 100)}%`;
             const life = pop.age[i] / pop.lifespan[i];
-            $('f-age').textContent = `${Math.round(life * 100)}%`;
+            $('f-age').textContent = person ? ageText(pop.age[i]) : `${Math.round(life * 100)}%`;
             $('f-age-bar').style.width = `${Math.min(100, life * 100)}%`;
             const avg = world.meanGenes(pop);
             $('f-speed').textContent = pop.speedGene[i].toFixed(2);
@@ -251,14 +354,15 @@ export class Panel {
         }
         const how = {
             eaten: `Eaten by carnivore #${fate.by}`,
-            hunted: `Speared by person #${fate.by}`,
-            killed: fate.by ? `Killed by person #${fate.by}` : 'Killed by defenders while raiding',
+            hunted: `Speared by ${personName(fate.by)}`,
+            killed: fate.by ? `Killed by ${personName(fate.by)}` : 'Killed by defenders while raiding',
             starvation: 'Starved',
             'old age': 'Died of old age',
         }[fate.cause];
         const kids = `${fate.children} ${fate.children === 1 ? 'child' : 'children'}`;
         const kills = kind !== 'herbivore' ? `, ${fate.kills} ${fate.kills === 1 ? 'kill' : 'kills'}` : '';
-        $('f-fate-text').textContent = `${how} at age ${Math.round(fate.age)}. Left ${kids}${kills}.`;
+        const when = person ? `aged ${years(fate.age)}` : `at age ${Math.round(fate.age)}`;
+        $('f-fate-text').textContent = `${how} ${when}. Left ${kids}${kills}.`;
         $('f-children').textContent = fate.children;
         $('f-kills').textContent = fate.kills;
         $('f-descendant').disabled = !world.descendant(id);
@@ -298,6 +402,8 @@ export class Panel {
     }
 
     reset(world) {
+        this.closePicker();
+        this.selfShown = null;
         for (const row of this.tribeRows.values()) row.remove();
         this.tribeRows = new Map(); // a new world reuses tribe ids
         for (const l of Object.values(this.lines)) l.clear();

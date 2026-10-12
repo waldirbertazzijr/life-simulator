@@ -10,6 +10,16 @@
 //   first  — from its eyes, looking where it is heading. Dragging looks
 //            around; the view drifts back to straight ahead when you let go.
 //
+// In a body you play (play/), the camera looks where you look rather than
+// where the body heads: `aim` = { yaw, pitch, crouch } (the page's mouse
+// look, play/body.js) is set, and the mouse and keys steer the body, not
+// the camera. Two views then:
+//   shoulder — behind the body, a little to its right and slightly above
+//            its eyes, looking along the aim; the wheel moves it closer.
+//   first  — from its eyes, looking along the aim.
+// Switching into either glides as any view change does, then the camera
+// holds fast to the body (SETTLE), so the look answers the mouse at once.
+//
 // The keyboard (WASD or the arrow keys, the same) does the same as dragging,
 // for as long as a key is held:
 //   map    — W/S pan forward and back (the way the camera faces), A/D pan
@@ -48,6 +58,13 @@ const FIRST_PITCH = 5 * DEG;  // first person looks a little down
 const GLIDE = 0.3;            // seconds: view changes and zoom settle in about this long
 const PAN_GLIDE = 0.06;       // seconds: dragging the map follows the pointer closely
 const TURN = { follow: 1.0, first: 0.35 }; // seconds: how calmly the view turns with the creature
+// Over the shoulder: how far behind the focus the camera sits, how far to
+// the body's right the focus is, and how far above the eyes; crouching
+// lowers the eyes by CROUCH. A body's views glide in, then hold fast after
+// SETTLE seconds.
+const SHOULDER = { back: 11, right: 1.8, up: 0.9 };
+const CROUCH = 1.5;
+const SETTLE = 0.7;
 // How far you can see (the fog's far end): in the map, proportional to the
 // distance (a little beyond the screen's far corners, which are about 2.4×
 // away at the starting tilt), but never less than the follow view's, so the
@@ -159,6 +176,9 @@ export class CameraRig {
         this.map = { fx: 0, fz: 0, yaw: -Math.PI / 2, pitch: MAP_PITCH, dist: 1000, fit: 1000, track: false };
         this.orbit = { yaw: 0, pitch: FOLLOW_PITCH, zoom: 1 };
         this.look = { yaw: 0, pitch: 0 };
+        this.aim = null;            // in a body: { yaw, pitch, crouch }, see the header
+        this.shoulderZoom = 1;
+        this.since = 0;             // seconds since the view (or the creature) changed
         this.want = { ...this.pose };
         this.anchor = 0;            // id of the creature the camera is attached to
         this.rel = { x: 0, z: 0 };  // focus − that creature's position
@@ -184,6 +204,7 @@ export class CameraRig {
     setMode(mode) {
         if (mode === this.mode) return;
         this.mode = mode;
+        this.since = 0;
         this.look.yaw = 0;
         this.look.pitch = 0;
         if (mode === 'map') {
@@ -200,8 +221,8 @@ export class CameraRig {
     // side to side is not a slit.
     fovFor(mode) {
         const aspect = this.w / this.h;
-        const base = mode === 'map' ? 55 : mode === 'follow' ? 62 : 78;
-        const across = mode === 'map' ? 0 : mode === 'follow' ? 34 : 62;
+        const base = { map: 55, follow: 62, shoulder: 62, first: 78 }[mode];
+        const across = { map: 0, follow: 34, shoulder: 40, first: 62 }[mode];
         const v = (2 * Math.atan(Math.tan((across * DEG) / 2) / aspect)) / DEG;
         return Math.min(Math.max(base, v), 90);
     }
@@ -257,10 +278,15 @@ export class CameraRig {
     // creature ({ kind, pop, i }) or null; `dt` is real seconds.
     update(world, target, dt) {
         const { pose, map, W, H } = this;
-        if (this.keys.any) this.steer(dt);
-        const k = 1 - Math.exp(-dt / GLIDE);
+        const aim = this.mode !== 'map' ? this.aim : null;
+        if (this.keys.any && !aim) this.steer(dt);
         const id = target ? target.pop.id[target.i] : 0;
         const tracking = id !== 0 && (this.mode !== 'map' || map.track);
+        if (tracking && id !== this.anchor) this.since = 0; // a new body (an heir) is glided to as well
+        this.since += dt;
+        // In a body, the glide shortens to nothing as the view settles.
+        const glide = aim ? GLIDE * Math.max(0, 1 - this.since / SETTLE) : GLIDE;
+        const k = glide > 0 ? 1 - Math.exp(-dt / glide) : 1;
         let tx = 0;
         let tz = 0;
         if (target) {
@@ -305,14 +331,26 @@ export class CameraRig {
                 want.dist = b.back * this.orbit.zoom;
                 want.fov = this.fovFor('follow');
                 want.fogFar = FOG.follow;
+            } else if (this.mode === 'shoulder') {
+                // Behind and to the right of the body, looking where you look.
+                const yaw = aim ? aim.yaw : this.heading;
+                want.fx = tx - Math.sin(yaw) * SHOULDER.right;
+                want.fz = tz + Math.cos(yaw) * SHOULDER.right;
+                want.fy = gy + b.eye + SHOULDER.up - (aim?.crouch ? CROUCH : 0);
+                want.yaw = yaw;
+                want.pitch = aim ? aim.pitch : FOLLOW_PITCH / 2;
+                want.dist = SHOULDER.back * this.shoulderZoom;
+                want.fov = this.fovFor('shoulder');
+                want.fogFar = FOG.follow;
             } else {
                 // The eyes, and a focus one unit in front of them.
-                const yaw = this.heading + this.look.yaw;
-                const pitch = FIRST_PITCH + this.look.pitch;
+                const ahead = aim ? aim.yaw : this.heading;
+                const yaw = aim ? aim.yaw : this.heading + this.look.yaw;
+                const pitch = aim ? aim.pitch : FIRST_PITCH + this.look.pitch;
                 const cp = Math.cos(pitch);
-                want.fx = tx + Math.cos(this.heading) * b.ahead + Math.cos(yaw) * cp;
-                want.fz = tz + Math.sin(this.heading) * b.ahead + Math.sin(yaw) * cp;
-                want.fy = gy + b.eye - Math.sin(pitch);
+                want.fx = tx + Math.cos(ahead) * b.ahead + Math.cos(yaw) * cp;
+                want.fz = tz + Math.sin(ahead) * b.ahead + Math.sin(yaw) * cp;
+                want.fy = gy + b.eye - (aim?.crouch ? CROUCH : 0) - Math.sin(pitch);
                 want.yaw = yaw;
                 want.pitch = pitch;
                 want.dist = 1;
@@ -346,7 +384,7 @@ export class CameraRig {
 
         // First-person look-around drifts back once the pointer (or the
         // keys) let go.
-        if (!this.pointers.size && !(this.mode === 'first' && (this.keys.x || this.keys.y))) {
+        if (!aim && !this.pointers.size && !(this.mode === 'first' && (this.keys.x || this.keys.y))) {
             const s = Math.exp(-dt / 0.8);
             this.look.yaw *= s;
             this.look.pitch *= s;
@@ -516,8 +554,10 @@ export class CameraRig {
         map.track = false; // panning lets go of whoever was centred
     }
 
-    // Right-drag (or any drag outside the map): turn and tilt.
+    // Right-drag (or any drag outside the map): turn and tilt. (In a body the
+    // drag looks around through the aim instead: play/input.js.)
     turn(dx, dy) {
+        if (this.aim && this.mode !== 'map') return;
         if (this.mode === 'map') {
             // The drag tilts what is seen at this zoom, at the same rate at
             // any zoom, and is kept as the user's tilt it comes from.
@@ -539,6 +579,25 @@ export class CameraRig {
     zoom(f) {
         if (this.mode === 'map') this.map.dist = clamp(this.map.dist * f, CLOSEST, this.map.fit * MAX_MAP_ZOOM);
         else if (this.mode === 'follow') this.orbit.zoom = clamp(this.orbit.zoom * f, 0.3, 3);
+        else if (this.mode === 'shoulder') this.shoulderZoom = clamp(this.shoulderZoom * f, 0.6, 2.5);
+    }
+
+    // Bring the map down to at most `dist` (rising from a body: close enough
+    // to watch it walk on).
+    closeIn(dist) {
+        this.map.dist = clamp(Math.min(this.map.dist, dist), CLOSEST, this.map.fit * MAX_MAP_ZOOM);
+    }
+
+    // Where the world point (x, y), h above the ground's zero, is on screen
+    // (CSS pixels, into out.x and out.y); false if it is behind the camera.
+    project(x, y, h, out) {
+        const v = this.v.set(wrapDelta(x - this.pose.fx, this.W), h, wrapDelta(y - this.pose.fz, this.H));
+        v.applyMatrix4(this.camera.matrixWorldInverse);
+        if (v.z > -this.camera.near) return false;
+        v.applyMatrix4(this.camera.projectionMatrix);
+        out.x = (v.x + 1) * 0.5 * this.w;
+        out.y = (1 - v.y) * 0.5 * this.h;
+        return true;
     }
 
     // Held keys, for `dt` seconds (see the header). They move what the mouse
