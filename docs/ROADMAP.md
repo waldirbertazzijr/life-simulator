@@ -55,7 +55,9 @@ people survived in all 20. Sociality pays; aggression is roughly break-even
   loners, rather than just balance;
 - alliances and trade between peaceful neighbours.
 
-## Stage 2: 3D world (three.js)
+## Stage 2: 3D world (three.js) ← now
+
+Plan, rules and work-package briefs: [docs/stage2/](stage2/README.md).
 
 - Terrain with mountains (blocking movement and sight), lakes and rivers.
   Fertility follows the land: lush valleys, bare peaks.
