@@ -6,10 +6,15 @@
 // arrays (population.js), neighbour search uses a counting-sort spatial hash
 // rebuilt every step without allocating (spatial.js), and grass is a flat grid
 // of numbers rather than agents (grass.js).
+//
+// Terrain (terrain.js) is optional: with params.terrain.enabled off,
+// world.terrain is null and every terrain branch below is skipped, so the
+// flat world runs exactly as it always did.
 import { createRng } from './rng.js';
 import { Population, STATE } from './population.js';
 import { SpatialHash } from './spatial.js';
 import { Grass } from './grass.js';
+import { Terrain } from './terrain.js';
 import { seedTribes, stepHumans, stepTribes, driveOff } from './humans.js';
 
 export { STATE, STATE_LABEL } from './population.js';
@@ -41,7 +46,12 @@ export class World {
         this.fate = null;
         this.deaths = { herbivore: {}, carnivore: {}, human: {} }; // running count by cause
 
+        this.terrain = params.terrain.enabled ? new Terrain(width, height, params.terrain, this.rng) : null;
         this.grass = new Grass(width, height, params.world.grassCell, params.grass.initial, this.rng);
+        if (this.terrain) {
+            // grass.initial is the level grazers keep the grass at (THEORY.md §3).
+            this.grass.setFertility(this.terrain.fertilityGrid(this.grass), params.terrain.compensate, params.grass.initial);
+        }
         this.herbivores = new Population();
         this.carnivores = new Population();
         this.humans = new Population();
@@ -59,12 +69,16 @@ export class World {
     }
 
     seedPopulation(pop, sp) {
-        const { rng } = this;
+        const { rng, terrain } = this;
         const spread = this.p.evolution.initialSpread;
         for (let k = 0; k < sp.initial; k++) {
-            this.spawn(pop, sp,
-                rng.next() * this.width,
-                rng.next() * this.height,
+            let x = rng.next() * this.width;
+            let y = rng.next() * this.height;
+            while (terrain && !terrain.spawnable(x, y)) {
+                x = rng.next() * this.width;
+                y = rng.next() * this.height;
+            }
+            this.spawn(pop, sp, x, y,
                 sp.birthEnergy * (0.4 + 0.5 * rng.next()),
                 sp.genes.speed * Math.exp(spread * rng.gauss()),
                 sp.genes.sense * Math.exp(spread * rng.gauss()),
@@ -204,7 +218,7 @@ export class World {
         const n = pop.n;
         pop.reserve(n); // at most one birth each
         const { x, y, heading, energy, age, lifespan, speedGene, senseGene, upkeep, state, focus } = pop;
-        const { rng, width: W, height: H, carnivoreHash: threats, humanHash: hunters, grass } = this;
+        const { rng, width: W, height: H, carnivoreHash: threats, humanHash: hunters, grass, terrain } = this;
         const g = grass.g;
         const predatorIds = this.carnivores.id;
         const hunterIds = this.humans.id;
@@ -289,6 +303,13 @@ export class World {
                 let ny = y[i] + dy * v;
                 if (nx < 0) nx += W; else if (nx >= W) nx -= W;
                 if (ny < 0) ny += H; else if (ny >= H) ny -= H;
+                if (terrain !== null && terrain.blocked(nx, ny)) {
+                    // Water or a cliff ahead: veer along it (or turn back if boxed in).
+                    if (terrain.move(x[i], y[i], dx, dy, v, terrain.side(dx, dy, heading[i], rng))) h = Math.atan2(terrain.uy, terrain.ux);
+                    else h += Math.PI;
+                    nx = terrain.x;
+                    ny = terrain.y;
+                }
                 x[i] = nx;
                 y[i] = ny;
                 heading[i] = h;
@@ -326,7 +347,7 @@ export class World {
         const n = pop.n;
         pop.reserve(n);
         const { x, y, heading, energy, age, lifespan, speedGene, senseGene, upkeep, timer, state, focus, kills, id } = pop;
-        const { rng, width: W, height: H, herbivoreHash: grazers, humanHash: people, carnivoreHash: rivals } = this;
+        const { rng, width: W, height: H, herbivoreHash: grazers, humanHash: people, carnivoreHash: rivals, terrain } = this;
         const { herbivores, humans } = this;
         const anyPeople = humans.n > 0;
         const hungry = P.hunger * P.maxEnergy;
@@ -407,10 +428,19 @@ export class World {
             }
 
             if (v > 0) {
-                let nx = x[i] + Math.cos(h) * v;
-                let ny = y[i] + Math.sin(h) * v;
+                const ux = Math.cos(h);
+                const uy = Math.sin(h);
+                let nx = x[i] + ux * v;
+                let ny = y[i] + uy * v;
                 if (nx < 0) nx += W; else if (nx >= W) nx -= W;
                 if (ny < 0) ny += H; else if (ny >= H) ny -= H;
+                if (terrain !== null && terrain.blocked(nx, ny)) {
+                    // Water or a cliff ahead: veer along it (or turn back if boxed in).
+                    if (terrain.move(x[i], y[i], ux, uy, v, terrain.side(ux, uy, heading[i], rng))) h = Math.atan2(terrain.uy, terrain.ux);
+                    else h += Math.PI;
+                    nx = terrain.x;
+                    ny = terrain.y;
+                }
                 x[i] = nx;
                 y[i] = ny;
             }

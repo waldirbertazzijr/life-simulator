@@ -13,6 +13,29 @@ export const params = {
         hashCell: 40,  // spatial-hash bucket size (performance only)
     },
 
+    // Mountains, lakes and valleys (src/terrain.js). Off: a flat world, exactly
+    // as before terrain existed.
+    terrain: {
+        enabled: true,
+        spacing: 20,         // distance between height nodes
+        wavelength: 520,     // size of the broadest basins and uplands
+        octaves: 4,          // finer detail, each octave half the size...
+        roughness: 0.5,      // ...and this fraction of the height
+        ranges: 0.6,         // how high mountain ranges rise on the uplands
+        water: 0.12,         // fraction of the world under water
+        seaLevel: 8,         // height of the water surface
+        peak: 120,           // height of the highest summit
+        relief: 1.8,         // > 1: gentle lowlands, steep summits
+        cliff: 0.9,          // slopes steeper than this (rise over run) cannot be climbed
+        // Fertility: how much grass the ground can hold (see Grass.regrow).
+        fertileBelow: 0.15,  // full up to this fraction of the way to the peak...
+        barrenAbove: 0.65,   // ...bare rock above this one
+        // Water and rock leave less land to grow food. With this on, grass on the
+        // land that is left regrows faster, so the world grows as much food as a
+        // flat one (Grass.setFertility). Off, the world is simply smaller.
+        compensate: true,
+    },
+
     grass: {
         // Each patch regrows toward full (1.0) at this rate: g += regrowth·(1 − g).
         // Supply-driven regrowth (like rain filling a pond) cannot be grazed to

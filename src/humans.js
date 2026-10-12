@@ -33,6 +33,8 @@ export function foundTribe(world, x, y, culture, parent = null) {
         aggression: culture.aggression,
         sociality: culture.sociality,
         founded: world.time,
+        // With terrain: how far the camp is by land from everywhere (Terrain.pathField).
+        paths: world.terrain ? world.terrain.pathField(x, y) : null,
         parent: parent ? parent.id : 0,
         generation: parent ? parent.generation + 1 : 0,
         members: 0,
@@ -44,6 +46,21 @@ export function foundTribe(world, x, y, culture, parent = null) {
     world.tribes.push(tribe);
     world.tribeById.set(tribe.id, tribe);
     return tribe;
+}
+
+// The way to a tribe's camp, (ddx, ddy) away at distance d: straight there on
+// a flat world; around lakes and cliffs with terrain. Left in wayX, wayY.
+let wayX = 0;
+let wayY = 0;
+function toward(world, tribe, x, y, ddx, ddy, d) {
+    if (world.terrain === null) {
+        wayX = ddx / d;
+        wayY = ddy / d;
+        return;
+    }
+    world.terrain.way(tribe.paths, x, y, ddx, ddy, d);
+    wayX = world.terrain.ux;
+    wayY = world.terrain.uy;
 }
 
 // Average grass within `r` of a point (sampled on the grass grid).
@@ -60,6 +77,38 @@ function grassAround(world, x, y, r) {
     return sum / count;
 }
 
+// How good a spot is for a camp: flat, fertile ground near water but not in
+// it. -Infinity where no camp can go: water, a cliff or cut-off land at the
+// spot, or water or a cliff inside the camp itself.
+function campSite(world, x, y) {
+    const T = world.terrain;
+    const R = world.p.human.campRadius;
+    if (!T.spawnable(x, y)) return -Infinity;
+    let fertile = 0;
+    let water = false;
+    for (let k = 0; k < 8; k++) {
+        const c = Math.cos((k * TAU) / 8);
+        const s = Math.sin((k * TAU) / 8);
+        if (T.blocked(x + c * R, y + s * R)) return -Infinity;
+        fertile += T.fertility(x + c * 50, y + s * 50) + T.fertility(x + c * 100, y + s * 100);
+        if (T.isWater(x + c * 45, y + s * 45) || T.isWater(x + c * 90, y + s * 90)) water = true;
+    }
+    return fertile / 16 + (water ? 0.3 : 0) - T.slopeAt(x, y);
+}
+
+// Where a newborn or a founding member appears: a random spot in camp (on dry
+// ground, with terrain). Not wrapped here: spawnPerson does that.
+function nearCamp(world, tribe) {
+    const R = world.p.human.campRadius;
+    const { rng, terrain } = world;
+    for (let tries = 0; ; tries++) {
+        const x = tribe.camp.x + (rng.next() - 0.5) * R;
+        const y = tribe.camp.y + (rng.next() - 0.5) * R;
+        if (!terrain || terrain.spawnable(x, y)) return { x, y };
+        if (tries >= 20) return { x: tribe.camp.x, y: tribe.camp.y };
+    }
+}
+
 function spawnPerson(world, tribe, x, y, energy, age, parent = -1) {
     const P = world.p.human;
     const pop = world.humans;
@@ -74,11 +123,33 @@ function spawnPerson(world, tribe, x, y, energy, age, parent = -1) {
     return i;
 }
 
+// With terrain, the first camps go to the best of a few dozen random spots,
+// keeping clear of camps already placed.
+function firstCampSite(world) {
+    const { rng, width: W, height: H } = world;
+    let best = null;
+    let bestScore = -Infinity;
+    for (let k = 0; k < 40; k++) {
+        const x = rng.next() * W;
+        const y = rng.next() * H;
+        let score = campSite(world, x, y);
+        for (const t of world.tribes) {
+            if (Math.hypot(wrapDelta(t.camp.x - x, W), wrapDelta(t.camp.y - y, H)) < world.p.human.splitDistance) score -= 1;
+        }
+        if (score > bestScore) {
+            bestScore = score;
+            best = { x, y };
+        }
+    }
+    return best ?? world.terrain.randomSpot(rng);
+}
+
 export function seedTribes(world) {
     const P = world.p.human;
     const { rng } = world;
     for (let k = 0; k < P.tribes; k++) {
-        const tribe = foundTribe(world, rng.next() * world.width, rng.next() * world.height, {
+        const site = world.terrain ? firstCampSite(world) : { x: rng.next() * world.width, y: rng.next() * world.height };
+        const tribe = foundTribe(world, site.x, site.y, {
             aggression: rng.next(),
             sociality: rng.next(),
         });
@@ -86,10 +157,8 @@ export function seedTribes(world) {
         for (let m = 0; m < P.perTribe; m++) {
             const adult = m < P.perTribe * 0.8;
             const age = adult ? P.maturity + rng.next() * (P.lifespan * 0.5 - P.maturity) : rng.next() * P.maturity;
-            spawnPerson(world, tribe,
-                tribe.camp.x + (rng.next() - 0.5) * P.campRadius,
-                tribe.camp.y + (rng.next() - 0.5) * P.campRadius,
-                P.maxEnergy * 0.7, age);
+            const spot = nearCamp(world, tribe);
+            spawnPerson(world, tribe, spot.x, spot.y, P.maxEnergy * 0.7, age);
         }
     }
 }
@@ -129,7 +198,7 @@ export function stepHumans(world) {
     const n = pop.n;
     const { x, y, heading, energy, age, lifespan, speedGene, senseGene, upkeep, timer, state, focus, kills, carry, goal, id } = pop;
     const tribeOf = pop.tribe;
-    const { rng, width: W, height: H, grass, herbivores, carnivores, tribeById } = world;
+    const { rng, width: W, height: H, grass, herbivores, carnivores, tribeById, terrain } = world;
     const predators = world.carnivoreHash;
     const prey = world.herbivoreHash;
     const people = world.humanHash;
@@ -233,8 +302,9 @@ export function stepHumans(world) {
                     c += loot;
                     goal[i] = 0;
                 } else {
-                    dx = rdx / rd;
-                    dy = rdy / rd;
+                    toward(world, target, x[i], y[i], rdx, rdy, rd);
+                    dx = wayX;
+                    dy = wayY;
                     v = top * P.cruise;
                 }
             }
@@ -242,21 +312,24 @@ export function stepHumans(world) {
             // Children stay around camp.
             s = STATE.PLAYING;
             if (campD > P.campRadius * 0.6) {
-                dx = campDx / campD;
-                dy = campDy / campD;
+                toward(world, tribe, x[i], y[i], campDx, campDy, campD);
+                dx = wayX;
+                dy = wayY;
                 v = top * P.cruise;
             }
         } else if (c >= P.tripLoad) {
             s = STATE.HOMEWARD;
-            dx = campDx / campD;
-            dy = campDy / campD;
+            toward(world, tribe, x[i], y[i], campDx, campDy, campD);
+            dx = wayX;
+            dy = wayY;
             v = top * P.cruise;
         } else if (tribe.store >= P.storeTarget * tribe.members && e >= P.hunger * P.maxEnergy) {
             // Enough food at home: rest.
             s = STATE.AT_CAMP;
             if (campD > P.campRadius * 0.6) {
-                dx = campDx / campD;
-                dy = campDy / campD;
+                toward(world, tribe, x[i], y[i], campDx, campDy, campD);
+                dx = wayX;
+                dy = wayY;
                 v = top * P.cruise;
             }
         } else if (tribe.store < P.storeTarget * tribe.members * 0.5 && rng.next() < tribe.aggression * P.raidRate
@@ -302,8 +375,9 @@ export function stepHumans(world) {
                 s = STATE.GATHERING;
                 const gi = grass.index(x[i], y[i]);
                 if (campD >= P.homeRange) {
-                    dx = campDx / campD;
-                    dy = campDy / campD;
+                    toward(world, tribe, x[i], y[i], campDx, campDy, campD);
+                    dx = wayX;
+                    dy = wayY;
                     v = top * P.cruise;
                 } else if (g[gi] >= P.gatherMin) {
                     let take = P.gatherRate;
@@ -343,8 +417,18 @@ export function stepHumans(world) {
         if (c > P.carryMax) c = P.carryMax; // hands are full; the rest is left behind
 
         if (v > 0) {
-            x[i] = wrapPos(x[i] + dx * v, W);
-            y[i] = wrapPos(y[i] + dy * v, H);
+            let nx = wrapPos(x[i] + dx * v, W);
+            let ny = wrapPos(y[i] + dy * v, H);
+            if (terrain !== null && terrain.blocked(nx, ny)) {
+                // Water or a cliff ahead: veer along it.
+                terrain.move(x[i], y[i], dx, dy, v, terrain.side(dx, dy, heading[i], rng));
+                nx = terrain.x;
+                ny = terrain.y;
+                dx = terrain.ux;
+                dy = terrain.uy;
+            }
+            x[i] = nx;
+            y[i] = ny;
             heading[i] = Math.atan2(dy, dx);
         }
 
@@ -403,10 +487,8 @@ export function stepTribes(world) {
         if (t.adults >= 2 && t.birthCooldown === 0 && t.store >= P.birthCost + P.reserve * t.members) {
             const parent = randomMember(world, t, true);
             t.store -= P.birthCost;
-            spawnPerson(world, t,
-                t.camp.x + (world.rng.next() - 0.5) * P.campRadius,
-                t.camp.y + (world.rng.next() - 0.5) * P.campRadius,
-                P.childEnergy, 0, parent);
+            const spot = nearCamp(world, t);
+            spawnPerson(world, t, spot.x, spot.y, P.childEnergy, 0, parent);
             t.members++;
             t.births++;
             t.birthCooldown = P.birthInterval;
@@ -444,18 +526,24 @@ function split(world, t) {
     const pop = world.humans;
     const { rng } = world;
     let site = null;
-    let bestGrass = -1;
+    let bestGrass = -Infinity;
     for (let k = 0; k < 6; k++) {
         const a = rng.next() * TAU;
         const d = P.splitDistance * (0.8 + 0.4 * rng.next());
         const sx = wrapPos(t.camp.x + Math.cos(a) * d, world.width);
         const sy = wrapPos(t.camp.y + Math.sin(a) * d, world.height);
-        const gv = grassAround(world, sx, sy, 40);
+        let gv = grassAround(world, sx, sy, 40);
+        if (world.terrain) {
+            const score = campSite(world, sx, sy);
+            if (score === -Infinity) continue; // in a lake, on a cliff, or cut off
+            gv += score;
+        }
         if (gv > bestGrass) {
             bestGrass = gv;
             site = { x: sx, y: sy };
         }
     }
+    if (!site) return; // nowhere to settle this time; try again next step
     const daughter = foundTribe(world, site.x, site.y, {
         aggression: clamp01(t.aggression + P.cultureDrift * rng.gauss()),
         sociality: clamp01(t.sociality + P.cultureDrift * rng.gauss()),

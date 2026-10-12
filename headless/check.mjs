@@ -7,6 +7,7 @@
 //   make check ARGS="--set carnivore.efficiency=0.6 --set grass.regrowth=0.001"
 //   make check ARGS="--shock 0.6@50000"         # cull 60% of herbivores at step 50k
 //   make check ARGS="--aspect 0.46"             # a phone-shaped world (same area)
+//   make check ARGS="--set terrain.enabled=false"  # a flat world, no mountains or lakes
 //   make check ARGS="--spark"                   # print population sparklines
 //   make check ARGS="--json"                    # machine-readable output
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
@@ -65,6 +66,7 @@ function runSeed({ params, seed, steps, sample, shock, aspect }) {
             herbivore: world.meanGenes(world.herbivores),
             carnivore: world.meanGenes(world.carnivores),
         },
+        terrain: world.terrain ? { ...world.terrain.coverage(), boost: world.grass.boost } : null,
         humans: hadHumans ? {
             gone: humansGone,
             founded: world.nextTribeId - 1,
@@ -148,7 +150,7 @@ function period(a, sample) {
 }
 
 function summarise(r) {
-    const out = { seed: r.seed, steps: r.steps, extinct: r.extinct, stepsPerSec: r.stepsPerSec, genes: r.genes };
+    const out = { seed: r.seed, steps: r.steps, extinct: r.extinct, stepsPerSec: r.stepsPerSec, genes: r.genes, terrain: r.terrain };
     for (const s of ['herbivore', 'carnivore', 'grass']) {
         const ser = r.series[s];
         const back = ser.slice(Math.floor(ser.length / 2));
@@ -223,6 +225,10 @@ async function main() {
             console.log(h.gone
                 ? `        people died out at step ${h.gone} (peak ${h.max}, ${h.founded} tribes founded)`
                 : `        people ${f(h.mean).padStart(4)} (min ${h.min}, peak ${h.max}) · ${h.tribes} tribes alive of ${h.founded} founded · ${culture}`);
+        }
+        if (s.terrain) {
+            const t = s.terrain;
+            console.log(`        terrain: water ${f(100 * t.water)}% · cliffs ${f(100 * t.cliff)}% · regrowth ×${f(t.boost, 2)} on the land left`);
         }
         if (opts.spark) {
             const r = results.find((x) => x.seed === s.seed);

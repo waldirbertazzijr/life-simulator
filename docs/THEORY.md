@@ -53,6 +53,8 @@ That is with no population caps and no animals spawned from nowhere.
 - **People** live in tribes with a camp, a shared store and a culture. They
   hunt, gather, raise children, defend themselves and sometimes raid each
   other (§11).
+- **The land** has lakes and cliffs that nobody can cross, and grows less grass
+  the higher it gets (§12).
 
 That is the whole model. Herds, grazing fronts, boom-and-bust and evolution are
 not programmed in; they **emerge**. Click any animal in the app to watch one
@@ -224,7 +226,7 @@ Two design choices follow from this:
   follows your screen. A phone and a 4K monitor hold the same number of
   animals, so the balance is the same everywhere. Phone-shaped (0.46) and
   ultrawide (2.4) worlds were checked too: 8/8 seeds each.
-- **The engine is fast enough for big populations** (§13). Around 940
+- **The engine is fast enough for big populations** (§14). Around 940
   herbivores and 100 carnivores keep the carnivore minimum at 50+ instead of
   single digits.
 
@@ -393,7 +395,81 @@ camp holding a full haul (150).
 
 ---
 
-## 12. What was removed, and why
+## 12. Terrain: mountains, lakes and valleys
+
+The world has a landscape (`src/terrain.js`). Its heights are periodic noise, so
+the land joins up seamlessly where the world wraps: broad basins and uplands,
+mountain ranges rising on the uplands, and the lowest 12% flooded. Three rules
+tie it to the ecology:
+
+- **Water and cliffs block everyone.** A step that would end in a lake, or on a
+  slope steeper than `cliff`, turns 45°, 90° or 135° aside instead. It turns
+  to the side the creature was already veering to, so it follows a shore
+  rather than dithering against it.
+- **Grass fills toward the ground's fertility** `f`: `g += r·(f − g)`. `f` is 1
+  in the lowlands, thins out up the slopes, and is 0 on rock and water. It is
+  still supply-driven, a smaller pond under the same rain. In Tilman's terms it
+  is a chemostat whose supply point changes from place to place, so bare
+  peaks stay bare instead of filling up untouched.
+- **Camps go on flat, fertile ground near water.**
+
+**A landscape is mostly a smaller world.** With only those rules (12 seeds ×
+100k), herbivores fell from ~900 to 520–735 and carnivores from ~80 to 42–68,
+and the worst carnivore dip went from 41 to 14. Nothing was trapped; the world
+simply grew less food. The food grown per step fell to 63–75% of the flat
+world's, and one line predicts the loss to within 0.02 on every seed: the
+land's supply above the grazed level, Σ(f − R\*) over the patches where f > R\*,
+against the flat world's N·(1 − R\*), with R\* = 0.25 (§3). The seed with the
+worst dip had the poorest land (54%). That is §8 again: fewer animals, nearer
+to zero.
+
+**So the sunshine is held fixed.** With `terrain.compensate` (on by default),
+regrowth on the land that is left is raised by exactly that ratio (×1.3 to
+×1.85, depending on the seed), so every world grows as much food as a flat one.
+The landscape decides only *where* it grows. That makes up for lost area without
+adding a rule.
+
+**Space on its own does no harm, and may help a little.** Without people
+(12 seeds × 150k), herds gather in the fertile lowlands (70–85% of them) and
+the predators follow. Even so, carnivores averaged 103 against 97 on the flat
+world, never fell below 56 (flat: 52), and swung a little less (CV 0.11
+against 0.12). Herbivores were unchanged. That hints at Huffaker's mites, but
+only faintly: water and cliffs block hunter and hunted alike, so there is no
+true refuge.
+
+**People gain the most.** Camps sit on the best ground, which is exactly where
+the herds gather. Hunters took about 17% more grazers than on the flat world,
+carnivores ate a few percent fewer, and people killed more carnivores. This is
+the exploitative competition of §11, sharpened because people and grazers now
+share a habitat.
+
+**People need to know the way home.** At first, a few people per run got stuck
+for good on a shore, carrying food toward a camp straight across the water.
+Robotics calls "walk at the goal, turn aside when blocked" a *bug algorithm*
+(Lumelsky & Stepanov), and it fails in dead ends: in a bay that faces home,
+every turn slides you back in. So each camp, when it is founded, measures how
+far it is by land from every 10-unit cell (Dijkstra over open ground, in under
+a millisecond). People walk straight home when that gets them closer by land, and
+otherwise step to the neighbouring cell nearest home. Walkers dropped anywhere
+on the land now always reach camp, and the stuck people are gone.
+
+The whole picture, 20 worlds × 150k steps each:
+
+| | flat | terrain |
+|---|---|---|
+| ecosystems persisted, people survived | 20/20, 20/20 | 20/20, 20/20 |
+| herbivores: mean, lowest | 900, 627 | 893, 579 |
+| carnivores: mean, lowest, CV | 82, 41, 0.13 | 77, 37, 0.14 |
+| people: mean, lowest | 66, 16 | 82, 20 |
+
+The lowest herbivore point came from a world where people peaked at 168.
+Phone-shaped and ultrawide worlds (8 × 100k each) also persisted 8/8 and 8/8,
+people included. The terrain costs about 3–9% in speed: one array lookup for
+each step that moves, plus a slightly richer grass update.
+
+---
+
+## 13. What was removed, and why
 
 | removed | why |
 |---|---|
@@ -410,7 +486,7 @@ it, not stamped on all 1000 at once.
 
 ---
 
-## 13. Why it is fast
+## 14. Why it is fast
 
 - **Struct of arrays.** Each species is a handful of `Float64Array`s
   (`x[]`, `y[]`, `energy[]`, …), not thousands of objects. That is
@@ -434,7 +510,7 @@ The old engine managed ~1,000 steps/s with ~800 entities.
 
 ---
 
-## 14. Experiments to try
+## 15. Experiments to try
 
 Each of these is one command. The check runs in a container and prints
 persistence, CV, minima and evolved genes.
@@ -452,11 +528,14 @@ make check ARGS="--aspect 0.46 --spark"                 # a phone-shaped world, 
 make check ARGS="--set human.enabled=false"           # the ecosystem without people
 make check ARGS="--set human.raidRate=0.01"           # a world of raiders
 make check ARGS="--set human.tribes=8"                # more tribes from the start
+make check ARGS="--set terrain.enabled=false"         # a flat world, as before the terrain
+make check ARGS="--set terrain.compensate=false"      # the land as it is: a smaller world
+make check ARGS="--set terrain.water=0.3"             # a lake district
 ```
 
 ---
 
-## 15. Reading list (the clever jumps, in order)
+## 16. Reading list (the clever jumps, in order)
 
 - **Verhulst (1838).** Logistic growth and the carrying capacity.
 - **Lotka (1925), Volterra (1926).** Predator–prey cycles, and why they are fragile.
@@ -479,3 +558,4 @@ make check ARGS="--set human.tribes=8"                # more tribes from the sta
 - **Boyd & Richerson (1985).** *Culture and the Evolutionary Process*: cultural group selection.
 - **Sinervo & Lively (1996).** Rock–paper–scissors strategies in side-blotched lizards.
 - **Wilensky (1997).** NetLogo *Wolf Sheep Predation*, the agent-based cousin of this project.
+- **Lumelsky & Stepanov (1987).** "Bug" algorithms: reaching a goal around obstacles you can only feel, and the dead ends where that fails.

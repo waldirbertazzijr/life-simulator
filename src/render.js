@@ -18,6 +18,9 @@ export const COLORS = {
     background: '#101211',
     bare: [27, 29, 25],    // grass at 0
     lush: [62, 104, 64],   // grass at 1
+    rock: [98, 94, 86],    // barren mountain
+    shallow: [36, 54, 66], // water at the shore...
+    deep: [20, 30, 42],    // ...and at its deepest
     herbivore: '#ece6d6',
     carnivore: '#e4664f',
 };
@@ -46,6 +49,44 @@ const wrapDelta = (d, size) => (d > size / 2 ? d - size : d < -size / 2 ? d + si
 
 // Flags are painted by flag.js (shared with the 3D view and the panel).
 export { drawFlag };
+
+// The land under the grass, one entry per grass patch (display only): water
+// colour, hill shading, and how rocky the ground looks, so bare peaks read as
+// rock rather than as grazed-out meadow. Cliffs show through the shading.
+function groundLayer(world) {
+    const T = world.terrain;
+    const { cols, rows, cellW, cellH } = world.grass;
+    const n = cols * rows;
+    const water = new Uint32Array(n); // packed colour; 0 = land
+    const shade = new Float32Array(n);
+    const rock = new Float32Array(n);
+    const pack = (r, g, b) => (255 << 24) | (b << 16) | (g << 8) | r;
+    const LZ = 1.5; // light from the north-west, fairly high
+    const flat = LZ / Math.sqrt(2 + LZ * LZ);
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            const k = c + r * cols;
+            const x = (c + 0.5) * cellW;
+            const y = (r + 0.5) * cellH;
+            const h = T.heightAt(x, y);
+            if (h < T.seaLevel) {
+                const t = h / T.seaLevel; // 0 deepest .. 1 at the shore
+                const [r0, g0, b0] = COLORS.deep;
+                const [r1, g1, b1] = COLORS.shallow;
+                water[k] = pack(Math.round(r0 + (r1 - r0) * t), Math.round(g0 + (g1 - g0) * t), Math.round(b0 + (b1 - b0) * t));
+                continue;
+            }
+            const gx = (T.heightAt(x + cellW, y) - T.heightAt(x - cellW, y)) / (2 * cellW);
+            const gy = (T.heightAt(x, y + cellH) - T.heightAt(x, y - cellH)) / (2 * cellH);
+            const lit = (gx + gy + LZ) / (Math.sqrt(gx * gx + gy * gy + 1) * Math.sqrt(2 + LZ * LZ));
+            const s = 1 + 0.85 * (lit / flat - 1); // gentle: flat ground keeps its colour
+            shade[k] = s < 0.55 ? 0.55 : s > 1.3 ? 1.3 : s;
+            rock[k] = T.rockiness(x, y);
+        }
+    }
+    return { water, shade, rock };
+}
+
 
 export class Renderer {
     constructor(canvas) {
@@ -80,6 +121,7 @@ export class Renderer {
         this.grassPixels = new Uint32Array(this.grassImage.data.buffer);
         this.blurA = new Float32Array(cols * rows);
         this.blurB = new Float32Array(cols * rows);
+        this.ground = world.terrain ? groundLayer(world) : null;
         this.resize(world);
         // Start on the overview.
         this.cam = { x: world.width / 2, y: world.height / 2, angle: 0, scale: this.fit, anchor: 0.5 };
@@ -218,11 +260,28 @@ export class Renderer {
         const px = this.grassPixels;
         const lut = this.palette;
         const stride = cols + 2;
+        const ground = this.ground;
+        const [rr, rg, rb] = COLORS.rock;
         for (let y = -1; y <= rows; y++) {
             const gy = (y + rows) % rows;
             for (let x = -1; x <= cols; x++) {
                 const gx = (x + cols) % cols;
-                px[(y + 1) * stride + x + 1] = lut[(g[gy * cols + gx] * 255) | 0];
+                const k = gy * cols + gx;
+                let c = lut[(g[k] * 255) | 0];
+                if (ground !== null) {
+                    // Water, or grass over rock, lit by the slope.
+                    if (ground.water[k] !== 0) {
+                        c = ground.water[k];
+                    } else {
+                        const s = ground.shade[k];
+                        const t = ground.rock[k];
+                        const r = ((c & 255) * (1 - t) + rr * t) * s;
+                        const gg = (((c >> 8) & 255) * (1 - t) + rg * t) * s;
+                        const b = (((c >> 16) & 255) * (1 - t) + rb * t) * s;
+                        c = (255 << 24) | ((b > 255 ? 255 : b) << 16) | ((gg > 255 ? 255 : gg) << 8) | (r > 255 ? 255 : r);
+                    }
+                }
+                px[(y + 1) * stride + x + 1] = c;
             }
         }
         this.grassCtx.putImageData(this.grassImage, 0, 0);
