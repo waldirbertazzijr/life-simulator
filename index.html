@@ -1,48 +1,218 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Life Simulator</title>
-    <script src="stats.js"></script>
-    <script type="module" src="main.js"></script>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23101211'/%3E%3Ccircle cx='6' cy='9' r='2.2' fill='%23ece6d6'/%3E%3Cpath d='M13 5 9 7.2l1.6 1.6z' fill='%23e4664f'/%3E%3C/svg%3E">
     <style>
-        * { margin:0; padding:0; }
-        html, body { width:100%; height:100%; }
-        .panel { background: rgba(255, 255, 255, 0.8); box-shadow: 0 5px 10px rgba(0, 0, 0, 0.5); border: 1px solid rgb(0,0,0,0.8); border-radius: 5px; padding: 5px; font: 12px Helvetica, Arial; }
-        #canvas { display:block; }
-        #controls { position: absolute; top: 10px; right: 10px; z-index: 10;  }
-        /* Tooltip CSS */
-        #tooltip {
-            position: absolute;
-            display: none;
-            pointer-events: none; z-index: 1;
+        :root {
+            --bg: #101211;
+            --panel: rgba(16, 18, 17, 0.84);
+            --line: rgba(255, 255, 255, 0.08);
+            --text: #d9dcd6;
+            --muted: #848a83;
+            --grass: #5f9a62;
+            --herbivore: #ece6d6;
+            --carnivore: #e4664f;
+            --accent: #ece6d6;
         }
-        .add_animal { background: lightgreen; border-radius: 5px; border: 1px solid #000; padding: 5px 10px; }
-        .add_animal:hover { background: lightgoldenrodyellow; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body { height: 100%; overflow: hidden; background: var(--bg); }
+        body {
+            font: 13px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+            color: var(--text);
+            -webkit-font-smoothing: antialiased;
+        }
+        canvas#world { display: block; cursor: crosshair; }
+
+        #panel {
+            position: fixed;
+            top: 16px;
+            left: 16px;
+            width: min(280px, calc(100vw - 32px));
+            padding: 12px 14px;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            font-variant-numeric: tabular-nums;
+        }
+        header { display: flex; align-items: center; gap: 8px; }
+        h1 { font-size: 13px; font-weight: 600; letter-spacing: 0.01em; margin-right: auto; }
+
+        button {
+            font: inherit;
+            color: var(--muted);
+            background: none;
+            border: 1px solid transparent;
+            border-radius: 6px;
+            min-width: 28px;
+            height: 26px;
+            padding: 0 6px;
+            cursor: pointer;
+        }
+        button:hover { color: var(--text); background: rgba(255, 255, 255, 0.05); }
+        button:focus-visible { outline: 1px solid var(--muted); outline-offset: 1px; }
+        button:disabled { opacity: 0.35; cursor: default; background: none; }
+        button[aria-pressed="true"] { color: var(--text); border-color: var(--line); background: rgba(255, 255, 255, 0.06); }
+        button svg { display: block; margin: auto; fill: currentColor; }
+        button svg[fill="none"] { fill: none; }
+        .controls { display: flex; align-items: center; gap: 2px; margin-top: 8px; }
+        .controls .speeds { display: flex; gap: 2px; margin-right: auto; }
+
+        .rows { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
+        .row { display: grid; grid-template-columns: 14px 1fr 44px 96px; align-items: center; gap: 6px; height: 26px; }
+        .row .label { color: var(--muted); }
+        .row .value { text-align: right; }
+        .row canvas { width: 96px; height: 20px; }
+        .swatch { width: 8px; height: 8px; border-radius: 50%; justify-self: center; }
+        .swatch.grass { background: var(--grass); border-radius: 2px; }
+        .swatch.herbivore { background: var(--herbivore); }
+        .swatch.carnivore {
+            width: 0; height: 0; border-radius: 0; background: none;
+            border-left: 5px solid transparent; border-right: 5px solid transparent;
+            border-bottom: 9px solid var(--carnivore);
+        }
+
+        table { width: 100%; border-collapse: collapse; margin-top: 8px; border-top: 1px solid var(--line); }
+        th, td { padding: 4px 0 0; font-weight: normal; text-align: right; }
+        th:first-child, td:first-child { text-align: left; }
+        th { color: var(--muted); font-size: 11px; padding-top: 8px; }
+        td:first-child { color: var(--muted); }
+
+        footer { display: flex; align-items: center; margin-top: 8px; color: var(--muted); font-size: 11px; }
+        #status { margin-right: auto; }
+
+        /* The animal being followed. */
+        #follow { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
+        #follow[hidden] { display: none; }
+        .who { display: flex; align-items: center; gap: 8px; }
+        .who .name { font-weight: 600; margin-right: auto; }
+        .who .muted { color: var(--muted); font-size: 11px; }
+        .views { display: flex; gap: 2px; margin: 6px 0 4px; }
+        .views button { flex: 1; }
+        #f-state { margin: 6px 0 4px; }
+        #f-state.alarm { color: var(--carnivore); }
+        .facts { display: grid; grid-template-columns: 64px 1fr auto; align-items: center; gap: 3px 8px; }
+        .facts .k { color: var(--muted); }
+        .facts .v { text-align: right; }
+        .facts .muted { color: var(--muted); font-size: 11px; }
+        .meter { height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.08); overflow: hidden; }
+        .meter span { display: block; height: 100%; width: 0; background: var(--text); }
+        #f-fate { margin-top: 6px; color: var(--muted); }
+        #f-fate[hidden] { display: none; }
+        #f-fate .actions { display: flex; gap: 4px; margin-top: 6px; }
+        #f-fate .actions button { border-color: var(--line); color: var(--text); }
+
+        /* On a phone: no genes table, and following shows just the card. */
+        @media (max-width: 600px) {
+            #panel table { display: none; }
+            #panel.following .rows, #panel.following #tribes { display: none; }
+        }
+
+        .swatch.human { width: 7px; height: 7px; border-radius: 1px; transform: rotate(45deg); background: #7fb3ff; }
+        #f-tribe { display: flex; align-items: center; gap: 6px; margin: 6px 0 2px; }
+        #f-tribe[hidden] { display: none; }
+        #f-flag { width: 18px; height: 12px; border-radius: 1px; }
+        #f-tribe .muted { color: var(--muted); font-size: 11px; margin-left: auto; }
+
+        /* Tribes list */
+        #tribes { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 6px; }
+        .tribe-row { display: grid; grid-template-columns: 22px 1fr 40px 44px 44px; align-items: center; gap: 6px; height: 22px; }
+        .tribe-row.head { color: var(--muted); font-size: 11px; height: 18px; }
+        .tribe-row.head span:nth-child(n+3) { text-align: right; }
+        button.tribe-row { width: 100%; padding: 0; text-align: left; color: var(--text); font: inherit; border: 0; border-radius: 4px; }
+        .tribe-row canvas { width: 18px; height: 12px; border-radius: 1px; }
+        .tribe-row .n { text-align: right; }
+        .bar { height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.08); overflow: hidden; }
+        .bar span { display: block; height: 100%; }
+        .bar.aggr span { background: var(--carnivore); }
+        .bar.soc span { background: #7fb3ff; }
+        #tribes .muted { color: var(--muted); font-size: 11px; }
+
+        #panel.collapsed .body { display: none; }
+        #panel.collapsed { width: auto; }
     </style>
 </head>
 <body>
-    <div class="panel" id="controls">
-        <div id="time-display" style="margin-bottom: 4px; font-weight: bold; text-align: center;">12:00 AM</div>
-        <div id="world-size-display" style="margin-bottom: 10px; font-size: 11px; text-align: center; color: #555;">world: —</div>
-        <div style="margin-bottom: 10px;">
-            <button id="pause-btn" style="padding: 5px 15px; background: #FFD700; border: 1px solid #000; border-radius: 5px; cursor: pointer;">⏸ Pause</button>
-        </div>
-        <div style="margin-bottom: 10px;">
-            <label style="font-size: 11px; font-weight: bold;">Speed:</label>
-            <div id="speed-controls" style="margin-top: 5px;">
-                <button class="speed-btn" data-speed="0.5" style="padding: 3px 8px; margin: 2px; background: #ddd; border: 1px solid #000; border-radius: 3px; cursor: pointer; font-size: 10px;">0.5x</button>
-                <button class="speed-btn" data-speed="1" style="padding: 3px 8px; margin: 2px; background: #90EE90; border: 1px solid #000; border-radius: 3px; cursor: pointer; font-size: 10px;">1x</button>
-                <button class="speed-btn" data-speed="2" style="padding: 3px 8px; margin: 2px; background: #ddd; border: 1px solid #000; border-radius: 3px; cursor: pointer; font-size: 10px;">2x</button>
-                <button class="speed-btn" data-speed="5" style="padding: 3px 8px; margin: 2px; background: #ddd; border: 1px solid #000; border-radius: 3px; cursor: pointer; font-size: 10px;">5x</button>
+    <canvas id="world" aria-label="Simulation of grass, herbivores, carnivores and tribes of people"></canvas>
+
+    <aside id="panel">
+        <header>
+            <h1>Life Simulator</h1>
+            <button id="collapse" title="Hide panel (H)" aria-expanded="true"><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M3.5 8h9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+        </header>
+        <div class="body">
+            <div class="controls">
+                <div class="speeds" role="group" aria-label="Speed">
+                    <button data-speed="1" title="1× (1)">1×</button>
+                    <button data-speed="4" title="4× (2)">4×</button>
+                    <button data-speed="16" title="16× (3)">16×</button>
+                    <button data-speed="64" title="64× (4)">64×</button>
+                </div>
+                <button id="pause" title="Pause (space)"></button>
+                <button id="reset" title="New world (R)"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.46-3.54"/><path d="M13 2.5v3h-3"/></svg></button>
             </div>
+
+            <section id="follow" hidden aria-live="polite">
+                <div class="who">
+                    <span class="swatch" id="f-swatch"></span>
+                    <span class="name" id="f-name"></span>
+                    <span class="muted" id="f-gen"></span>
+                    <button id="f-close" title="Stop following (Esc)"><svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+                </div>
+                <div class="views" role="group" aria-label="Camera (V)">
+                    <button data-view="map">map</button>
+                    <button data-view="follow">follow</button>
+                    <button data-view="first">first person</button>
+                </div>
+                <div id="f-tribe" hidden><canvas id="f-flag" width="36" height="24"></canvas><span id="f-tribe-name"></span><span class="muted" id="f-culture"></span></div>
+                <div id="f-state"></div>
+                <div class="facts">
+                    <span class="k">energy</span><span class="meter"><span id="f-energy-bar"></span></span><span class="v" id="f-energy"></span>
+                    <span class="k">age</span><span class="meter"><span id="f-age-bar"></span></span><span class="v" id="f-age"></span>
+                    <span class="k">speed</span><span class="muted" id="f-speed-avg"></span><span class="v" id="f-speed"></span>
+                    <span class="k">sense</span><span class="muted" id="f-sense-avg"></span><span class="v" id="f-sense"></span>
+                    <span class="k">children</span><span></span><span class="v" id="f-children"></span>
+                    <span class="k" id="f-kills-k">kills</span><span id="f-kills-m"></span><span class="v" id="f-kills"></span>
+                    <span class="k" id="f-carry-k">carrying</span><span id="f-carry-m"></span><span class="v" id="f-carry"></span>
+                </div>
+                <div id="f-fate" hidden>
+                    <div id="f-fate-text"></div>
+                    <div class="actions">
+                        <button id="f-descendant">follow a descendant</button>
+                        <button id="f-another">follow another</button>
+                    </div>
+                </div>
+            </section>
+
+            <div class="rows">
+                <div class="row"><span class="swatch grass"></span><span class="label">grass</span><span class="value" id="n-grass">–</span><canvas id="spark-grass"></canvas></div>
+                <div class="row"><span class="swatch herbivore"></span><span class="label">herbivores</span><span class="value" id="n-herbivores">–</span><canvas id="spark-herbivores"></canvas></div>
+                <div class="row"><span class="swatch carnivore"></span><span class="label">carnivores</span><span class="value" id="n-carnivores">–</span><canvas id="spark-carnivores"></canvas></div>
+                <div class="row"><span class="swatch human"></span><span class="label">people</span><span class="value" id="n-humans">–</span><canvas id="spark-humans"></canvas></div>
+            </div>
+
+            <table>
+                <thead><tr><th title="Average inherited gene, × the species' base value">average genes</th><th>speed</th><th>sense</th></tr></thead>
+                <tbody>
+                    <tr><td>herbivores</td><td id="g-h-speed">–</td><td id="g-h-sense">–</td></tr>
+                    <tr><td>carnivores</td><td id="g-c-speed">–</td><td id="g-c-sense">–</td></tr>
+                </tbody>
+            </table>
+
+            <section id="tribes">
+                <div class="tribe-row head"><span></span><span>tribes</span><span>people</span><span title="Aggression: how readily they fight and raid">aggr</span><span title="Sociality: how much they share and stick together">social</span></div>
+                <div id="tribe-list"></div>
+                <div id="tribes-empty" class="muted" hidden>no tribes left</div>
+            </section>
+
+            <footer><span id="status"></span></footer>
         </div>
-        <hr style="margin: 10px 0;">
-        <button class="add_animal" animal="tree">Add Tree</button>
-        <button class="add_animal" animal="herbivore">Add Herbivore</button>
-        <button class="add_animal" animal="carnivore">Add Carnivore</button>
-    </div>
-    <div id="tooltip"></div>
-    <canvas id="canvas"></canvas>
+    </aside>
+
+    <script type="module" src="src/main.js"></script>
 </body>
 </html>
