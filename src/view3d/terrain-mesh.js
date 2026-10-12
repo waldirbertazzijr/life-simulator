@@ -15,7 +15,7 @@
 import * as THREE from 'three';
 import { COLORS } from '../render.js';
 
-const ROCK = [68, 66, 60];       // muted warm grey
+const ROCK = COLORS.rock;        // muted warm grey, as on the 2D map
 const SHORE = [44, 56, 52];      // lake bed near the shore...
 const DEEP = [20, 28, 32];       // ...and where it is deep
 const WATER = '#2e4a56';

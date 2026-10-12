@@ -6,28 +6,38 @@
 //   draw(world, target, focus, senseRadius)  pick(world, px, py)  mode
 //
 // Coordinates: world x → three.js X, world y → Z, height → Y; one world unit
-// is one three.js unit. The parts: the ground (terrain-mesh.js), creatures,
-// camps, the followed creature's marker, and the camera with its controls
-// (camera.js), which also keeps the floating origin (see util.js).
+// is one three.js unit. The parts: the ground (terrain-mesh.js), the grass
+// tufts near the camera (tufts.js), creatures, camps, the followed creature's
+// marker, the sky, and the camera with its controls (camera.js), which also
+// keeps the floating origin (see util.js).
 //
-// Draw calls stay few: a handful of ground copies, three instanced meshes
-// (one per species), the water sheet, and two per visible camp.
+// Draw calls stay few: a handful of ground copies, one instanced mesh for all
+// the tufts, three more (one per species), the water sheet, the sky, and two
+// per visible camp.
 import * as THREE from 'three';
 import { CameraRig } from './camera.js';
 import { Ground } from './terrain-mesh.js';
+import { Tufts } from './tufts.js';
 import { Creatures } from './creatures.js';
 import { Camps } from './camps.js';
 import { Marker } from './marker.js';
 import { groundOf } from './util.js';
 import { stubTerrain } from './terrain-stub.js';
 
-// A muted, overcast sky, a little darker overhead; the fog fades the far
-// ground into its horizon colour.
-const SKY = '#2a3133';
-const ZENITH = '#1a1f21';
-const FOG_NEAR = 0.35; // fog starts at this fraction of the far distance
+// A soft daytime sky: pale and a little hazy at the horizon, a muted blue
+// overhead. The fog has the horizon's colour, so the far ground fades into the
+// haze the way distant hills do (aerial perspective).
+const SKY = '#c4d0d4';
+const ZENITH = '#6f90ad';
+// The fog starts at this fraction of the far distance: near the ground, and
+// later from the map's height, so the map stays crisp and only its far edge,
+// toward the horizon, fades.
+const FOG_NEAR = { ground: 0.35, map: 0.62 };
 
 // A dome around the camera with the sky's gradient, drawn behind everything.
+// Below the horizon it is the fog's colour. Above, it turns blue quickly
+// over the first few degrees and then slowly toward the top: a band of haze
+// along the horizon, as on a clear day.
 function skyDome() {
     const material = new THREE.ShaderMaterial({
         uniforms: { horizon: { value: new THREE.Color(SKY) }, zenith: { value: new THREE.Color(ZENITH) } },
@@ -42,7 +52,9 @@ function skyDome() {
             uniform vec3 zenith;
             varying vec3 vDir;
             void main() {
-                gl_FragColor = vec4(mix(horizon, zenith, smoothstep(0.0, 0.7, normalize(vDir).y)), 1.0);
+                float up = clamp(normalize(vDir).y, 0.0, 1.0);
+                float t = 1.0 - pow(1.0 - up, 2.5);
+                gl_FragColor = vec4(mix(horizon, zenith, t), 1.0);
                 #include <colorspace_fragment>
             }`,
         side: THREE.BackSide,
@@ -66,23 +78,27 @@ export class View3D {
         this.scene = new THREE.Scene();
         this.scene.background = new THREE.Color(SKY);
         this.scene.fog = new THREE.Fog(SKY, 1000, 3000);
-        // Soft light from the sky, a little from the ground, and a fairly low
-        // sun (40°) from the north-west, the top left of the map: it models
-        // the hills, while flat ground keeps about the 2D view's colours.
-        const sky = new THREE.HemisphereLight('#e2e8ea', '#3a4035', 1.25);
-        const sun = new THREE.DirectionalLight('#fff8f0', 3.3);
+        // Plenty of soft light from the sky (a little blue), some bounced off
+        // the ground, and a fairly low sun (40°) from the north-west, the top
+        // left of the map: it models the hills. Under a daytime sky the land
+        // is a little brighter than the 2D view's colours, and slopes facing
+        // away from the sun stay readable rather than going black.
+        const sky = new THREE.HemisphereLight('#e0e9f0', '#6a6c5a', 2.6);
+        const sun = new THREE.DirectionalLight('#fff6ea', 3.0);
         sun.position.set(-0.6, 0.62, -0.45);
         this.dome = skyDome();
         this.scene.add(sky, sun, this.dome);
 
         this.rig = new CameraRig(canvas);
         this.ground = new Ground(this.scene, this.gl);
+        this.tufts = new Tufts(this.scene);
         this.creatures = new Creatures(this.scene);
         this.camps = new Camps(this.scene, this.gl);
         this.marker = new Marker(this.scene);
         // JavaScript milliseconds per frame, for the last frame and smoothed:
-        // our own updates (camera, ground, creatures, camps, marker), and
-        // three.js's render call.
+        // our own updates (camera, ground, tufts, creatures, camps, marker),
+        // and three.js's render call. The tufts keep their own finer numbers
+        // in this.tufts.stats (refills and the frames without one).
         this.stats = { update: 0, render: 0, lastUpdate: 0, lastRender: 0 };
     }
 
@@ -99,6 +115,7 @@ export class View3D {
         this.heightAt = groundOf(this.terrain, world.width, world.height);
         this.resize(world);
         this.ground.attach(world, this.terrain);
+        this.tufts.attach(world, this.terrain, this.ground.rock);
         this.creatures.attach();
         this.camps.attach();
         this.rig.attach(world, this.terrain);
@@ -122,11 +139,12 @@ export class View3D {
         const t0 = performance.now();
         const view = this.rig.view;
         this.scene.fog.far = view.fogFar;
-        this.scene.fog.near = view.fogFar * FOG_NEAR;
+        this.scene.fog.near = view.fogFar * (FOG_NEAR.ground + (FOG_NEAR.map - FOG_NEAR.ground) * view.mapness);
         this.dome.position.set(view.camX, view.camY, view.camZ);
         this.dome.scale.setScalar(view.fogFar * 0.9);
         this.ground.update(world);
         this.ground.place(view);
+        this.tufts.update(world, view, this.rig.camera, this.heightAt);
         // In first person we look out of the followed creature's eyes, so its
         // own body is not drawn (once the camera is close enough to be inside it).
         const inside = target && this.rig.mode === 'first' && this.rig.pose.dist < 6;
