@@ -64,7 +64,7 @@ export const params = {
         fertility: { water: 0, wetland: 1, meadow: 0.9, forest: 0.6, steppe: 0.4, tundra: 0.3, rock: 0, snow: 0 },
         // Forest as cover: hunters (carnivores and people) see a grazer standing
         // in forest only from this fraction of their usual range.
-        cover: false,
+        cover: true,
         coverSight: 0.5,
     },
 

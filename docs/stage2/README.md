@@ -8,9 +8,10 @@ worktree and reviewed before it is merged.
 |---|---|---|
 | [WP-A](wp-a-terrain.md) ✅ | terrain in the engine: mountains, lakes, fertility, movement | — |
 | [WP-B](wp-b-3d.md) ✅ | the three.js renderer: terrain mesh, creatures, camps, three cameras, picking | the terrain interface below (not WP-A's code) |
-| WP-C | simulation in a Web Worker, interpolated drawing | A and B merged |
+| [WP-C](wp-c-worker.md) | simulation in a Web Worker, interpolated drawing | A and B merged |
 | [WP-D](wp-d-look.md) ✅ | grass tufts where the grass is dense; a blue sky | B |
-| [WP-E](wp-e-biomes.md) | biomes on the terrain: meadow, steppe, forest, snowy peaks | A |
+| [WP-E](wp-e-biomes.md) ✅ | biomes on the terrain: meadow, steppe, forest, snowy peaks | A |
+| [WP-F](wp-f-biomes-3d.md) | biomes in the 3D view: ground colours, forests, snowcaps, tufts per biome | E |
 
 A and B run in parallel. They meet only through the **terrain interface** below.
 
@@ -30,7 +31,9 @@ A and B run in parallel. They meet only through the **terrain interface** below.
      genes, people, tribes, steps/s). See `headless/check.mjs` for options.
    - `make fingerprint ARGS="..."`: hash of the simulation's behaviour. A change
      that claims not to alter the simulation must leave it identical.
-     Baselines (since terrain landed): defaults `all: 4d5825d6ba1dfcee`;
+     Baselines (since biomes and forest cover landed): defaults `all: 9d4e5263c001546d`;
+     `--set biomes.cover=false` `all: 3dd61589825d2616`;
+     `--set biomes.enabled=false` (terrain only) `all: 4d5825d6ba1dfcee`;
      `--set terrain.enabled=false` (the flat world) `all: 7364f6de983a0376`;
      `--set terrain.enabled=false --set human.enabled=false` `all: 4ace304bd98f76c7`.
    - `make shot ARGS="..."`: headless Chromium (software WebGL) in a container.
@@ -86,7 +89,15 @@ world.terrain        // null when params.terrain.enabled is false (flat world)
   .heightAt(x, y)    // bilinear height at any world position (wraps)
   .isWater(x, y)     // heightAt(x, y) < seaLevel
   .blocked(x, y)     // true where land creatures and people cannot go (water, cliffs)
+  // biomes (null when params.biomes.enabled is false)
+  .biome(x, y)       // biome index at a world position
+  .biomes            // [{ name, color: [r, g, b], fertility }] in index order; water is index 0;
+                     // `color` is the bare-ground colour when the grass is grazed down
+  .biomeGrid         // Uint8Array, one biome index per grass patch (same layout as world.grass.g)
 ```
+
+`src/terrain.js` also exports a `BIOME` enum (index by name) and documents the
+rest in its header.
 
 The grass field (`world.grass`, cell size 10) is finer than the terrain grid.
 Renderers colour the ground from it (water and rock come from the terrain).

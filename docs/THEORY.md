@@ -519,7 +519,7 @@ the share of grazers within a camp's range (63%) and the hunting rate did not
 change at all. Those 12 seeds were luck of the draw, a reminder that a dozen
 runs cannot tell a 5% effect from noise.
 
-**Forest as cover** (`biomes.cover`, off by default). A hunter, carnivore or
+**Forest as cover** (`biomes.cover`, on by default). A hunter, carnivore or
 person, sees a grazer standing in forest only from half its usual range. That is
 a habitat refuge, the thing Gause's test tubes needed. Here it lifts both
 levels: grazers +5%, carnivores +3%, and the carnivores' typical lowest point
@@ -528,10 +528,14 @@ swings; the CVs hardly move. The refuge is small and leaky. Forest is about a
 sixth of the land and grows less grass, so only about 16% of the grazers are in
 it (18% with cover), and anyone seen close up, or flushed into the open, is
 caught as before. The grazers it saves keep breeding, so the predators end up
-eating *more*: the ratio-dependent lift of §7 again. It stays off by default because
-it is a new rule and it costs about 9% in speed (two neighbour searches per
-hunt, and the extra grazers it keeps alive). Biomes alone cost nothing per
-step; all their work is done once, when the world is made.
+eating *more*: the ratio-dependent lift of §7 again. It costs about 9% in speed
+(two neighbour searches per hunt, and the extra grazers it keeps alive), and it
+is **on by default**: on 12 fresh worlds (seeds 61–72 × 150k) all ecosystems
+persisted, people survived in all 12, and the worst carnivore dip was 40, the
+best of any version so far. It also left an evolutionary signature: with forests
+to hide in, grazers evolved *slower* legs (speed gene ~1.25, against ~1.31 in
+the open). Hiding replaced running. Biomes alone cost nothing per step; all
+their work is done once, when the world is made.
 
 ---
 
@@ -598,7 +602,7 @@ make check ARGS="--set terrain.enabled=false"         # a flat world, as before 
 make check ARGS="--set terrain.compensate=false"      # the land as it is: a smaller world
 make check ARGS="--set terrain.water=0.3"             # a lake district
 make check ARGS="--set biomes.enabled=false"          # terrain without a climate: grass thins with altitude alone
-make check ARGS="--set biomes.cover=true"             # forests hide grazers from hunters
+make check ARGS="--set biomes.cover=false"            # forests no longer hide grazers from hunters
 make check ARGS="--set biomes.fertility.steppe=0.25"  # harsher steppe
 ```
 
