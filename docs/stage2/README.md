@@ -6,9 +6,11 @@ worktree and reviewed before it is merged.
 
 | package | what | depends on |
 |---|---|---|
-| [WP-A](wp-a-terrain.md) | terrain in the engine: mountains, lakes, fertility, movement | — |
-| [WP-B](wp-b-3d.md) | the three.js renderer: terrain mesh, creatures, camps, three cameras, picking | the terrain interface below (not WP-A's code) |
+| [WP-A](wp-a-terrain.md) ✅ | terrain in the engine: mountains, lakes, fertility, movement | — |
+| [WP-B](wp-b-3d.md) ✅ | the three.js renderer: terrain mesh, creatures, camps, three cameras, picking | the terrain interface below (not WP-A's code) |
 | WP-C | simulation in a Web Worker, interpolated drawing | A and B merged |
+| [WP-D](wp-d-look.md) | grass tufts where the grass is dense; a blue sky | B |
+| WP-E | biomes on the terrain: meadow, steppe, forest, snowy peaks | A |
 
 A and B run in parallel. They meet only through the **terrain interface** below.
 
@@ -28,8 +30,9 @@ A and B run in parallel. They meet only through the **terrain interface** below.
      genes, people, tribes, steps/s). See `headless/check.mjs` for options.
    - `make fingerprint ARGS="..."`: hash of the simulation's behaviour. A change
      that claims not to alter the simulation must leave it identical.
-     Baselines: defaults `all: 7364f6de983a0376`; `--set human.enabled=false`
-     `all: 4ace304bd98f76c7`.
+     Baselines (since terrain landed): defaults `all: 4d5825d6ba1dfcee`;
+     `--set terrain.enabled=false` (the flat world) `all: 7364f6de983a0376`;
+     `--set terrain.enabled=false --set human.enabled=false` `all: 4ace304bd98f76c7`.
    - `make shot ARGS="..."`: headless Chromium (software WebGL) in a container.
      It loads the app, runs optional JS (`--eval`), prints a panel readout and
      console errors, and saves PNGs to `.shots/`. Read the PNGs to check
