@@ -53,8 +53,9 @@ That is with no population caps and no animals spawned from nowhere.
 - **People** live in tribes with a camp, a shared store and a culture. They
   hunt, gather, raise children, defend themselves and sometimes raid each
   other (§11).
-- **The land** has lakes and cliffs that nobody can cross, and grows less grass
-  the higher it gets (§12).
+- **The land** has lakes and cliffs that nobody can cross, and a climate that
+  decides how much grass grows where: lush by the water, sparse on dry steppe,
+  none on the snowy peaks (§12).
 
 That is the whole model. Herds, grazing fronts, boom-and-bust and evolution are
 not programmed in; they **emerge**. Click any animal in the app to watch one
@@ -407,7 +408,8 @@ tie it to the ecology:
   to the side the creature was already veering to, so it follows a shore
   rather than dithering against it.
 - **Grass fills toward the ground's fertility** `f`: `g += r·(f − g)`. `f` is 1
-  in the lowlands, thins out up the slopes, and is 0 on rock and water. It is
+  in the lowlands, thins out up the slopes, and is 0 on rock and water (with
+  biomes, below, the climate sets it instead). It is
   still supply-driven, a smaller pond under the same rain. In Tilman's terms it
   is a chemostat whose supply point changes from place to place, so bare
   peaks stay bare instead of filling up untouched.
@@ -466,6 +468,70 @@ The lowest herbivore point came from a world where people peaked at 168.
 Phone-shaped and ultrawide worlds (8 × 100k each) also persisted 8/8 and 8/8,
 people included. The terrain costs about 3–9% in speed: one array lookup for
 each step that moves, plus a slightly richer grass update.
+
+### Biomes: a climate on the land
+
+The land also has a climate (`Terrain.makeBiomes`). Two smooth fields lie over
+it. **Moisture** is high beside water and fades with distance from it, plus
+broad "weather" noise that makes whole regions wetter or drier. **Temperature**
+falls with altitude (a lapse rate), plus broad noise. Read together, like
+Whittaker's chart of biomes by temperature and rainfall, they class every
+patch:
+
+| biome | where | grass it can hold (`f`) | share of a world |
+|---|---|---|---|
+| wetland | warm and wet, beside water | 1.0 | 4–13% |
+| meadow | the warm, moist rest | 0.9 | 30–57% |
+| forest | cooler, moist mid-slopes | 0.6 | 7–20% |
+| steppe | dry, far from water | 0.4 | 5–21% |
+| tundra | cold, high | 0.3 | 1–9% |
+| rock, snow | the summits | 0 | 1–9% |
+
+Nothing else changes. Each patch still fills toward its `f`, and
+`terrain.compensate` still makes every world grow a flat world's food (now by
+×1.6 to ×2.4 on the land, since forest and steppe grow less). The biomes draw on
+a random stream of their own, so a seed gives the same land and the same first
+animals with biomes on or off; only the climate on top differs.
+
+**The food moves; the totals do not.** Herds follow the food: 63–86% of the
+grazers live on meadow and wetland, which cover 37–65% of the world. With the
+supply held fixed, the averages stay put. Over 40 fresh worlds (seeds 21–60,
+150k steps each):
+
+| | no biomes | biomes | biomes + forest cover |
+|---|---|---|---|
+| herbivores: mean, CV | 885, 0.068 | 889, 0.076 | 933, 0.075 |
+| carnivores: mean, CV | 77, 0.145 | 78, 0.146 | 81, 0.145 |
+| carnivores' lowest point: typical run, worst run | 44, 25 | 45, 35 | 47, 33 |
+| people: mean, worst lowest point | 86, 22 | 85, 24 | 84, 27 |
+
+On the standard check (20 × 150k) every world persisted and people survived in
+all 20; herbivores never fell below 586, carnivores 30, people 29. Phone-shaped
+and ultrawide worlds (8 × 100k each) persisted 8/8 and 8/8, people included.
+
+Without people (12 seeds × 150k), biomes even help a little: carnivores never
+fell below 64 (56 without), with the same swings. With people, the herds swing
+a little more (CV 0.068 → 0.076), and I have not pinned down why. The obvious
+suspect is §11's competition again: camps go on fertile ground near water,
+which is now exactly where the herds are. On the first 12 seeds people did hunt
+16% more grazers and the carnivores dipped lower. But over the 40 fresh worlds
+the share of grazers within a camp's range (63%) and the hunting rate did not
+change at all. Those 12 seeds were luck of the draw, a reminder that a dozen
+runs cannot tell a 5% effect from noise.
+
+**Forest as cover** (`biomes.cover`, off by default). A hunter, carnivore or
+person, sees a grazer standing in forest only from half its usual range. That is
+a habitat refuge, the thing Gause's test tubes needed. Here it lifts both
+levels: grazers +5%, carnivores +3%, and the carnivores' typical lowest point
+rises by about 3 (over 76 runs, every shape of world). It barely calms the
+swings; the CVs hardly move. The refuge is small and leaky. Forest is about a
+sixth of the land and grows less grass, so only about 16% of the grazers are in
+it (18% with cover), and anyone seen close up, or flushed into the open, is
+caught as before. The grazers it saves keep breeding, so the predators end up
+eating *more*: the ratio-dependent lift of §7 again. It stays off by default because
+it is a new rule and it costs about 9% in speed (two neighbour searches per
+hunt, and the extra grazers it keeps alive). Biomes alone cost nothing per
+step; all their work is done once, when the world is made.
 
 ---
 
@@ -531,6 +597,9 @@ make check ARGS="--set human.tribes=8"                # more tribes from the sta
 make check ARGS="--set terrain.enabled=false"         # a flat world, as before the terrain
 make check ARGS="--set terrain.compensate=false"      # the land as it is: a smaller world
 make check ARGS="--set terrain.water=0.3"             # a lake district
+make check ARGS="--set biomes.enabled=false"          # terrain without a climate: grass thins with altitude alone
+make check ARGS="--set biomes.cover=true"             # forests hide grazers from hunters
+make check ARGS="--set biomes.fertility.steppe=0.25"  # harsher steppe
 ```
 
 ---
@@ -547,9 +616,11 @@ make check ARGS="--set terrain.water=0.3"             # a lake district
 - **Rosenzweig (1971).** The paradox of enrichment.
 - **Van Valen (1973).** The Red Queen.
 - **Beddington (1975), DeAngelis et al. (1975).** Predator interference.
+- **Whittaker (1975).** *Communities and Ecosystems*: biomes laid out on a chart of temperature and rainfall.
 - **Dawkins & Krebs (1979).** Arms races and the life-dinner principle.
 - **Tilman (1982).** Resource competition and R\*: who sets the grass level.
 - **Maynard Smith (1982).** *Evolution and the Theory of Games*: ESS.
+- **Sih (1987).** Prey refuges and predator–prey stability: when hiding helps the prey, and when it steadies the whole system.
 - **Arditi & Ginzburg (1989).** Ratio-dependent predation, and why enrichment can lift every level.
 - **Hamilton (1971).** The selfish herd: why being in a group protects you.
 - **Maynard Smith & Price (1973).** Hawk–Dove: why costly fights keep aggression in check.

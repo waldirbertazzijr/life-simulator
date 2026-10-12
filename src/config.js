@@ -36,6 +36,38 @@ export const params = {
         compensate: true,
     },
 
+    // Biomes on the terrain (src/terrain.js): a climate from two fields, and the
+    // grass each climate grows. Needs terrain. Off: fertility falls with
+    // altitude alone, as before biomes.
+    biomes: {
+        enabled: true,
+        // Moisture, 0..1: wet beside water and drying with distance from it,
+        // plus broad "weather" that makes whole regions wetter or drier.
+        wetReach: 80,        // water's wetness fades over this distance (to 1/e)
+        waterShare: 0.55,    // share of moisture that comes from nearby water; the rest is weather
+        weatherSize: 900,    // size of the wetter and drier regions
+        // Temperature, 0..1: warm in the lowlands, colder with altitude.
+        lapse: 1,            // cooling from the shore to the highest summit
+        climateSize: 1100,   // size of the warmer and cooler regions...
+        climateSpread: 0.3,  // ...and how much cooler the coolest is
+        // Classes, from the coldest: snow, rock and tundra by temperature alone;
+        // then steppe where it is dry, forest on the cooler (higher) moist
+        // ground, and wetland or meadow in the warm lowlands.
+        snowBelow: 0.1,      // temperature: snow below this...
+        rockBelow: 0.2,      // ...bare rock below this...
+        tundraBelow: 0.33,   // ...tundra below this
+        forestBelow: 0.66,   // cooler than this but moist enough: forest
+        dryBelow: 0.2,       // moisture: steppe below this
+        wetAbove: 0.56,      // warm and wetter than this: wetland; otherwise meadow
+        // Grass each biome can hold (patch fertility, 0..1). terrain.compensate
+        // still keeps the world's total food the same as a flat world's.
+        fertility: { water: 0, wetland: 1, meadow: 0.9, forest: 0.6, steppe: 0.4, tundra: 0.3, rock: 0, snow: 0 },
+        // Forest as cover: hunters (carnivores and people) see a grazer standing
+        // in forest only from this fraction of their usual range.
+        cover: false,
+        coverSight: 0.5,
+    },
+
     grass: {
         // Each patch regrows toward full (1.0) at this rate: g += regrowth·(1 − g).
         // Supply-driven regrowth (like rain filling a pond) cannot be grazed to

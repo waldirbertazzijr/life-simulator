@@ -14,7 +14,7 @@ import { createRng } from './rng.js';
 import { Population, STATE } from './population.js';
 import { SpatialHash } from './spatial.js';
 import { Grass } from './grass.js';
-import { Terrain } from './terrain.js';
+import { Terrain, BIOME } from './terrain.js';
 import { seedTribes, stepHumans, stepTribes, driveOff } from './humans.js';
 
 export { STATE, STATE_LABEL } from './population.js';
@@ -47,11 +47,18 @@ export class World {
         this.deaths = { herbivore: {}, carnivore: {}, human: {} }; // running count by cause
 
         this.terrain = params.terrain.enabled ? new Terrain(width, height, params.terrain, this.rng) : null;
+        // Biomes draw from a random stream of their own, so the land and the
+        // animals on it start out the same with them on or off.
+        if (this.terrain && params.biomes.enabled) this.terrain.makeBiomes(params.biomes, createRng(seed ^ 0x5eedb10e));
         this.grass = new Grass(width, height, params.world.grassCell, params.grass.initial, this.rng);
         if (this.terrain) {
             // grass.initial is the level grazers keep the grass at (THEORY.md §3).
             this.grass.setFertility(this.terrain.fertilityGrid(this.grass), params.terrain.compensate, params.grass.initial);
         }
+        // Forest cover (params.biomes.cover): which grazers stand in forest,
+        // updated every step, where hunters see them only from closer.
+        this.hidden = this.terrain && this.terrain.biomes && params.biomes.cover ? new Uint8Array(1024) : null;
+        this.coverSight = params.biomes.coverSight;
         this.herbivores = new Population();
         this.carnivores = new Population();
         this.humans = new Population();
@@ -202,6 +209,7 @@ export class World {
         this.humanHash.build(this.humans);
         this.stepHerbivores();
         this.herbivoreHash.build(this.herbivores);
+        if (this.hidden !== null) this.markCover();
         this.stepCarnivores();
         if (this.humans.n) stepHumans(this);
         this.grass.regrow(this.p.grass.regrowth);
@@ -351,6 +359,7 @@ export class World {
         const { herbivores, humans } = this;
         const anyPeople = humans.n > 0;
         const hungry = P.hunger * P.maxEnergy;
+        const cover = this.hidden !== null;
 
         for (let i = 0; i < n; i++) {
             if (++age[i] > lifespan[i]) {
@@ -373,7 +382,7 @@ export class World {
                 timer[i]--; // eating, digesting or catching its breath (state unchanged)
             } else if (e < hungry) {
                 // The nearest prey: a grazer, or a person.
-                let j = grazers.nearest(x[i], y[i], P.sense * vg);
+                let j = cover ? this.spot(grazers, x[i], y[i], P.sense * vg) : grazers.nearest(x[i], y[i], P.sense * vg);
                 let victims = herbivores;
                 let found = grazers;
                 if (anyPeople) {
@@ -461,6 +470,32 @@ export class World {
             }
             energy[i] = e;
         }
+    }
+
+    // Forest cover: note which grazers stand in forest this step.
+    markCover() {
+        const pop = this.herbivores;
+        if (this.hidden.length < pop.capacity) this.hidden = new Uint8Array(pop.capacity);
+        const { hidden, grass } = this;
+        const biomeOf = this.terrain.biomeGrid;
+        const { x, y } = pop;
+        for (let i = 0; i < pop.n; i++) hidden[i] = biomeOf[grass.index(x[i], y[i])] === BIOME.FOREST ? 1 : 0;
+    }
+
+    // The nearest grazer a hunter at (px, py) who sees as far as r can make
+    // out: in the open within r, in forest only within r × coverSight. Like
+    // hash.nearest(), the offset to it is left in hash.dx, dy, d2.
+    spot(hash, px, py, r) {
+        const open = hash.nearest(px, py, r, -1, this.hidden, 0, true);
+        const { dx, dy, d2 } = hash;
+        let near = r * this.coverSight;
+        if (open >= 0 && d2 < near * near) near = Math.sqrt(d2); // only a closer one would matter
+        const hid = hash.nearest(px, py, near, -1, this.hidden, 1, true);
+        if (hid >= 0) return hid;
+        hash.dx = dx;
+        hash.dy = dy;
+        hash.d2 = d2;
+        return open;
     }
 
     // Average genes of a population (for the UI and the checks).

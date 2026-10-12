@@ -340,7 +340,8 @@ export function stepHumans(world) {
         } else {
             // Forage: hunt a grazer in sight near home, otherwise gather plants.
             let hunting = false;
-            const target = prey.nearest(x[i], y[i], sense);
+            // (In forest, with biomes.cover, a grazer is seen only from closer.)
+            const target = world.hidden === null ? prey.nearest(x[i], y[i], sense) : world.spot(prey, x[i], y[i], sense);
             if (target >= 0) {
                 const fx = wrapDelta(herbivores.x[target] - tribe.camp.x, W);
                 const fy = wrapDelta(herbivores.y[target] - tribe.camp.y, H);

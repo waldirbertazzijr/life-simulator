@@ -8,6 +8,7 @@
 //   make check ARGS="--shock 0.6@50000"         # cull 60% of herbivores at step 50k
 //   make check ARGS="--aspect 0.46"             # a phone-shaped world (same area)
 //   make check ARGS="--set terrain.enabled=false"  # a flat world, no mountains or lakes
+//   make check ARGS="--set biomes.cover=true"   # forest hides grazers from hunters
 //   make check ARGS="--spark"                   # print population sparklines
 //   make check ARGS="--json"                    # machine-readable output
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
@@ -19,6 +20,9 @@ import { World } from '../src/world.js';
 function runSeed({ params, seed, steps, sample, shock, aspect }) {
     const world = new World(params, { seed, aspect });
     const series = { herbivore: [], carnivore: [], grass: [], human: [], tribes: [] };
+    // With biomes: where the herds graze, summed over the samples.
+    const biomeOf = world.terrain ? world.terrain.biomeGrid : null;
+    const herds = biomeOf ? new Array(world.terrain.biomes.length).fill(0) : null;
     let extinct = null;
     let humansGone = null;
     const hadHumans = world.humans.n > 0;
@@ -37,6 +41,10 @@ function runSeed({ params, seed, steps, sample, shock, aspect }) {
             series.grass.push(+world.grass.mean().toFixed(3));
             series.human.push(world.humans.n);
             series.tribes.push(world.tribes.length);
+            if (herds) {
+                const h = world.herbivores;
+                for (let i = 0; i < h.n; i++) herds[biomeOf[world.grass.index(h.x[i], h.y[i])]]++;
+            }
         }
         if (hadHumans && humansGone === null && world.humans.n === 0) humansGone = t;
         if (world.herbivores.n === 0 || world.carnivores.n === 0) {
@@ -67,6 +75,7 @@ function runSeed({ params, seed, steps, sample, shock, aspect }) {
             carnivore: world.meanGenes(world.carnivores),
         },
         terrain: world.terrain ? { ...world.terrain.coverage(), boost: world.grass.boost } : null,
+        biomes: herds ? biomeSummary(world.terrain, herds) : null,
         humans: hadHumans ? {
             gone: humansGone,
             founded: world.nextTribeId - 1,
@@ -74,6 +83,13 @@ function runSeed({ params, seed, steps, sample, shock, aspect }) {
             culture: people ? { aggression: aggression / people, sociality: sociality / people } : null,
         } : null,
     };
+}
+
+// Each biome's share of the world, and of the herbivores counted in it.
+function biomeSummary(terrain, herds) {
+    const shares = terrain.biomeShares();
+    const total = herds.reduce((s, v) => s + v, 0) || 1;
+    return terrain.biomes.map((b, k) => ({ name: b.name, share: shares[k], herds: herds[k] / total }));
 }
 
 if (!isMainThread) {
@@ -150,7 +166,7 @@ function period(a, sample) {
 }
 
 function summarise(r) {
-    const out = { seed: r.seed, steps: r.steps, extinct: r.extinct, stepsPerSec: r.stepsPerSec, genes: r.genes, terrain: r.terrain };
+    const out = { seed: r.seed, steps: r.steps, extinct: r.extinct, stepsPerSec: r.stepsPerSec, genes: r.genes, terrain: r.terrain, biomes: r.biomes };
     for (const s of ['herbivore', 'carnivore', 'grass']) {
         const ser = r.series[s];
         const back = ser.slice(Math.floor(ser.length / 2));
@@ -229,6 +245,11 @@ async function main() {
         if (s.terrain) {
             const t = s.terrain;
             console.log(`        terrain: water ${f(100 * t.water)}% · cliffs ${f(100 * t.cliff)}% · regrowth ×${f(t.boost, 2)} on the land left`);
+        }
+        if (s.biomes) {
+            // Share of the world's patches, and (in brackets) of the herbivores found there.
+            const land = s.biomes.filter((b) => b.name !== 'water');
+            console.log(`        biomes: ${land.map((b) => `${b.name} ${f(100 * b.share)}% (${f(100 * b.herds)}%)`).join(' · ')}`);
         }
         if (opts.spark) {
             const r = results.find((x) => x.seed === s.seed);

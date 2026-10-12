@@ -30,12 +30,16 @@ const VIEW_SPAN = { follow: 380, first: 220 };
 // Where on screen (fraction of height) the followed animal sits.
 const ANCHOR_Y = { map: 0.5, follow: 0.5, first: 0.66 };
 
+// How far along from bare ground to lush grass a patch with grass g looks,
+// indexed by g × 255 (a gentle curve, so thin grass already shows).
+const GREEN = Float64Array.from({ length: 256 }, (_, i) => Math.pow(i / 255, 0.8));
+
 function grassPalette() {
     const lut = new Uint32Array(256);
     const [r0, g0, b0] = COLORS.bare;
     const [r1, g1, b1] = COLORS.lush;
     for (let i = 0; i < 256; i++) {
-        const t = Math.pow(i / 255, 0.8);
+        const t = GREEN[i];
         const r = Math.round(r0 + (r1 - r0) * t);
         const g = Math.round(g0 + (g1 - g0) * t);
         const b = Math.round(b0 + (b1 - b0) * t);
@@ -50,9 +54,49 @@ const wrapDelta = (d, size) => (d > size / 2 ? d - size : d < -size / 2 ? d + si
 // Flags are painted by flag.js (shared with the 3D view and the panel).
 export { drawFlag };
 
+// How much of the grass a biome's own cover hides in the 2D view, seen from
+// above: a forest canopy keeps the ground dark whatever grows beneath it.
+const CANOPY = { forest: 0.55 };
+
+// With biomes: each land patch's bare-ground colour and how much of its grass
+// shows (1 − canopy), as [r, g, b, show] per patch. Averaged over the land
+// patches around it, so the edges between biomes blend instead of following
+// the patch grid in steps.
+function biomeGround(T, water, cols, rows) {
+    const n = cols * rows;
+    const raw = new Float32Array(4 * n);
+    for (let k = 0; k < n; k++) {
+        const b = T.biomes[T.biomeGrid[k]];
+        raw.set(b.color, 4 * k);
+        raw[4 * k + 3] = 1 - (CANOPY[b.name] ?? 0);
+    }
+    const out = new Float32Array(4 * n);
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            const k = c + r * cols;
+            if (water[k] !== 0) continue;
+            let count = 0;
+            for (let dr = -1; dr <= 1; dr++) {
+                const rr = (r + dr + rows) % rows;
+                for (let dc = -1; dc <= 1; dc++) {
+                    const j = ((c + dc + cols) % cols) + rr * cols;
+                    if (water[j] !== 0) continue;
+                    for (let ch = 0; ch < 4; ch++) out[4 * k + ch] += raw[4 * j + ch];
+                    count++;
+                }
+            }
+            for (let ch = 0; ch < 4; ch++) out[4 * k + ch] /= count;
+        }
+    }
+    return out;
+}
+
 // The land under the grass, one entry per grass patch (display only): water
-// colour, hill shading, and how rocky the ground looks, so bare peaks read as
-// rock rather than as grazed-out meadow. Cliffs show through the shading.
+// colour, hill shading, and the ground the grass grows on. With biomes that is
+// each biome's own bare ground (terrain.biomes[k].color), so a grazed-down
+// steppe reads as dry earth and a forest stays dark. Without, it is how rocky
+// the ground looks, so bare peaks read as rock rather than as grazed-out
+// meadow. Cliffs show through the shading.
 function groundLayer(world) {
     const T = world.terrain;
     const { cols, rows, cellW, cellH } = world.grass;
@@ -81,10 +125,10 @@ function groundLayer(world) {
             const lit = (gx + gy + LZ) / (Math.sqrt(gx * gx + gy * gy + 1) * Math.sqrt(2 + LZ * LZ));
             const s = 1 + 0.85 * (lit / flat - 1); // gentle: flat ground keeps its colour
             shade[k] = s < 0.55 ? 0.55 : s > 1.3 ? 1.3 : s;
-            rock[k] = T.rockiness(x, y);
+            if (!T.biomeGrid) rock[k] = T.rockiness(x, y);
         }
     }
-    return { water, shade, rock };
+    return { water, shade, rock, bare: T.biomeGrid ? biomeGround(T, water, cols, rows) : null };
 }
 
 
@@ -262,6 +306,8 @@ export class Renderer {
         const stride = cols + 2;
         const ground = this.ground;
         const [rr, rg, rb] = COLORS.rock;
+        const [lr, lg, lb] = COLORS.lush;
+        const bare = ground !== null ? ground.bare : null;
         for (let y = -1; y <= rows; y++) {
             const gy = (y + rows) % rows;
             for (let x = -1; x <= cols; x++) {
@@ -269,9 +315,17 @@ export class Renderer {
                 const k = gy * cols + gx;
                 let c = lut[(g[k] * 255) | 0];
                 if (ground !== null) {
-                    // Water, or grass over rock, lit by the slope.
+                    // Water, or grass over its biome's ground (or over rock), lit by the slope.
                     if (ground.water[k] !== 0) {
                         c = ground.water[k];
+                    } else if (bare !== null) {
+                        const s = ground.shade[k];
+                        const q = 4 * k;
+                        const t = GREEN[(g[k] * 255) | 0] * bare[q + 3];
+                        const r = (bare[q] + (lr - bare[q]) * t) * s;
+                        const gg = (bare[q + 1] + (lg - bare[q + 1]) * t) * s;
+                        const b = (bare[q + 2] + (lb - bare[q + 2]) * t) * s;
+                        c = (255 << 24) | ((b > 255 ? 255 : b) << 16) | ((gg > 255 ? 255 : gg) << 8) | (r > 255 ? 255 : r);
                     } else {
                         const s = ground.shade[k];
                         const t = ground.rock[k];

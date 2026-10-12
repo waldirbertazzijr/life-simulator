@@ -22,6 +22,26 @@
 //   pathField(x, y)  how far (x, y) is by land from everywhere: a camp's way home
 //   way(...)         which way to walk to a camp, using its path field
 //
+// Biomes (params.biomes; null when biomes are off). For renderers:
+//
+//   biome(x, y)      biome index at a world position (BIOME.WATER on water)
+//   biomes           [{ name, color: [r, g, b], fertility }, ...] in index order.
+//                    `color` is the bare ground, what shows where the grass is
+//                    grazed down; `fertility` is the grass it can hold, 0..1.
+//   biomeGrid        Uint8Array, the biome of every grass patch (same layout as
+//                    world.grass.g), filled in by fertilityGrid()
+//   moisture, temperature   Float32Array(cols·rows), the climate at each node, 0..1-ish
+//
+// How biomes are made. Two smooth fields over the nodes, a little like a
+// Whittaker diagram (climate → vegetation):
+//   moisture     high beside water and fading with distance from it, plus broad
+//                "weather" noise that makes whole regions wetter or drier;
+//   temperature  falling with altitude (a lapse rate), plus broad noise.
+// Each point is classed from the two: snow on the coldest summits, bare rock
+// and then tundra below them, steppe where it is dry, wetland where it is wet
+// and warm, forest on the cooler, moist mid-slopes, meadow in the warm, moist
+// rest. Each class grows its own amount of grass (its fertility).
+//
 // How it is made. The heights are *periodic* gradient noise: each octave is a
 // lattice of random directions whose size divides the world exactly, and the
 // lattice wraps around, so the land is seamless where the world joins itself.
@@ -120,6 +140,61 @@ const NEIGHBOUR_A = [1, -1, 0, 0, 1, 1, -1, -1];
 const NEIGHBOUR_B = [0, 0, 1, -1, 1, -1, 1, -1];
 const wrapCell = (v, n) => (v < 0 ? v + n : v >= n ? v - n : v);
 
+// Distance from the nearest seed cell to every cell of a wrapping grid, moving
+// only through cells where open[c] is 1: 8 neighbours, step costs 2 and 3
+// (≈ 1 : √2), never cutting diagonally between two closed cells. FAR where
+// unreachable. Dial's algorithm: the step costs are small integers, so a ring
+// of four buckets replaces the priority queue.
+function dial(cols, rows, open, seeds) {
+    const dist = new Int32Array(cols * rows).fill(FAR);
+    const buckets = [[], [], [], []];
+    for (const s of seeds) {
+        dist[s] = 0;
+        buckets[0].push(s);
+    }
+    let pending = seeds.length;
+    for (let d = 0; pending > 0; d++) {
+        const bucket = buckets[d & 3];
+        while (bucket.length) {
+            const c = bucket.pop();
+            pending--;
+            if (dist[c] !== d) continue; // a shorter way was found since
+            const a = c % cols;
+            const b = (c - a) / cols;
+            for (let k = 0; k < 8; k++) {
+                const da = NEIGHBOUR_A[k];
+                const db = NEIGHBOUR_B[k];
+                const n = wrapCell(a + da, cols) + wrapCell(b + db, rows) * cols;
+                if (!open[n]) continue;
+                if (da !== 0 && db !== 0
+                    && (!open[wrapCell(a + da, cols) + b * cols] || !open[a + wrapCell(b + db, rows) * cols])) continue;
+                const nd = d + (da !== 0 && db !== 0 ? 3 : 2);
+                if (nd < dist[n]) {
+                    dist[n] = nd;
+                    buckets[nd & 3].push(n);
+                    pending++;
+                }
+            }
+        }
+    }
+    return dist;
+}
+
+// Biomes, in index order (terrain.biomes adds each one's fertility from
+// params.biomes.fertility). Colours are the bare ground under the grass:
+// muted, in the family of the 2D view's greens, rock grey and water blue.
+export const BIOME = { WATER: 0, WETLAND: 1, MEADOW: 2, FOREST: 3, STEPPE: 4, TUNDRA: 5, ROCK: 6, SNOW: 7 };
+const BIOME_LOOK = [
+    { name: 'water', color: [36, 54, 66] },
+    { name: 'wetland', color: [34, 58, 46] },
+    { name: 'meadow', color: [32, 35, 26] },
+    { name: 'forest', color: [16, 38, 24] },
+    { name: 'steppe', color: [80, 72, 48] },
+    { name: 'tundra', color: [76, 80, 68] },
+    { name: 'rock', color: [98, 94, 86] },
+    { name: 'snow', color: [168, 172, 170] },
+];
+
 // Turning aside: the wanted heading first, then 45°, 90°, 135° to one side and
 // the other, and finally straight back. cos/sin of k·45° for k = −4..4.
 const TURNS = [0, 1, -1, 2, -2, 3, -3, 4];
@@ -145,6 +220,13 @@ export class Terrain {
         this.slope = this.makeSlopes();
         this.makeMask(P);
         this.makeReach();
+
+        // Biomes come later, from makeBiomes(), if they are on.
+        this.biomes = null;
+        this.biomeGrid = null;
+        this.biomeParams = null;
+        this.moisture = null;
+        this.temperature = null;
     }
 
     // ---- generation -----------------------------------------------------------
@@ -281,6 +363,75 @@ export class Terrain {
         this.reachFraction = bestSize / n;
     }
 
+    // Climate and biomes (see the header). `rng` is a random stream of their
+    // own, so turning biomes on changes only the climate laid over the land:
+    // the same heights, and the same animals put down in the same places.
+    makeBiomes(P, rng) {
+        const { cols, rows, W, H, height: h, seaLevel: sea, peak } = this;
+        const n = cols * rows;
+        // How far each node is from the nearest water node, in world units.
+        const water = [];
+        for (let k = 0; k < n; k++) if (h[k] < sea) water.push(k);
+        const steps = dial(cols, rows, new Uint8Array(n).fill(1), water);
+        const unit = (this.cellW + this.cellH) / 4; // steps count 2 per node spacing
+        const weather = fractal(cols, rows, W, H, P.weatherSize, 3, 0.5, rng);
+        const climate = fractal(cols, rows, W, H, P.climateSize, 2, 0.5, rng);
+        this.moisture = new Float32Array(n);
+        this.temperature = new Float32Array(n);
+        for (let k = 0; k < n; k++) {
+            const near = steps[k] === FAR ? 0 : Math.exp(-(steps[k] * unit) / P.wetReach);
+            this.moisture[k] = P.waterShare * near + (1 - P.waterShare) * weather[k];
+            const up = h[k] < sea ? 0 : (h[k] - sea) / (peak - sea); // 0 at the shore, 1 at the top
+            this.temperature[k] = 1 - P.climateSpread * climate[k] - P.lapse * up;
+        }
+        this.biomeParams = P;
+        this.biomes = BIOME_LOOK.map((b) => ({ name: b.name, color: b.color, fertility: P.fertility[b.name] }));
+    }
+
+    // A climate field (moisture or temperature) at any world position, bilinear
+    // between the nodes like heightAt.
+    fieldAt(field, x, y) {
+        const { cols, rows } = this;
+        let fx = x * this.invW;
+        let fy = y * this.invH;
+        if (fx < 0 || fx >= cols) fx = ((fx % cols) + cols) % cols;
+        if (fy < 0 || fy >= rows) fy = ((fy % rows) + rows) % rows;
+        const i0 = fx | 0;
+        const j0 = fy | 0;
+        const tx = fx - i0;
+        const ty = fy - j0;
+        const i1 = i0 + 1 >= cols ? 0 : i0 + 1;
+        const r0 = j0 * cols;
+        const r1 = (j0 + 1 >= rows ? 0 : j0 + 1) * cols;
+        const a = field[i0 + r0];
+        const b = field[i1 + r0];
+        const c = field[i0 + r1];
+        const d = field[i1 + r1];
+        return a + (b - a) * tx + (c - a) * ty + (a - b - c + d) * tx * ty;
+    }
+
+    // The biome at a world position: water, then by temperature (the cold
+    // classes, whatever the moisture), then by moisture.
+    biome(x, y) {
+        if (this.isWater(x, y)) return BIOME.WATER;
+        const P = this.biomeParams;
+        const t = this.fieldAt(this.temperature, x, y);
+        if (t < P.snowBelow) return BIOME.SNOW;
+        if (t < P.rockBelow) return BIOME.ROCK;
+        if (t < P.tundraBelow) return BIOME.TUNDRA;
+        const m = this.fieldAt(this.moisture, x, y);
+        if (m < P.dryBelow) return BIOME.STEPPE;
+        if (t < P.forestBelow) return BIOME.FOREST; // the cooler, moist mid-slopes
+        return m > P.wetAbove ? BIOME.WETLAND : BIOME.MEADOW;
+    }
+
+    // Share of the grass patches in each biome (for the checks).
+    biomeShares() {
+        const shares = new Array(this.biomes.length).fill(0);
+        for (const b of this.biomeGrid) shares[b]++;
+        return shares.map((s) => s / this.biomeGrid.length);
+    }
+
     // Share of the world that is water and cliff, and how much of the rest is
     // the main body of land (for the checks).
     coverage() {
@@ -360,22 +511,31 @@ export class Terrain {
         return smoothstep(this.P.fertileBelow, this.P.barrenAbove, up);
     }
 
-    // How much grass the ground can hold, 0..1: none in water or on cliffs, full
-    // in the lowlands, thinning out up the mountains to bare rock near the summits.
-    // The one place fertility is decided: Grass gets it per patch through
-    // fertilityGrid(), so a richer rule (biomes from moisture and temperature)
-    // only has to change this method.
+    // How much grass the ground can hold, 0..1: none in water or on cliffs.
+    // With biomes, whatever the biome holds (lush wetland, full meadow, thinner
+    // forest, sparse steppe, thin tundra, nothing on rock and snow). Without,
+    // full in the lowlands, thinning out up the mountains to bare rock near the
+    // summits. The one place fertility is decided: Grass gets it per patch
+    // through fertilityGrid().
     fertility(x, y) {
         if (this.isWater(x, y) || this.isCliff(x, y)) return 0;
+        if (this.biomes !== null) return this.biomes[this.biome(x, y)].fertility;
         return 1 - this.rockiness(x, y);
     }
 
     // Fertility at the centre of every patch of a grass grid. (Float32: the
     // regrowth loop reads it every step, so half the memory traffic counts.)
+    // With biomes, also notes each patch's biome in biomeGrid.
     fertilityGrid(grass) {
         const f = new Float32Array(grass.cols * grass.rows);
+        if (this.biomes !== null) this.biomeGrid = new Uint8Array(f.length);
         for (let r = 0; r < grass.rows; r++) {
-            for (let c = 0; c < grass.cols; c++) f[c + r * grass.cols] = this.fertility((c + 0.5) * grass.cellW, (r + 0.5) * grass.cellH);
+            for (let c = 0; c < grass.cols; c++) {
+                const x = (c + 0.5) * grass.cellW;
+                const y = (r + 0.5) * grass.cellH;
+                f[c + r * grass.cols] = this.fertility(x, y);
+                if (this.biomeGrid !== null) this.biomeGrid[c + r * grass.cols] = this.biome(x, y);
+            }
         }
         return f;
     }
@@ -432,40 +592,7 @@ export class Terrain {
     // Distance home (in half-cells) from every cell, toward the point (x, y).
     pathField(x, y) {
         this.makeWayGrid();
-        const { wcols, wrows, wayOpen: open } = this;
-        const dist = new Int32Array(wcols * wrows).fill(FAR);
-        const start = this.wayIndex(x, y);
-        dist[start] = 0;
-        // Dial's algorithm: step costs are small integers, so a ring of four
-        // buckets replaces the priority queue.
-        const buckets = [[start], [], [], []];
-        let pending = 1;
-        for (let d = 0; pending > 0; d++) {
-            const bucket = buckets[d & 3];
-            while (bucket.length) {
-                const c = bucket.pop();
-                pending--;
-                if (dist[c] !== d) continue; // a shorter way was found since
-                const a = c % wcols;
-                const b = (c - a) / wcols;
-                for (let k = 0; k < 8; k++) {
-                    const da = NEIGHBOUR_A[k];
-                    const db = NEIGHBOUR_B[k];
-                    const n = wrapCell(a + da, wcols) + wrapCell(b + db, wrows) * wcols;
-                    if (!open[n]) continue;
-                    // No cutting diagonally between two closed cells.
-                    if (da !== 0 && db !== 0
-                        && (!open[wrapCell(a + da, wcols) + b * wcols] || !open[a + wrapCell(b + db, wrows) * wcols])) continue;
-                    const nd = d + (da !== 0 && db !== 0 ? 3 : 2);
-                    if (nd < dist[n]) {
-                        dist[n] = nd;
-                        buckets[nd & 3].push(n);
-                        pending++;
-                    }
-                }
-            }
-        }
-        return dist;
+        return dial(this.wcols, this.wrows, this.wayOpen, [this.wayIndex(x, y)]);
     }
 
     // Which way to walk from (x, y) to a camp (ddx, ddy) away, at distance d,
