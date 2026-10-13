@@ -146,9 +146,13 @@ test('WASD are axes relative to the look; other keys are actions', () => {
     assert.equal(input.x, 1);
     key('keyup', 'KeyW');
     assert.equal(input.y, 0);
-    for (const code of ['KeyX', 'KeyQ', 'KeyE', 'KeyV', 'KeyM', 'KeyP', 'KeyR', 'ArrowUp']) key('keydown', code);
+    for (const code of ['KeyX', 'KeyQ', 'KeyE', 'KeyV', 'KeyM', 'KeyP', 'KeyR', 'ArrowUp', 'KeyL']) key('keydown', code);
     key('keydown', 'KeyX', { repeat: true });
-    assert.deepEqual(actions, ['move', 'move', 'crouch', 'lock', 'interact', 'view', 'map', 'pause', 'eat', 'cycle-call']);
+    assert.deepEqual(actions, ['move', 'move', 'crouch', 'lock', 'interact', 'view', 'map', 'pause', 'eat', 'cycle-call', 'look']);
+    // On the map: M, G and L (the editor) only.
+    input.setMode('map');
+    for (const code of ['KeyE', 'KeyL', 'KeyG']) key('keydown', code);
+    assert.deepEqual(actions.slice(-2), ['look', 'call']);
 });
 
 test('input ignores keys typed into a text field', () => {

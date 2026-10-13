@@ -417,6 +417,36 @@
         #story .actions { display: flex; gap: 10px; justify-content: center; margin-top: 14px; }
         #story button { height: 32px; padding: 0 16px; font: 17px var(--serif); color: var(--hud-text); border: 1px solid var(--hud-line); border-radius: 2px; }
 
+        /* The character editor (play/editor.js): the panel's colours and
+           hairlines, a serif title as on the HUD, the preview on the left. */
+        #editor {
+            position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 25;
+            width: min(500px, calc(100vw - 32px)); padding: 14px 16px 12px;
+            background: rgba(16, 18, 17, 0.9); border: 1px solid var(--line); border-radius: 10px;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+            color: var(--text); text-shadow: none;
+        }
+        #editor[hidden] { display: none; }
+        #editor .head { display: flex; align-items: baseline; gap: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+        #editor .title { font: 500 24px/1.1 var(--serif); letter-spacing: 0.02em; }
+        #editor .sub { font: italic 16px var(--serif); color: var(--muted); }
+        #editor .cols { display: flex; gap: 14px; padding: 10px 0; }
+        #ed-preview { flex: none; width: 150px; height: 220px; border-radius: 6px; background: radial-gradient(ellipse at 50% 70%, rgba(255, 255, 255, 0.07), transparent 70%); }
+        #editor .choices { flex: 1; min-width: 0; display: grid; grid-template-columns: auto 1fr; align-content: start; gap: 6px 10px; }
+        #editor .k { color: var(--muted); font-size: 11px; line-height: 26px; white-space: nowrap; }
+        #editor .opts { display: flex; flex-wrap: wrap; gap: 3px; }
+        #editor .opts button { min-width: 0; padding: 0 7px; }
+        #editor .swatches { gap: 5px; padding-top: 3px; }
+        #editor button.swatch { width: 20px; height: 20px; padding: 0; border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.18); }
+        #editor button.swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--bg), 0 0 0 3px var(--text); }
+        #editor .foot { display: flex; align-items: center; gap: 6px; padding-top: 8px; border-top: 1px solid var(--line); }
+        #editor .keys { margin-right: auto; color: var(--muted); font-size: 11px; }
+        #ed-done { border-color: var(--line); color: var(--text); }
+        @media (max-width: 460px) { #editor .cols { flex-direction: column; align-items: center; } #ed-preview { width: 120px; height: 170px; } }
+        /* The heir's line offers to shape them (a quiet link under it). */
+        .banner .shape { pointer-events: auto; margin-top: 8px; height: auto; padding: 2px 8px; font: italic 17px var(--serif); color: var(--hud-muted); border: 0; }
+        .banner .shape:hover { color: var(--hud-text); background: none; text-decoration: underline; text-underline-offset: 3px; }
+
         /* The admin console (play/console.js): ` or F2. It slides down from
            the top, in the panel's colours, with a monospace line. */
         #console {
@@ -473,6 +503,7 @@
             <div id="play-bar" hidden>
                 <canvas id="play-flag" width="36" height="24"></canvas>
                 <span class="self" id="play-who"></span>
+                <button id="play-look" title="How your person looks (L)">look</button>
                 <button id="play-return" title="Back into your person (M)">return</button>
                 <button id="play-stop" title="Let go of them"><svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
             </div>
@@ -613,6 +644,21 @@
         </dl>
         <div class="line" id="story-line"></div>
         <div class="actions"><button id="story-again">Play again</button><button id="story-watch">Keep watching</button></div>
+    </section>
+
+    <!-- The character editor (play/editor.js): L, the panel's "look", or for your heir. -->
+    <section id="editor" hidden aria-label="Look">
+        <div class="head"><span class="title" id="ed-title"></span><span class="sub" id="ed-sub"></span></div>
+        <div class="cols">
+            <canvas id="ed-preview" aria-hidden="true"></canvas>
+            <div class="choices">
+                <div class="k">body</div><div class="opts" id="ed-body"></div>
+                <div class="k">hair</div><div class="opts" id="ed-style"></div>
+                <div class="k">hair colour</div><div class="opts swatches" id="ed-hair"></div>
+                <div class="k">skin</div><div class="opts swatches" id="ed-skin"></div>
+            </div>
+        </div>
+        <div class="foot"><span class="keys">Esc or L closes</span><button id="ed-reset" title="The look they were born with">as born</button><button id="ed-done">done</button></div>
     </section>
 
     <!-- The admin console (play/console.js): ` or F2. -->

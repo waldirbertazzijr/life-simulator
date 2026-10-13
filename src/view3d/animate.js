@@ -26,6 +26,7 @@ import { STATE } from '../population.js';
 import { STEPS_PER_SECOND } from '../sim.js';
 import { wrapDelta, hash, clamp01 } from './util.js';
 import { POSE, POSE_NAMES, KEYS, POSES } from './keyframes.js';
+import { DYE, SHAVED, STUBBLE } from './looks.js';
 
 // (The poses' codes and keyframes, from here as ever.)
 export { POSE, POSE_NAMES, KEYS, POSES, poseApplies, samplePose } from './keyframes.js';
@@ -102,10 +103,17 @@ export function poseTable() {
 // moved positions themselves.
 export const VERTEX_PARS = /* glsl */ `
 attribute vec4 rig;   // the joint of this vertex's part (x, y, z), and the part
-attribute vec2 gait;  // per individual: how far through a stride (0..1), and how fast (0 still, 1 walking, 2 running)
+attribute vec3 gait;  // per individual: how far through a stride (0..1), how fast (0 still, 1 walking, 2 running),
+                      // and how much it wears its map colour (small on screen) over its own
 attribute vec3 pose;  // per individual: the pose, how far through it (0..1), and how much of it (0..1)
-attribute float look; // per individual: how much it wears its species' map colour (small on screen) over its own
-uniform vec3 uLook;   // that colour (the 2D map's)
+#ifdef PEOPLE
+attribute float dye;  // this vertex's colour role (looks.js DYE): 0 its own, 1 skin, 2 cloth, 10 + style: hair
+attribute vec3 cloth; // per person: their clothes' colour (their tribe's, muted)
+attribute vec3 skin;  // per person: their skin
+attribute vec4 hair;  // per person: their hair's colour, and its style
+#else
+uniform vec3 uLook;   // the species' map colour (the 2D map's)
+#endif
 uniform highp sampler2D uPoses; // the keyframes (poseTable)
 uniform int uRow;     // this species' first row in it
 uniform vec3 uTorso;  // the torso's joint: head and arms ride on it
@@ -136,6 +144,11 @@ vec3 keyed( int col, int r0, int r1, float t ) {
 
 export const VERTEX_MAIN = /* glsl */ `
 vec3 transformed = vec3( position );
+#ifdef PEOPLE
+// Every hair style is on every head: those this person does not wear fold
+// to a point, and draw nothing.
+if ( dye > ${DYE.hair - 0.5} && abs( dye - ${DYE.hair}.0 - hair.w ) > 0.5 ) transformed = rig.xyz;
+#endif
 {
     int part = int( rig.w + 0.5 );
     float ph = gait.x * 6.2831853;
@@ -187,10 +200,22 @@ vec3 transformed = vec3( position );
 // In place of <color_vertex>: a model's own colours give way to its
 // species' map colour as it gets small on screen (creatures.js), so a grey
 // wolf a few pixels long still reads as a predator, as on the 2D map.
+// People: each vertex's colour by its role (models.js), with the person's
+// skin, clothes and hair (a shaved head: a little of the hair over the
+// skin); small on screen, their tribe's colour (instanceColor). (looks.js
+// `paint` does the same, for the tests.)
 export const VERTEX_COLOR = /* glsl */ `
+#ifdef PEOPLE
+vColor = color;
+if ( dye > ${DYE.hair - 0.5} ) vColor *= abs( hair.w - ${SHAVED}.0 ) < 0.5 ? mix( skin, hair.rgb, ${STUBBLE} ) : hair.rgb;
+else if ( dye > ${DYE.cloth - 0.5} ) vColor *= cloth;
+else if ( dye > ${DYE.skin - 0.5} ) vColor *= skin;
+vColor = mix( vColor, instanceColor, gait.z );
+#else
 #include <color_vertex>
 #ifdef USE_COLOR
-vColor.rgb = mix( vColor.rgb, uLook, look );
+vColor.rgb = mix( vColor.rgb, uLook, gait.z );
+#endif
 #endif
 `;
 

@@ -6,7 +6,7 @@
 // `page` (main.js) = { world (the Mirror), renderer, canvas, panel, input,
 // hud, follow(id, keepView), followed(), setView(v), setSpeed(s),
 // getSpeed(), setPaused(p), getPaused(), changed() (the panel's play bar
-// is out of date) }.
+// is out of date), editLook(id, heir) (the character editor) }.
 import { personName } from './names.js';
 
 // What modes.js is given as `env`.
@@ -32,6 +32,8 @@ export function modesEnv(page) {
         },
         openPicker: () => panel.openPicker(world),
         changed: page.changed,
+        // The character editor (editor.js) for a person (`heir`: just become them).
+        editLook: (id, heir) => page.editLook?.(id, heir),
         // Poses on bodies (the 3D view's; the flat one has none).
         pose: (id, code, seconds) => renderer.pose?.(id, code, seconds),
         hold: (id, code) => renderer.hold?.(id, code),
@@ -62,6 +64,7 @@ export function modesEnv(page) {
 //   play.cycle('weapon' | 'tool'), play.tool(), play.skill(), play.craft()
 //                        → or ←, right click, Shift + right click, C (keys
 //                        in the craft menu: play.press('ArrowDown'), ...)
+//   play.editor          the character editor (open(id), pick(field, value), close())
 //   play.state           who, where, stamina, snaps (moves turned down), the hands, the items...
 //   play.modes
 export function windowPlay(page, modes) {
@@ -132,6 +135,10 @@ export function windowPlay(page, modes) {
                     menu: modes.menu ? { ...modes.menu } : null, legends: world.legends?.length ?? 0,
                 } : null,
             };
+        },
+        // The character editor (editor.js), or null in the flat view.
+        get editor() {
+            return page.editor ?? null;
         },
         modes,
     };

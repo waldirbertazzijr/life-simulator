@@ -30,7 +30,7 @@ export class Panel {
     // actions: { togglePause, setSpeed(n), reset(byKey), start(seed), setView(v), cycleView,
     //            unfollow, followDescendant, followAnother, followTribe(id), follow(id),
     //            becomeLabel(id) → 'become them' | null, become(id), openPicker,
-    //            play(tribeId), back(), stop(), setBlood(on) }
+    //            play(tribeId), back(), stop(), look() (the character editor), setBlood(on) }
     constructor(actions) {
         this.$ = (id) => document.getElementById(id);
         this.actions = actions;
@@ -81,6 +81,7 @@ export class Panel {
             this.closePicker();
             actions.play(Number(row.dataset.tribe));
         });
+        this.$('play-look').addEventListener('click', () => actions.look());
         this.$('play-return').addEventListener('click', () => actions.back());
         this.$('play-stop').addEventListener('click', () => actions.stop());
         this.$('play-calls').addEventListener('click', (e) => {

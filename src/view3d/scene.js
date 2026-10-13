@@ -18,8 +18,9 @@
 // biome looks in all of them is in biomes.js.
 //
 // Draw calls stay few: a handful of ground copies, two instanced meshes for
-// all the trees (one per kind), one for all the tufts, three more (one per
-// species, the dead included), two for blood (droplets and pools), one for
+// all the trees (one per kind), one for all the tufts, the creatures (one
+// per species, people one per body, each with a far level; the dead
+// included), two for blood (droplets and pools), one for
 // spears in the air (thrown.js), the water sheet, the sky, two per visible
 // camp, two for all the camps' racks, and two for a tribe's standing order
 // (its pole and a hunt's range: order-marker.js).
@@ -49,6 +50,8 @@ import { Lineup } from './poses.js';
 import { groundOf } from './util.js';
 import { stubTerrain } from './terrain-stub.js';
 import { Lilies } from './lilies.js';
+import { Looks } from './looks.js';
+import { Preview } from './preview.js';
 import { Frogs } from './frogs.js';
 
 // A soft daytime sky: a light hazy blue at the horizon, a muted blue
@@ -127,11 +130,13 @@ export class View3D {
         this.tufts = new Tufts(this.scene);
         this.lilies = new Lilies(this.scene);
         this.frogs = new Frogs(this.scene);
-        this.creatures = new Creatures(this.scene);
-        this.creatures.useModels(); // the sheep and the wolf (models.js), swapped in once loaded
+        this.looks = new Looks(); // how each person looks (looks.js; the editor changes it)
+        this.creatures = new Creatures(this.scene, this.looks);
+        this.creatures.useModels(); // the sheep, the wolf and the people (models.js), swapped in once loaded
         this.effects = new Effects(this.scene, this.creatures.motion); // the dead, and blood
         this.thrown = new Thrown(this.scene); // spears in the air
         this.items = new Items(this.scene);   // items held and lying (package 3)
+        this.items.rigOf = (id) => this.creatures.rigOf(id); // (in each body's hands)
         this.sparks = new Sparks(this.scene); // chips, sparks, skills
         this.camps = new Camps(this.scene, this.gl);
         this.orders = new OrderMarkers(this.scene); // a tribe's standing order (orders.js)
@@ -161,6 +166,7 @@ export class View3D {
         this.tufts.attach(world, this.terrain, this.ground);
         this.lilies.attach(world, this.terrain);
         this.frogs.attach(world, this.terrain, this.lilies.places);
+        this.looks.attach(world);
         this.creatures.attach();
         this.effects.attach(this.heightAt);
         this.thrown.attach();
@@ -263,6 +269,11 @@ export class View3D {
 
     release(id) {
         this.creatures.motion.release(id);
+    }
+
+    // The character editor's turning preview (play/editor.js), on its canvas.
+    preview(canvas) {
+        return new Preview(canvas);
     }
 
     get blood() {

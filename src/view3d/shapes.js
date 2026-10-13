@@ -4,7 +4,7 @@
 // vertices, so the normal of each vertex is its face's normal: that is what
 // gives the faceted, flat-shaded look. Every vertex also carries a grey
 // `color` (a shade) so parts of one body can be lighter or darker while the
-// material (or, for people, each instance) supplies the hue.
+// material (or, for people, their clothes' colour) supplies the hue.
 //
 // Bodies move (animate.js), so every vertex also says which part of the body
 // it belongs to and where that part's joint is (the `rig` attribute: joint x,
@@ -15,6 +15,7 @@
 // an animal's left side is −Z.
 import * as THREE from 'three';
 import { GAIT, PART } from './animate.js';
+import { DYE } from './looks.js';
 
 // Where each species' torso turns (and its head and arms with it), and where
 // the whole body turns: the joints the vertex shader needs besides each
@@ -173,14 +174,15 @@ export function meatShape() {
 
 // A person: a tapered six-sided torso (wider across the shoulders than front
 // to back) on two legs, two arms hanging from the shoulders, and a round
-// head. About 4.8 tall; children are scaled.
+// head. About 4.8 tall; children are scaled. It stands in for the people's
+// models (models.js) until they have loaded, all in its clothes' colour.
 export function personShape() {
     const hip = GAIT.human.leg;
     const torso = RIGS.human.torso;
     const shoulder = 3.45;
     const arm = 1.75;
     const limb = (w, h, d, at, shade, of, joint) => part(new THREE.BoxGeometry(w, h, d), { at, shade, of, joint });
-    return merge([
+    const g = merge([
         part(new THREE.CylinderGeometry(0.78, 0.62, 2.05, 6), { at: [0, 2.75, 0], scale: [0.62, 1, 1], shade: 0.82, joint: torso }),
         part(new THREE.IcosahedronGeometry(0.62, 0), { at: [0.05, 4.15, 0], of: PART.HEAD, joint: [0, 3.75, 0] }),
         limb(0.36, 2.05, 0.4, [0, 1.025, -0.3], 0.6, PART.LEG_FL, [0, hip, -0.3]),
@@ -188,4 +190,6 @@ export function personShape() {
         limb(0.26, arm, 0.26, [0, shoulder + 0.1 - arm / 2, -0.84], 0.74, PART.ARM_L, [0, shoulder, -0.84]),
         limb(0.26, arm, 0.26, [0, shoulder + 0.1 - arm / 2, 0.84], 0.74, PART.ARM_R, [0, shoulder, 0.84]),
     ]);
+    g.setAttribute('dye', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count).fill(DYE.cloth), 1));
+    return g;
 }

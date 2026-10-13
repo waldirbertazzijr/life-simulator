@@ -5,7 +5,7 @@
 //
 //   move                    a movement key went down (it stands you up from resting)
 //   roll                    Space tapped: released within TAP_MS
-//   crouch lock interact eat craft call view map pause
+//   crouch lock interact eat craft call view map pause look
 //   interact-end            E let go (butchering is done holding E)
 //   cycle-weapon cycle-tool cycle-pouch cycle-call      (the arrow keys)
 //   attack {heavy, power}   left click; held past TAP_MS, heavy: power is how
@@ -25,11 +25,11 @@
 // until it is), dragging on the view looks around instead.
 //
 // Modes: 'off' hears nothing (the page's own shortcuts work, ui.js), 'map'
-// hears only M (back into your body) and G (a call, given where you click:
-// calls.js), 'body' hears everything. Keys typed
-// into a text field, or pressed with Ctrl/Cmd/Alt, are left alone. A key
-// released while the window was not looking would stay held, so losing focus
-// or hiding the tab lets go of everything.
+// hears only M (back into your body), G (a call, given where you click:
+// calls.js) and L (how your person looks: editor.js), 'body' hears
+// everything. Keys typed into a text field, or pressed with Ctrl/Cmd/Alt,
+// are left alone. A key released while the window was not looking would
+// stay held, so losing focus or hiding the tab lets go of everything.
 
 export const TAP_MS = 250;
 export const CHARGE_MS = 1000; // a heavy attack charges this long, at most
@@ -67,11 +67,11 @@ const MOVE = { KeyW: 'forward', KeyS: 'back', KeyA: 'left', KeyD: 'right' };
 // here so that later packages only have to listen for them.
 const ACTIONS = {
     KeyX: 'crouch', KeyQ: 'lock', KeyE: 'interact', KeyR: 'eat', KeyC: 'craft', KeyG: 'call',
-    KeyV: 'view', KeyM: 'map', KeyP: 'pause',
+    KeyV: 'view', KeyM: 'map', KeyP: 'pause', KeyL: 'look',
     ArrowRight: 'cycle-weapon', ArrowLeft: 'cycle-tool', ArrowDown: 'cycle-pouch', ArrowUp: 'cycle-call',
 };
 // On the map (where the arrows and WASD are the camera's).
-const MAP_ACTIONS = { KeyM: 'map', KeyG: 'call' };
+const MAP_ACTIONS = { KeyM: 'map', KeyG: 'call', KeyL: 'look' };
 
 const typing = (e) => {
     const el = e.target;

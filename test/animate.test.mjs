@@ -505,7 +505,7 @@ test('blood off hides sprays and pools, not carcasses', () => {
     assert.equal(fx.poolMesh.visible, false);
     const c = new Creatures(new THREE.Scene());
     c.update(deadWorld(), view(), () => 0, 0, fx);
-    assert.equal(c.herds.herbivore.mesh.count, 1, 'the carcass still lies there');
+    assert.equal(c.herds.herbivore[0].mesh.count, 1, 'the carcass still lies there');
     fx.setBlood(true);
     frame(m);
     fx.tick(m.clock, 1);
@@ -529,7 +529,7 @@ test("effects at the world's edge are drawn at their wrapped copy", () => {
     assert.ok(xs.length && xs.every((x) => Math.abs(x + 1) < 3), `droplets near it: ${xs}`);
     const c = new Creatures(new THREE.Scene());
     c.update(deadWorld(), v, () => 0, 0, fx);
-    const herd = c.herds.herbivore;
+    const herd = c.herds.herbivore[0];
     assert.equal(herd.mesh.count, 1);
     assert.ok(Math.abs(herd.matrices[12] + 1) < 1e-6, 'and so is the carcass');
     assert.equal(herd.poses[0], POSE.FALL);
@@ -559,7 +559,7 @@ test('the person you control sits only to rest', () => {
             m.tick(m.shown + 0.25, m.last + 1000 / 60);
             c.update(w, view(), () => 0, 0);
         }
-        return c.herds.human.poses[0];
+        return c.herds.human[0].poses[0];
     };
     assert.equal(settle(), POSE.NONE, 'standing');
     w.player.resting = true;
@@ -589,12 +589,12 @@ test('nothing is drawn inside personal space', () => {
     assert.equal(fx.dropMesh.count, 0);
     const c = new Creatures(new THREE.Scene());
     c.update(deadWorld(), eyes, () => 0, 0, fx);
-    assert.equal(c.herds.herbivore.mesh.count, 0);
+    assert.equal(c.herds.herbivore[0].mesh.count, 0);
     const away = view({ fx: 0, fz: 0, span: 50, personalSpace: 5, cam: [30, 10, 0] });
     fx.update(away);
     assert.ok(fx.dropMesh.count > 0);
     c.update(deadWorld(), away, () => 0, 0, fx);
-    assert.equal(c.herds.herbivore.mesh.count, 1);
+    assert.equal(c.herds.herbivore[0].mesh.count, 1);
 });
 
 // ---- Spears in the air (thrown.js), and the marks of the hands ----
@@ -683,7 +683,7 @@ test("the player's kill stays until butchered, shrinking", () => {
     const m = motion();
     const fx = effects(m);
     const c = new Creatures(new THREE.Scene());
-    const herd = c.herds.herbivore;
+    const herd = c.herds.herbivore[0];
     const draw = () => {
         c.update(deadWorld(), view(), () => 0, 0, fx);
         return herd.mesh.count ? Math.hypot(herd.matrices[0], herd.matrices[2]) : 0;

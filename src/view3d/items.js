@@ -13,9 +13,11 @@
 // The hands move with the body's pose, which the vertex shader works out
 // on the graphics card (animate.js). The same keyframes are read here for
 // each person near enough to see, and the same turns worked out for the
-// hand alone (handPose), so an item stays in the hand. While a spear is
-// thrown or thrust it is held level along the body (`locks`), the way a
-// wrist would turn it as the arm goes over the top, and a bow is held
+// hand alone (HandPose), so an item stays in the hand: on each person's own
+// body, whose shoulders, hands, belt and back are where its model has them
+// (models.js biped's `rig`; CODE_RIG for the body built in code). While a
+// spear is thrown or thrust it is held level along the body (`locks`), the
+// way a wrist would turn it as the arm goes over the top, and a bow is held
 // upright as it is drawn.
 //
 // Each kind is one instanced mesh (six draw calls, held and lying alike),
@@ -191,14 +193,22 @@ function apply(m, x, y, z, out, o = 0) {
 
 // ---- Where things are held ----
 
-// The rig (shapes.js's person): shoulders, the torso's and the whole body's
-// joints, and where a hand grips, below its shoulder.
-const SHOULDER = 3.45;
-const ARM_Z = 0.84;
-const GRIP = [0.1, 1.95]; // x, y of a fist
-const HIP = GAIT.human.leg;
 const ARM_L = 6;
 const ARM_R = 7;
+
+// A body's rig, as the hands see it: its hips (where the torso bends and the
+// whole body turns), how its poses scale (k: models.js `body`), each arm's
+// shoulder and where its hand grips, and where its belt and back are. This
+// one is the person built in code (shapes.js); a model's comes from
+// models.js (biped's `rig`).
+export const CODE_RIG = {
+    hip: 1.85,
+    k: 1,
+    shoulder: { [ARM_L]: [0, 3.45, -0.84], [ARM_R]: [0, 3.45, 0.84] },
+    grip: { [ARM_L]: [0.1, 1.95, -0.84], [ARM_R]: [0.1, 1.95, 0.84] },
+    belt: [0.3, 2.0, -0.6],
+    back: [-0.92, 2.75, 0],
+};
 
 // How each kind is held: `at` 'right' | 'left' | 'belt' | 'back'; `grip`,
 // its turn in the hand (or on the body); `locks`, poses that hold it in the
@@ -211,8 +221,8 @@ const HOLD = {
     club: { at: 'right', grip: rotZ(-2.35) },
     bow: { at: 'left', grip: IDENTITY, locks: { [POSE.SHOOT]: IDENTITY } },
     torch: { at: 'left', grip: rotZ(-0.5) },
-    knife: { at: 'belt', point: [0.3, 2.0, -0.6], grip: mul(rotZ(Math.PI - 0.25), rotX(0.2), new Float64Array(9)), works: new Set([POSE.BUTCHER, POSE.KNAP, POSE.CRAFT, POSE.CHOP]), hand: rotZ(Math.PI) },
-    basket: { at: 'back', point: [-0.92, 2.75, 0], grip: rotZ(0.2) },
+    knife: { at: 'belt', grip: mul(rotZ(Math.PI - 0.25), rotX(0.2), new Float64Array(9)), works: new Set([POSE.BUTCHER, POSE.KNAP, POSE.CRAFT, POSE.CHOP]), hand: rotZ(Math.PI) },
+    basket: { at: 'back', grip: rotZ(0.2) },
 };
 // Poses in which the weapon is laid on the ground beside the body.
 const LAID = new Set([POSE.GATHER, POSE.BUTCHER, POSE.CHOP, POSE.KNAP, POSE.CRAFT, POSE.SIT, POSE.EAT]);
@@ -239,6 +249,7 @@ function sample(def, progress, column, w, out) {
 // shader does it: the turns (3×3) and the points they turn about.
 export class HandPose {
     constructor() {
+        this.rig = CODE_RIG;
         this.armL = new Float64Array(3);
         this.armR = new Float64Array(3);
         this.torsoR = new Float64Array(3);
@@ -254,9 +265,11 @@ export class HandPose {
         this.v = new Float64Array(3);
     }
 
-    // From a stride (phase, amount) and a pose (code, progress, weight).
-    set(phase, amount, code, progress, weight) {
+    // From a stride (phase, amount) and a pose (code, progress, weight), on
+    // a body's rig (CODE_RIG, or a model's).
+    set(phase, amount, code, progress, weight, rig = CODE_RIG) {
         const g = GAIT.human;
+        this.rig = rig;
         const ph = phase * TAU;
         const walk = amount < 0 ? 0 : amount > 1 ? 1 : amount;
         const run = amount - 1 < 0 ? 0 : amount - 1 > 1 ? 1 : amount - 1;
@@ -272,9 +285,9 @@ export class HandPose {
         this.rootR.fill(0);
         this.rootR[0] = g.pitch * run * Math.cos(ph);
         this.shift.fill(0);
-        this.shift[1] = -g.leg * (1 - Math.cos(swing * sw));
+        this.shift[1] = -rig.hip * (1 - Math.cos(swing * sw));
         this.pivot[0] = 0;
-        this.pivot[1] = HIP;
+        this.pivot[1] = rig.hip;
         this.pivot[2] = 0;
         const def = weight > 0 ? POSES.human[code] : undefined;
         if (def) {
@@ -282,8 +295,9 @@ export class HandPose {
             sample(def, progress, 'armR', weight, this.armR);
             sample(def, progress, 'torso', weight, this.torsoR);
             sample(def, progress, 'root', weight, this.rootR);
-            sample(def, progress, 'shift', weight, this.shift);
-            sample(def, progress, 'pivot', weight, this.pivot);
+            // (Shift and pivot in the body's proportions, as the shader's uBody.)
+            sample(def, progress, 'shift', weight * rig.k, this.shift);
+            sample(def, progress, 'pivot', weight * rig.k, this.pivot);
         }
         // ("Outward" is away from the body: the right arm's is mirrored.)
         turnMat(this.armL[0], this.armL[1], this.armL[2], this.mL);
@@ -299,18 +313,19 @@ export class HandPose {
     // `out` (3) and the turn in `turn` (9).
     place(side, x, y, z, out, turn) {
         const v = this.v;
+        const hip = this.rig.hip;
         if (side) {
             const m = side === ARM_R ? this.mR : this.mL;
-            const jz = side === ARM_R ? ARM_Z : -ARM_Z;
-            apply(m, x, y - SHOULDER, z - jz, v);
-            x = v[0];
-            y = v[1] + SHOULDER;
-            z = v[2] + jz;
+            const j = this.rig.shoulder[side];
+            apply(m, x - j[0], y - j[1], z - j[2], v);
+            x = v[0] + j[0];
+            y = v[1] + j[1];
+            z = v[2] + j[2];
             mul(this.body, m, turn);
         } else turn.set(this.body);
-        apply(this.mT, x, y - HIP, z, v); // (the torso turns about the hips, as RIGS.human.torso)
+        apply(this.mT, x, y - hip, z, v); // (the torso turns about the hips, as RIGS.human.torso)
         x = v[0];
-        y = v[1] + HIP;
+        y = v[1] + hip;
         z = v[2];
         const p = this.pivot;
         apply(this.mRoot, x - p[0], y - p[1], z - p[2], out);
@@ -430,6 +445,7 @@ export class Items {
         }
         this.torches = []; // this frame's flames: [x, y, z, d2] each, for the lights
         this.hand = new HandPose();
+        this.rigOf = () => null; // a person's body's rig (creatures.js rigOf), or null: CODE_RIG
         this.p = new Float64Array(3);
         this.turn = new Float64Array(9);
         this.r = new Float64Array(9);
@@ -494,7 +510,7 @@ export class Items {
             // what they hold would not fit them; leave it.
             if (view.mapness > 0.02 && Math.sqrt(d2) * view.unitPx * 10 * view.mapness > 4.8) continue;
             if (!motion.posed(id)) continue;
-            hand.set(motion.phase, motion.amount, motion.code, motion.progress, motion.weight);
+            hand.set(motion.phase, motion.amount, motion.code, motion.progress, motion.weight, this.rigOf(id) ?? CODE_RIG);
             const sc = pop.age[i] < maturity ? CHILD : 1;
             const base = this.base;
             base.x = x;
@@ -531,11 +547,13 @@ export class Items {
             return;
         }
         if (how.at === 'back' || (how.at === 'belt' && !how.works.has(code))) {
-            hand.place(0, how.point[0], how.point[1], how.point[2], p, this.turn);
+            const at = how.at === 'back' ? hand.rig.back : hand.rig.belt;
+            hand.place(0, at[0], at[1], at[2], p, this.turn);
             mul(this.turn, how.grip, r);
         } else {
             const arm = how.at === 'belt' ? ARM_R : side;
-            hand.place(arm, GRIP[0], GRIP[1], arm === ARM_R ? ARM_Z : -ARM_Z, p, this.turn);
+            const g = hand.rig.grip[arm];
+            hand.place(arm, g[0], g[1], g[2], p, this.turn);
             mul(this.turn, how.at === 'belt' ? how.hand : how.grip, r);
             const lock = how.locks?.[code];
             if (lock) blend(r, lock, weight);

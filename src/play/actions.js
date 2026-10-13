@@ -1,7 +1,7 @@
 // What the keys do. input.js names each one-off action (KeyE is
 // 'interact', a left click 'attack' with how heavy it was...); this says
-// what each does. On the map only M (back into your body) and G (ready a
-// call) count; in a body everything does, unless you are dying.
+// what each does. On the map only M (back into your body), G (ready a
+// call) and L (the editor) count; in a body everything does, unless you are dying.
 //
 // A new key: name its action in input.js (ACTIONS), and say here what it
 // does, as a line in IN_BODY that hands it to the part it is about
@@ -63,6 +63,10 @@ export function act(m, name, info) {
     }
     if (name === 'call' && !m.inBody) {
         m.armCall(); // G on the map
+        return;
+    }
+    if (name === 'look') {
+        if (m.self && !m.dying) m.env.editLook?.(m.self); // L: how your person looks (editor.js), in a body or on the map
         return;
     }
     if (!m.inBody || m.dying) return;

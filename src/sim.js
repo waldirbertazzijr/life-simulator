@@ -64,14 +64,15 @@ const NONE = Object.freeze([]);
 export const KINDS = ['herbivore', 'carnivore', 'human'];
 
 // What a snapshot carries of each individual: what is drawn (position,
-// heading, id, age, tribe) and what the panel can show about anyone you click.
-// Left behind: upkeep, parent, lineage, goal and timer, which only the
+// heading, id, age, tribe; a person's parent, whose hair a child takes after:
+// view3d/looks.js) and what the panel can show about anyone you click.
+// Left behind: upkeep, lineage, goal and timer, which only the
 // simulation itself uses. After these columns comes `prev`: where the same
 // individual was in the previous snapshot (its index there, or -1 for a
 // newborn), so the main thread can blend between the two.
 export const COLUMNS = [
     'x', 'y', 'heading', 'id', 'age', 'lifespan', 'energy', 'speedGene', 'senseGene',
-    'generation', 'children', 'kills', 'focus', 'state', 'tribe', 'carry',
+    'generation', 'children', 'kills', 'focus', 'state', 'tribe', 'carry', 'parent',
 ];
 export const STRIDE = COLUMNS.length + 1; // values per individual, with prev
 

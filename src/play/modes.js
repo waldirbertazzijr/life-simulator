@@ -598,7 +598,8 @@ export class Modes {
         const f = this.world.find(next.id);
         const followed = this.env.followed();
         this.takeOver(next.id);
-        this.hud.banner('line', this.lineText(dead, next, f));
+        // (With a quiet offer to shape your heir's looks: play/editor.js.)
+        this.hud.banner('line', this.lineText(dead, next, f), { text: 'shape your heir · L', act: () => this.env.editLook?.(next.id, true) });
         if (next.told) {
             // The simulation has the heir already (numbering afresh).
             this.acked = true;

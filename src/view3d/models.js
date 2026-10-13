@@ -36,17 +36,51 @@
 // - `body`: its proportions against the code-built body the poses were
 //   written for (keyframes.js FRAME); they scale the poses' shift and pivot.
 //
+// The rig of a biped (biped(), the people in assets/models/people/): piece by
+// piece, the bare body first, by where its pieces are:
+// - its skin is the colour of the outermost piece (in an A-pose, a hand);
+// - the head is the highest skin piece, with the neck (the middle piece that
+//   reaches up into it) and what is above its chin (ears, nose);
+// - below the torso's lowest point, a piece off the middle line is a leg (by
+//   its side); above it, an arm (by its side); the rest is the torso;
+// - then whatever it wears, largest first: a piece across the middle line
+//   (a robe, a belt) is torso (head, above the chin); any other goes with the
+//   piece nearest it (a fringe with its robe, a wrap with its limb, a bead
+//   with the chest it lies on). Long robes stay torso: their hems do not
+//   swing with the legs.
+// - Its arms, made held out in an A-pose, are turned down about the shoulder
+//   (the middle of the arm's top piece) until the hand would come too close to
+//   the torso: they hang at its sides, a little out where the
+//   hips are wide, which is the rest the poses were written for.
+// - Joints: the legs turn at the hip (the thigh's top, less half its
+//   radius), and the gait takes that height; the torso bends there too, and
+//   the whole body turns about it; the head nods at the neck's root.
+// - `rig`: where the shoulders, the hands (gripping), the belt and the back
+//   are, for what is held or carried (items.js).
+//
+// Each piece of a person also gets a colour role (`dye`, per vertex): skin
+// (its colour kept as a share of the skin's, so the lips stay lips, and the
+// skin tone comes per person), cloth (its colour as a shade of the main
+// garment's: dyed per person in its tribe's colour), or its own (bone,
+// beads, cord, paint). Cloth is any colour but the skin's that covers a fair
+// share of the surface; the rest keep their own, but for the few the table
+// TONED makes skin. Hair (hair.js) is added to the head: every style, of
+// which each person shows one (animate.js).
+//
 // Far away a model is drawn simplified (`lite`: three's SimplifyModifier,
 // piece by piece): an animal a few pixels long needs no 1,500 triangles.
 // Until a model has loaded, the body built in code (shapes.js) stands in.
 //
 // The next model is an entry in MODELS (and, for a new body plan, a sorter
 // in PLANS beside quadruped()). Axes are any of ±x, ±y, ±z: a figure made Z up
-// and facing −Y is { up: '+z', forward: '-y' }.
+// and facing −Y is { up: '+z', forward: '-y' }. People are a body (looks.js
+// BODIES) in an outfit (OUTFITS), all with one entry, PERSON.
 import * as THREE from 'three';
 import { readGlb } from './glb.js';
 import { GAIT, PART } from './animate.js';
 import { FRAME } from './keyframes.js';
+import { hairPieces } from './hair.js';
+import { DYE } from './looks.js';
 
 // glTF's own conventions, for an entry that does not say (a baked file says).
 const DEFAULTS = { up: '+y', forward: '+z', srgb: false, plan: 'quadruped', lite: 0.2 };
@@ -64,6 +98,24 @@ export const MODELS = {
     },
 };
 
+// People: three bodies (looks.js BODIES), each in five outfits,
+// assets/models/people/<body>__<outfit>.glb
+// (the owner's, made with trimesh: Z up, facing −Y, sRGB vertex colours, A-pose).
+// One scale for all: the man is 4.8 tall, as the body built in code, and the
+// women as tall as they were made beside him.
+export const OUTFITS = ['plain_base', 'warrior', 'shaman', 'thinker', 'cultivator'];
+export const PERSON = {
+    up: '+z', forward: '-y', srgb: true, plan: 'biped', scale: 1.93, lite: 0.2,
+    minPx: 12, // in the map view, at least this many pixels tall (10 for the body built in code: these are slimmer)
+};
+export const personUrl = (body, outfit) => `../../assets/models/people/${body}__${outfit}.glb`;
+
+// What a person wears is its job's outfit: the one place that says so.
+// (Jobs come with package 3: until then nobody has one, everyone wears
+// plain_base, and the other outfits are never fetched.)
+const OUTFIT_OF_JOB = { warrior: 'warrior', shaman: 'shaman', thinker: 'thinker', cultivator: 'cultivator' };
+export const outfitOf = (job) => OUTFIT_OF_JOB[job] ?? OUTFITS[0];
+
 // How a quadruped is sorted, as shares of its length (from the tail), height
 // and half width (from the middle line). An asset can change any of these
 // (`sort` in its MODELS entry), e.g. a merged mesh whose head and horns sit
@@ -76,6 +128,18 @@ const QUADRUPED = {
     reach: 0.2,      // legs reach above their hip by this share of the hip's height
     top: 0.05,       // a leg's top: its vertices this close (× height) to its highest
 };
+// How a biped is sorted, as shares of its height.
+const BIPED = {
+    side: 0.04,   // a piece whose middle is this far off the middle line is on one side...
+    cross: 0.01,  // ...and one reaching this far past it on both sides crosses it
+    clear: 0.02,  // a hanging hand stays this far from the torso...
+    hand: 0.75,   // ...the arm from this share of its length on (the wrist and the hand)
+};
+// Colour roles: a garment is cloth if its colour covers this share of the
+// surface; and colours (as the file has them, sRGB bytes) that follow the
+// skin tone although they are not the skin's (the lips).
+const CLOTH_SHARE = 0.08;
+const TONED = new Set(['111,76,59']);
 const LITE_MIN = 6; // a piece keeps at least this many vertices in the far level
 
 const AXES = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] };
@@ -102,8 +166,9 @@ export function basis(up, forward) {
 const linear = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
 
 // Every primitive as a piece of non-indexed triangles in our axes, standing
-// on y = 0, centred, scaled to `length`: { name, pos, col, part } (part per
-// vertex only in a baked file). Also the joints a baked file gives (its
+// on y = 0, centred, scaled to `length` (or by `scale`): { name, pos, col,
+// part, key } (part per vertex only in a baked file; key, its first colour as
+// the file has it, 'r,g,b' in bytes). Also the joints a baked file gives (its
 // bones'), moved the same way: { head: [x, y, z], leg_fl: ... }.
 function piecesOf(glb, config) {
     const [f, u, s] = basis(config.up, config.forward);
@@ -127,11 +192,12 @@ function piecesOf(glb, config) {
             }
             if (part) part[k] = Math.round(p.part[v]);
         }
-        pieces.push({ name: p.node, pos, col, part });
+        const key = p.color ? [0, 1, 2].map((c) => Math.round(p.color[c] * 255)).join(',') : '';
+        pieces.push({ name: p.node, pos, col, part, key });
     }
     if (!pieces.length) throw new Error('no triangles in the model');
     const b = bounds(pieces);
-    const scale = config.length / (b.maxX - b.minX);
+    const scale = config.scale ?? config.length / (b.maxX - b.minX);
     const cx = (b.minX + b.maxX) / 2;
     const cz = (b.minZ + b.maxZ) / 2;
     const place = ([x, y, z]) => [(x - cx) * scale, (y - b.minY) * scale, (z - cz) * scale];
@@ -300,13 +366,222 @@ function quadruped(pieces, split, hip, frame, tune, given = {}) {
     return { joints, torso, root: torso, body, hip: own ?? hip };
 }
 
-// Pieces (with `part` per vertex) and joints as one geometry like shapes.js's.
+// ---- Bipeds ----
+
+const ARMS = [PART.ARM_L, PART.ARM_R];
+
+function area(pos) {
+    let a = 0;
+    for (let i = 0; i < pos.length; i += 9) {
+        const ux = pos[i + 3] - pos[i], uy = pos[i + 4] - pos[i + 1], uz = pos[i + 5] - pos[i + 2];
+        const vx = pos[i + 6] - pos[i], vy = pos[i + 7] - pos[i + 1], vz = pos[i + 8] - pos[i + 2];
+        a += Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx) / 2;
+    }
+    return a;
+}
+
+// The nearest vertex of `piece` to the point p, squared.
+function nearest2(piece, [x, y, z]) {
+    const { pos } = piece;
+    let best = Infinity;
+    for (let i = 0; i < pos.length; i += 3) {
+        const d = (pos[i] - x) ** 2 + (pos[i + 1] - y) ** 2 + (pos[i + 2] - z) ** 2;
+        if (d < best) best = d;
+    }
+    return best;
+}
+
+const argmax = (list, f) => list.reduce((best, p) => (best === null || f(p) > f(best) ? p : best), null);
+
+// Sort a biped's pieces into torso, head, two legs and two arms, turn its
+// arms down to hang, and find its joints (see the top of this file).
+// Returns { joints, torso, root, body, hip, rig, skin }; every piece gets
+// `part`. (It finds its own hips: the gait's are not needed.)
+function biped(pieces, split, gaitHip, frame, tune) {
+    if (split !== 'parts') throw new Error('a biped is sorted piece by piece: its model must come in parts');
+    const B = { ...BIPED, ...tune };
+    const H = bounds(pieces).maxY;
+    for (const p of pieces) {
+        p.middle = centroid(p.pos);
+        p.box = bounds([p]);
+        p.area = area(p.pos);
+        p.part = null;
+    }
+    const set = (p, part) => {
+        p.part = new Uint8Array(p.pos.length / 3).fill(part);
+    };
+    const sideOf = (p) => (Math.abs(p.middle[2]) > B.side * H ? Math.sign(p.middle[2]) : 0);
+
+    // The bare body: the pieces in the skin's colour.
+    const skin = argmax(pieces, (p) => Math.max(-p.box.minZ, p.box.maxZ)).col;
+    const isSkin = (p) => Math.abs(p.col[0] - skin[0]) + Math.abs(p.col[1] - skin[1]) + Math.abs(p.col[2] - skin[2]) < 0.01;
+    const bare = pieces.filter(isSkin);
+    const head = argmax(bare, (p) => p.box.maxY);
+    const chin = head.box.minY;
+    const trunk = argmax(bare.filter((p) => p !== head && sideOf(p) === 0 && p.middle[1] < chin), (p) => p.area);
+    if (!trunk) throw new Error('no torso found');
+    const waist = trunk.box.minY;
+    let neck = null;
+    for (const p of bare) {
+        if (p === head) set(p, PART.HEAD);
+        else if (p !== trunk && sideOf(p) === 0 && p.box.minY < chin && p.box.maxY > chin) {
+            set(p, PART.HEAD); // the neck
+            neck = p;
+        } else if (p.middle[1] > chin) set(p, PART.HEAD); // ears, nose
+        else if (sideOf(p) === 0) set(p, PART.TORSO);
+        else if (p.middle[1] < waist) set(p, sideOf(p) < 0 ? PART.LEG_FL : PART.LEG_FR);
+        else set(p, sideOf(p) < 0 ? PART.ARM_L : PART.ARM_R);
+    }
+    // What it wears, largest first.
+    const sorted = [...bare];
+    for (const p of pieces.filter((q) => !q.part).sort((a, b) => b.area - a.area)) {
+        if (p.box.minZ < -B.cross * H && p.box.maxZ > B.cross * H) set(p, p.middle[1] > chin ? PART.HEAD : PART.TORSO);
+        else set(p, argmax(sorted, (q) => -nearest2(q, p.middle)).part[0]);
+        sorted.push(p);
+    }
+    for (const part of [PART.LEG_FL, PART.LEG_FR, ...ARMS]) {
+        if (!bare.some((p) => p.part[0] === part)) throw new Error(`no ${PART_NAME[part]} found`);
+    }
+
+    // The torso's half width (and how far back it reaches) at each height,
+    // in bands of a hundredth of the height: along every edge of its
+    // triangles, where it crosses each band.
+    const BANDS = 100;
+    const wide = new Float64Array(BANDS);
+    const back = new Float64Array(BANDS);
+    const band = (y) => Math.min(BANDS - 1, Math.max(0, Math.floor((y / H) * BANDS)));
+    const across = (pos, a, b) => {
+        const ya = pos[a + 1];
+        const yb = pos[b + 1];
+        for (let k = band(Math.min(ya, yb)); k <= band(Math.max(ya, yb)); k++) {
+            const y = Math.min(Math.max(((k + 0.5) / BANDS) * H, Math.min(ya, yb)), Math.max(ya, yb));
+            const t = yb === ya ? 0 : (y - ya) / (yb - ya);
+            wide[k] = Math.max(wide[k], Math.abs(pos[a + 2] + (pos[b + 2] - pos[a + 2]) * t));
+            back[k] = Math.max(back[k], -(pos[a] + (pos[b] - pos[a]) * t));
+        }
+    };
+    for (const p of pieces) {
+        if (p.part[0] !== PART.TORSO) continue;
+        for (let i = 0; i < p.pos.length; i += 9) {
+            across(p.pos, i, i + 3);
+            across(p.pos, i + 3, i + 6);
+            across(p.pos, i + 6, i);
+        }
+    }
+    const widest = (y) => Math.max(wide[band(y) - 1] ?? 0, wide[band(y)], wide[band(y) + 1] ?? 0);
+
+    // The arms, turned down from the A-pose about the shoulder, as far as
+    // the torso lets them.
+    const joints = {};
+    const grip = {};
+    for (const arm of ARMS) {
+        const skinOf = bare.filter((p) => p.part[0] === arm);
+        const shoulder = argmax(skinOf, (p) => p.box.maxY).middle;
+        const hand = argmax(skinOf, (p) => Math.hypot(p.middle[1] - shoulder[1], p.middle[2] - shoulder[2])).middle;
+        const s = Math.sign(hand[2] - shoulder[2]);
+        const reach = Math.hypot(hand[1] - shoulder[1], hand[2] - shoulder[2]);
+        const out = Math.atan2(Math.abs(hand[2] - shoulder[2]), shoulder[1] - hand[1]); // from hanging straight down
+        const mine = pieces.filter((p) => p.part[0] === arm);
+        const turn = (a, y, z) => {
+            const c = Math.cos(s * a);
+            const n = Math.sin(s * a);
+            const dy = y - shoulder[1];
+            const dz = z - shoulder[2];
+            return [shoulder[1] + dy * c - dz * n, shoulder[2] + dy * n + dz * c];
+        };
+        // Does the arm, left `left` out from hanging, keep clear of the torso?
+        const clears = (left) => {
+            for (const p of mine) {
+                for (let i = 0; i < p.pos.length; i += 3) {
+                    if (Math.hypot(p.pos[i + 1] - shoulder[1], p.pos[i + 2] - shoulder[2]) < B.hand * reach) continue;
+                    const [y, z] = turn(out - left, p.pos[i + 1], p.pos[i + 2]);
+                    if (Math.abs(z) < widest(y) + B.clear * H) return false;
+                }
+            }
+            return true;
+        };
+        const step = Math.PI / 360;
+        let a = out;
+        while (a - step > 0 && clears(a - step)) a -= step;
+        a = out - a; // the turn that leaves it there
+        for (const p of mine) {
+            for (let i = 0; i < p.pos.length; i += 3) {
+                const [y, z] = turn(a, p.pos[i + 1], p.pos[i + 2]);
+                p.pos[i + 1] = y;
+                p.pos[i + 2] = z;
+            }
+        }
+        joints[arm] = [...shoulder];
+        const [gy, gz] = turn(a, hand[1], hand[2]);
+        grip[arm] = [hand[0], gy, gz];
+    }
+
+    // The legs turn at the hip: the thigh's top, less half its radius.
+    let hip = 0;
+    for (const leg of [PART.LEG_FL, PART.LEG_FR]) {
+        const thigh = argmax(bare.filter((p) => p.part[0] === leg), (p) => p.box.maxY);
+        const at = thigh.box.maxY - (thigh.box.maxZ - thigh.box.minZ) / 4;
+        joints[leg] = [thigh.middle[0], at, thigh.middle[2]];
+        hip += at / 2;
+    }
+    for (const leg of [PART.LEG_FL, PART.LEG_FR]) joints[leg][1] = hip;
+    joints[PART.HEAD] = neck ? [neck.middle[0], neck.box.minY, 0] : [head.middle[0], chin, 0];
+    const torso = [0, hip, 0];
+    joints[PART.TORSO] = torso;
+    const k = frame ? hip / frame.hip : 1;
+
+    // Where things are held and carried (items.js): a knife at the belt, on
+    // the left; a basket on the back.
+    const shoulderY = joints[PART.ARM_R][1];
+    const beltY = hip + 0.1 * (shoulderY - hip);
+    const backY = hip + 0.55 * (shoulderY - hip);
+    const rig = {
+        hip, k,
+        shoulder: { [PART.ARM_L]: joints[PART.ARM_L], [PART.ARM_R]: joints[PART.ARM_R] },
+        grip,
+        belt: [0.3 * k, beltY, -(widest(beltY) + 0.04 * k)],
+        back: [-(back[band(backY)] + 0.45 * k), backY, 0],
+        head: { joint: joints[PART.HEAD], box: head.box, pos: head.pos },
+    };
+    return { joints, torso, root: torso, body: [k, k, k], hip, rig, skin: skin.slice(0, 3) };
+}
+
+// Each piece's colour role (DYE, looks.js), and its colour made what that
+// role needs: skin as a share of the skin's colour (per channel), cloth as a
+// shade of the main garment's (grey), any other as it is. (Pieces sorted by
+// biped(), which found the skin's colour.)
+function colourRoles(pieces, skin) {
+    const same = (c, d) => Math.abs(c[0] - d[0]) + Math.abs(c[1] - d[1]) + Math.abs(c[2] - d[2]) < 0.01;
+    const lum = (c) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    const total = pieces.reduce((s, p) => s + p.area, 0);
+    const byColour = new Map();
+    for (const p of pieces) byColour.set(p.key, (byColour.get(p.key) ?? 0) + p.area);
+    const isCloth = (p) => !same(p.col, skin) && !TONED.has(p.key) && byColour.get(p.key) >= CLOTH_SHARE * total;
+    const main = argmax(pieces.filter(isCloth), (p) => byColour.get(p.key));
+    for (const p of pieces) {
+        const c = p.col.slice(0, 3);
+        let rgb = c;
+        if (same(c, skin) || TONED.has(p.key)) {
+            p.dye = DYE.skin;
+            rgb = c.map((v, k) => v / skin[k]);
+        } else if (isCloth(p)) {
+            p.dye = DYE.cloth;
+            rgb = [1, 1, 1].map(() => lum(c) / lum(main.col));
+        } else p.dye = DYE.own;
+        for (let i = 0; i < p.col.length; i += 3) p.col.set(rgb, i);
+    }
+}
+
+// Pieces (with `part` per vertex, and maybe a `dye`) and joints as one
+// geometry like shapes.js's.
 function geometryOf(pieces, joints) {
     let n = 0;
     for (const p of pieces) n += p.pos.length / 3;
     const position = new Float32Array(n * 3);
     const color = new Float32Array(n * 3);
     const rig = new Float32Array(n * 4);
+    const dyed = pieces.some((p) => p.dye !== undefined);
+    const dye = dyed ? new Float32Array(n) : null;
     let o = 0;
     for (const p of pieces) {
         position.set(p.pos, o * 3);
@@ -315,12 +590,14 @@ function geometryOf(pieces, joints) {
             const j = joints[p.part[v]];
             rig.set([j[0], j[1], j[2], p.part[v]], (o + v) * 4);
         }
+        if (dye) dye.fill(p.dye ?? DYE.own, o, o + p.part.length);
         o += p.part.length;
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(position, 3));
     g.setAttribute('color', new THREE.BufferAttribute(color, 3));
     g.setAttribute('rig', new THREE.BufferAttribute(rig, 4));
+    if (dye) g.setAttribute('dye', new THREE.BufferAttribute(dye, 1));
     g.computeVertexNormals(); // unshared vertices: each gets its face's normal
     g.computeBoundingSphere();
     return g;
@@ -330,12 +607,9 @@ function geometryOf(pieces, joints) {
 // scaled), how they come ('baked', or to split by 'parts' or 'vertices'),
 // the gait's hip height, the body the poses were written for, the entry's
 // tuning and a baked file's joints; it gives every piece `part` (per
-// vertex), may reshape pieces (a leg lengthened), and returns { joints,
-// torso, root, body, hip }. (A 'biped' would go here: legs below the hip,
-// split by side; arms beyond the shoulders' width, turned down from an
-// A-pose to hanging; the head above the neck; the rest torso. tools/bake.mjs
-// would name the bones of arms and legs by side.)
-const PLANS = { quadruped };
+// vertex), may reshape pieces (a leg lengthened, an arm turned down), and
+// returns { joints, torso, root, body, hip } (a biped also `rig` and `skin`).
+const PLANS = { quadruped, biped };
 
 // A file baked by tools/bake.mjs says its own axes and colour space, and
 // carries its bones' joints (asset.extras.lifeSim); it overrides the entry.
@@ -358,11 +632,16 @@ export function toShape(glb, entry, kind) {
     const baked = pieces.every((p) => p.part);
     const split = baked ? 'baked' : config.split ?? (pieces.length > 1 ? 'parts' : 'vertices');
     const rig = sort(pieces, split, GAIT[kind].leg, FRAME[kind], config.sort, given);
+    const body = pieces.length;
+    if (config.plan === 'biped') {
+        colourRoles(pieces, rig.skin);
+        pieces.push(...hairPieces(rig.rig.head));
+    }
     const geometry = geometryOf(pieces, rig.joints);
     const triangles = geometry.attributes.position.count / 3;
     return {
         geometry, pieces, ...rig, ownColors: true, lite: null, minPx: config.minPx ?? null,
-        info: { triangles, split, parts: pieces.map((p) => [p.name, PART_NAME[p.part[0]]]), skipped: glb.skipped },
+        info: { triangles, split, parts: pieces.slice(0, body).map((p) => [p.name, PART_NAME[p.part[0]]]), skipped: glb.skipped },
     };
 }
 
@@ -384,7 +663,7 @@ export async function simplify(piece, keep, least = LITE_MIN) {
     const pos = Float32Array.from(new SimplifyModifier().modify(g, remove).toNonIndexed().attributes.position.array);
     const part = new Uint8Array(pos.length / 3);
     for (let v = 0; v < part.length; v++) part[v] = partAt.get(key(pos, v)) ?? piece.part[0];
-    return { name: piece.name, pos, col: recolour(pos, piece), part };
+    return { name: piece.name, pos, col: recolour(pos, piece), part, dye: piece.dye };
 }
 
 // Each face of `pos` coloured as the faces of `from` nearest it: each old
@@ -463,22 +742,34 @@ export async function lite(shape, keep) {
     return geometryOf(out, shape.joints);
 }
 
-// `kind`'s model, fetched, read and converted once (with its far level): a
-// promise of the shape, or of null for a kind without one (people, so far).
+// A model fetched, read and converted once (with its far level): a promise
+// of the shape.
 const loading = new Map();
-export function loadModel(kind) {
-    const entry = MODELS[kind];
-    if (!entry || typeof fetch === 'undefined') return Promise.resolve(null);
-    if (!loading.has(kind)) {
-        loading.set(kind, (async () => {
-            const url = new URL(entry.url, import.meta.url);
-            const res = await fetch(url);
-            if (!res.ok) throw new Error(`${url.pathname}: ${res.status}`);
+function load(key, url, entry, kind) {
+    if (!loading.has(key)) {
+        loading.set(key, (async () => {
+            const at = new URL(url, import.meta.url);
+            const res = await fetch(at);
+            if (!res.ok) throw new Error(`${at.pathname}: ${res.status}`);
             const config = { ...DEFAULTS, ...entry };
             const shape = toShape(readGlb(await res.arrayBuffer()), config, kind);
             if (config.lite) shape.lite = await lite(shape, config.lite);
             return shape;
         })());
     }
-    return loading.get(kind);
+    return loading.get(key);
+}
+
+// `kind`'s model: a promise of the shape, or of null for a kind without one
+// (people come in bodies and outfits: loadPerson).
+export function loadModel(kind) {
+    const entry = MODELS[kind];
+    if (!entry || typeof fetch === 'undefined') return Promise.resolve(null);
+    return load(kind, entry.url, entry, kind);
+}
+
+// A person's model: one of BODIES in one of OUTFITS.
+export function loadPerson(body, outfit = OUTFITS[0]) {
+    if (typeof fetch === 'undefined') return Promise.resolve(null);
+    return load(`${body}__${outfit}`, personUrl(body, outfit), PERSON, 'human');
 }

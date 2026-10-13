@@ -415,7 +415,8 @@ export class Hud {
     // A banner: 'died', 'line' (with its text), 'ended', 'legend' (LEGEND
     // FORGED, with the legend's name under it). Each replaces the one
     // before; all but the end go by themselves.
-    banner(kind, text = '') {
+    // `link` ({ text, act }): a quiet link under it (your heir's line: shape them).
+    banner(kind, text = '', link = null) {
         for (const old of [...this.layer.children]) old.remove();
         const el = this.doc.createElement('div');
         el.className = `banner ${kind}`;
@@ -430,6 +431,14 @@ export class Hud {
             sub.className = 'sub';
             sub.textContent = text;
             band.appendChild(sub);
+        }
+        if (link) {
+            const a = this.doc.createElement('button');
+            a.className = 'shape';
+            a.type = 'button';
+            a.textContent = link.text;
+            a.addEventListener('click', () => link.act());
+            band.appendChild(a);
         }
         el.appendChild(band);
         this.layer.appendChild(el);

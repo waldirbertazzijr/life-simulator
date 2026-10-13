@@ -1,7 +1,9 @@
 // DEV ONLY: `?poses` lines up every species in every pose it has, animated,
 // so each one can be checked by eye (and in screenshots) without waiting for
 // the world to show it. `?poses=human` (or herbivore, carnivore) shows one
-// row, closer.
+// row, closer. People wear the three bodies in turn, with every hair style,
+// skin and hair colour (looks.js); `?poses=people` lines up each body in
+// each hair style.
 //
 // Its own little scene: a meadow, the same light as the world, and the same
 // meshes, materials and shaders as the creatures (creatures.js), so what is
@@ -12,11 +14,13 @@
 // each time they fall.
 import * as THREE from 'three';
 import { COLORS } from '../render.js';
+import { TRIBE_COLORS } from '../identity.js';
 import { SHAPES, CHILD, Herd, herdMaterial } from './creatures.js';
-import { loadModel } from './models.js';
+import { loadModel, loadPerson } from './models.js';
+import { BODIES, HAIR_STYLES, HAIR_COLOURS, SKIN_TONES, linear, clothOf } from './looks.js';
 import { Effects } from './effects.js';
 import { POSE, POSE_NAMES, POSES } from './animate.js';
-import { Items, ITEM_SHAPES } from './items.js';
+import { Items, ITEM_SHAPES, CODE_RIG } from './items.js';
 import { Thrown } from './thrown.js';
 import { Sparks } from './sparks.js';
 
@@ -25,7 +29,7 @@ const SLOW = 4;    // ...which play this many times slower than life, to be seen
 
 const SKY = '#b3c9da';
 const GRASS = '#5d7448';
-const PEOPLE = '#9aa9bd';
+const TRIBE = TRIBE_COLORS[0]; // the people's tribe colour
 const PAUSE = 0.8;     // seconds between the plays of a sequence...
 const LIE = 1.6;       // ...and how long the fallen lie before falling again
 const FACING = 0.45;   // everyone turned a little toward the camera
@@ -52,10 +56,21 @@ function itemRows(which) {
     return list;
 }
 
+// `?poses=people`: each body in each hair style, standing: a row turned to
+// show the face, and one the back of the head.
+function peopleRows() {
+    return BODIES.flatMap((body, b) => [Math.PI / 2 - 0.6, -Math.PI / 2 + 0.6].map((turn, r) => ({
+        kind: 'human', gap: 6, body: b, z: -16 * (2 * b + r), turn,
+        columns: HAIR_STYLES.map(() => 'stand'),
+        labels: HAIR_STYLES.map((s) => (r ? '' : `${body.replace('_', ' ')}: ${s}`)),
+    })));
+}
+
 // The rows, front to back: what each column shows ('walk', 'run' or a pose).
 // People take three: moving and fighting, standing and resting, working.
 function rows(only) {
     if (only?.startsWith('items')) return itemRows(only.length > 5 ? Number(only.slice(5)) : -1);
+    if (only === 'people') return peopleRows();
     const P = POSE;
     const all = [
         { kind: 'human', gap: 8, columns: ['walk', 'run', P.THROW, P.JAB, P.SWING, P.SHOOT, P.ROLL] },
@@ -107,37 +122,61 @@ export class Lineup {
         this.scene.add(ground);
 
         this.rows = rows(only);
+        // (People: one herd per body, once loaded.)
         this.herds = {
-            herbivore: new Herd(this.scene, SHAPES.herbivore(), herdMaterial('herbivore', COLORS.herbivore), false),
-            carnivore: new Herd(this.scene, SHAPES.carnivore(), herdMaterial('carnivore', COLORS.carnivore), false),
-            human: new Herd(this.scene, SHAPES.human(), herdMaterial('human', '#ffffff'), true),
+            herbivore: [new Herd(this.scene, SHAPES.herbivore(), herdMaterial('herbivore', COLORS.herbivore))],
+            carnivore: [new Herd(this.scene, SHAPES.carnivore(), herdMaterial('carnivore', COLORS.carnivore))],
+            human: [new Herd(this.scene, SHAPES.human(), herdMaterial('human', '#ffffff'), true)],
         };
-        for (const kind of Object.keys(this.herds)) {
+        this.bodies = null;
+        for (const kind of ['herbivore', 'carnivore']) {
             loadModel(kind)
-                .then((shape) => shape && this.herds[kind].setShape(shape.geometry, shape))
+                .then((shape) => shape && this.herds[kind][0].setShape(shape.geometry, shape))
                 .catch((err) => console.warn(`The ${kind} model did not load.`, err));
         }
-        this.tint = new THREE.Color(PEOPLE);
+        Promise.all(BODIES.map((body) => loadPerson(body))).then((shapes) => {
+            if (!shapes.every(Boolean)) return;
+            for (const h of this.herds.human) h.dispose();
+            this.herds.human = shapes.map((shape) => {
+                const material = herdMaterial('human', '#ffffff');
+                material.fit(shape);
+                return new Herd(this.scene, shape.geometry, material, true);
+            });
+            this.bodies = shapes;
+        }).catch((err) => console.warn('The people\'s models did not load.', err));
+        this.tribe = new THREE.Color(TRIBE);
+        this.cloth = clothOf(TRIBE);
         this.effects = new Effects(this.scene, null);
         this.effects.blood = true;
         this.effects.attach(() => 0);
-        // Where each figure stands, and its label.
+        // Where each figure stands, and its label; people, how each looks.
         let width = 0;
-        for (const row of this.rows) {
+        this.rows.forEach((row, r) => {
             row.x0 = (-(row.columns.length - 1) * row.gap) / 2;
             width = Math.max(width, row.columns.length * row.gap);
+            if (row.kind === 'human') {
+                row.looks = row.columns.map((_, c) => ({
+                    body: row.body ?? (c + r) % BODIES.length,
+                    style: row.body !== undefined ? c : (c + 2 * r) % HAIR_STYLES.length,
+                    hair: linear(HAIR_COLOURS[(3 * c + r) % HAIR_COLOURS.length]),
+                    skin: linear(SKIN_TONES[(2 * c + r) % SKIN_TONES.length]),
+                }));
+            }
             row.columns.forEach((col, c) => {
-                const text = row.holds && col === 'stand' ? row.holds.join(' + ')
+                const text = row.labels ? row.labels[c]
+                    : row.holds && col === 'stand' ? row.holds.join(' + ')
                     : Array.isArray(col) ? `${POSE_NAMES[col[0]].toLowerCase()} ${Math.round(col[1] * 100)}%`
                     : typeof col === 'number' ? POSE_NAMES[col].toLowerCase() : col;
-                const sprite = label(text, row.gap * 0.85);
-                sprite.position.set(row.x0 + c * row.gap, 0.6, row.z + 4.5);
-                this.scene.add(sprite);
+                if (text) {
+                    const sprite = label(text, row.gap * 0.85);
+                    sprite.position.set(row.x0 + c * row.gap, 0.6, row.z + 4.5);
+                    this.scene.add(sprite);
+                }
                 // The fallen lie on a pool (the clock here stays at the
                 // world's first moment, so it never fades).
                 if (col === POSE.FALL && row.kind !== 'human') this.effects.pool(row.x0 + c * row.gap, row.z, 2.3);
             });
-        }
+        });
         const depth = -this.rows[this.rows.length - 1].z;
         this.camera = new THREE.PerspectiveCamera(26, 1, 1, 3000);
         this.fit = { width, depth };
@@ -186,6 +225,8 @@ export class Lineup {
     // what lies in front, and a motion that tells items.js each one's pose.
     holding() {
         this.items = new Items(this.scene);
+        const looks = new Map(); // id → how the figure looks
+        this.items.rigOf = (pid) => (this.bodies ? this.bodies[looks.get(pid).body].rig : CODE_RIG);
         // On a beat: the archer looses an arrow, then a volley; the
         // spearman's piercing streak; the clubman's slam.
         this.thrown = new Thrown(this.scene);
@@ -211,6 +252,7 @@ export class Lineup {
                 humans.heading.push(FACING);
                 humans.age.push(1e4);
                 humans.n++;
+                looks.set(pid, row.looks[c]);
                 byBearer.set(pid, { weapon: item(row.holds[0], row.rarity, pid), tool: item(row.holds[1], row.rarity, pid) });
                 return pid;
             });
@@ -260,18 +302,19 @@ export class Lineup {
 
     draw(gl) {
         const t = (performance.now() - this.t0) / 1000;
-        const counts = { herbivore: 0, carnivore: 0, human: 0 };
+        for (const herds of Object.values(this.herds)) for (const h of herds) h.n = 0;
         for (const row of this.rows) {
             row.columns.forEach((col, c) => {
                 const kind = row.kind;
-                const herd = this.herds[kind];
-                const k = counts[kind]++;
+                const look = row.looks?.[c];
+                const herd = this.herds[kind][look && this.bodies ? look.body : 0];
+                const k = herd.n++;
                 if (k >= herd.capacity) herd.grow(k + 1);
                 const child = typeof col === 'string' && col.startsWith('child');
                 const sc = child ? CHILD : 1;
                 const x = row.x0 + c * row.gap;
-                const cs = Math.cos(FACING);
-                const sn = Math.sin(FACING);
+                const cs = Math.cos(row.turn ?? FACING);
+                const sn = Math.sin(row.turn ?? FACING);
                 const te = herd.matrices;
                 const o = k * 16;
                 te.fill(0, o, o + 16);
@@ -283,7 +326,12 @@ export class Lineup {
                 te[o + 12] = x;
                 te[o + 14] = row.z;
                 te[o + 15] = 1;
-                if (herd.colors) herd.colors.set([this.tint.r, this.tint.g, this.tint.b], k * 3);
+                if (look) {
+                    herd.colors.set([this.tribe.r, this.tribe.g, this.tribe.b], k * 3);
+                    herd.cloths.set(this.cloth, k * 3);
+                    herd.skins.set(look.skin, k * 3);
+                    herd.hairs.set([...look.hair, look.style], k * 4);
+                }
                 let phase = 0;
                 let amount = 0;
                 let code = POSE.NONE;
@@ -318,15 +366,15 @@ export class Lineup {
                         }
                     }
                 }
-                herd.gaits[k * 2] = phase;
-                herd.gaits[k * 2 + 1] = amount;
+                herd.gaits[k * 3] = phase;
+                herd.gaits[k * 3 + 1] = amount;
                 herd.poses[k * 3] = code;
                 herd.poses[k * 3 + 1] = progress;
                 herd.poses[k * 3 + 2] = code === POSE.NONE ? 0 : 1;
                 if (row.ids) this.figures.set(row.ids[c], { phase, amount, code, progress, weight: code === POSE.NONE ? 0 : 1 });
             });
         }
-        for (const kind of Object.keys(this.herds)) this.herds[kind].commit(counts[kind]);
+        for (const herds of Object.values(this.herds)) for (const h of herds) h.commit(h.n);
         if (this.items) {
             this.items.update(this.world, this.view, () => 0, this.motion, 0, t);
             this.flights(t);

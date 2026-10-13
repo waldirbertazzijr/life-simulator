@@ -188,11 +188,12 @@ const human = {
     },
 };
 
-// The animals' bodies the poses below were written for (shapes.js): the
-// height of the body's middle (the root), its half width, and its length.
+// The bodies the poses were written for (shapes.js): an animal's height of
+// the body's middle (the root), its half width, and its length; a person's hips.
 // An imported body of other proportions (models.js) scales the poses' shift
 // and pivot by its own, so it falls onto its own side.
 export const FRAME = {
+    human: { hip: 1.85 }, // (people: the height of the hips)
     herbivore: { center: 2.05, half: 1.4, length: 5 },
     carnivore: { center: 2.0, half: 0.78, length: 7 },
 };

@@ -25,6 +25,7 @@ import { modesEnv, windowPlay } from './play/env.js';
 import { SIGHT_PX } from './play/aim.js';
 import { CraftMenu } from './play/craft.js';
 import { Console } from './play/console.js';
+import { Editor } from './play/editor.js';
 import { setAside } from './orders.js';
 
 const VIEWS = ['map', 'follow', 'first'];
@@ -199,6 +200,10 @@ const panel = new Panel({
     stop() {
         modes.stop();
     },
+    // How your person looks (the character editor).
+    look() {
+        page.editLook(modes.self);
+    },
     // A call to your tribe from the map (play/calls.js): ready it, then click.
     armCall(kind) {
         modes.armCall(kind);
@@ -223,8 +228,21 @@ const page = {
     setPaused,
     getPaused: () => paused,
     changed: () => showPlay(),
+    editLook(id, heir = false) {
+        if (!editor) return;
+        if (editor.isOpen && editor.id === id && !heir) editor.close();
+        else editor.open(id, heir);
+    },
 };
 const modes = new Modes(modesEnv(page));
+
+// The character editor (play/editor.js; the 3D view only): L, the panel's
+// "look", or your heir's line. Its choices are kept per person (view3d/looks.js).
+const editor = renderer.looks ? new Editor({
+    doc: document, win: window, input, world, looks: renderer.looks,
+    preview: (canvas) => renderer.preview(canvas),
+}) : null;
+page.editor = editor;
 
 // The admin console (play/console.js; the commands run in the simulation,
 // admin.js): ` or F2, or the panel's button. A kill goes for the lock-on, or
@@ -263,6 +281,7 @@ world.onSamples = (s) => {
 
 function start(seed) {
     world.reset(params, seed, window.innerWidth / window.innerHeight);
+    editor?.close();
     renderer.attach(world);
     panel.reset(world);
     modes.reset();
