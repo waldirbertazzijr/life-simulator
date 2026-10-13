@@ -19,6 +19,7 @@ import { STAMINA } from './body.js';
 import { POSE } from '../view3d/keyframes.js';
 import { HANDS, ITEMS, AIMED, SIGHT_PX, nearestAlong, mateOf } from './aim.js';
 import { GATHERS, contextAt } from './context.js';
+import { contents } from './pouch.js';
 import { clamp, wrapDelta } from '../view3d/util.js';
 
 // Seconds between bites from the pouch; how long an act may go unanswered
@@ -60,6 +61,13 @@ export class Hands {
     load() {
         const p = this.m.mine();
         return { wood: p?.wood ?? 0, flint: p?.flint ?? 0, max: p?.loadMax ?? this.m.world.p.items?.load ?? 0 };
+    }
+
+    // All you carry, food, wood and flint, each with the most you can
+    // (pouch.js contents, for the pouch's slot and the work bar).
+    contents() {
+        const m = this.m;
+        return contents(m.world, m.mine(), this.carried(m.self ? m.world.find(m.self) : null));
     }
 
     // How much of the spear's reload is still to go, 0..1: all of it from the

@@ -281,12 +281,12 @@
             content: ""; position: absolute; inset: 0;
             background: conic-gradient(rgba(8, 9, 9, 0.74) calc(var(--reload, 0) * 1turn), transparent 0);
         }
-        .hud-cross .item { margin-top: 7px; font-size: 18px; }
+        .hud-cross .item { margin-top: 12px; font-size: 18px; }
 
         /* Items (play/gear.js): each slot's sign in its rarity's colour
            (plain grey, rare blue, legendary gold), a hairline of wear left
            along its foot, the spares in its corner; the skill above with its
-           Spirit, the held item's name below, and what is being crafted. */
+           Spirit, the held item's name below. */
         :root { --plain: #c4beb1; --rare: #86aee8; --legend: #e2c16f; }
         .slot .icon { display: grid; place-items: center; }
         .slot .icon:empty::before { content: ""; width: 12px; height: 1px; background: var(--hud-line); }
@@ -306,18 +306,17 @@
         .hud-cross .skill.none { opacity: 0.7; }
         .hud-cross .item.rare { color: var(--rare); }
         .hud-cross .item.legendary { color: var(--legend); }
-        .hud-cross .crafting { position: absolute; left: -20px; right: -20px; top: 100%; margin-top: 2px; font-size: 15px; font-style: italic; color: var(--hud-muted); white-space: nowrap; }
-        .hud-cross .crafting[hidden] { display: none; }
-        .hud-cross .crafting .bar { display: block; height: 2px; margin: 4px 22px 0; background: rgba(8, 9, 9, 0.6); box-shadow: 0 0 0 1px var(--hud-line); }
-        .hud-cross .crafting .bar span { display: block; height: 100%; width: calc(var(--done, 0) * 100%); background: var(--hud-text); }
-        /* By the pouch: the wood and flint you carry, and how full the load is. */
-        .hud-cross .load { position: absolute; left: 118px; top: 119px; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; font-size: 15px; line-height: 1; text-align: left; }
-        .hud-cross .load[hidden], .hud-cross .load .mat[hidden] { display: none; }
-        .hud-cross .load .mat { display: flex; align-items: center; gap: 5px; }
-        .hud-cross .load svg { width: 16px; height: 16px; fill: none; stroke: var(--hud-text); stroke-width: 1.3; stroke-linejoin: round; filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.8)); }
-        .hud-cross .load .bar { display: block; width: 40px; height: 2px; margin-top: 2px; background: rgba(8, 9, 9, 0.6); box-shadow: 0 0 0 1px var(--hud-line); }
-        .hud-cross .load .bar span { display: block; height: 100%; width: calc(var(--full, 0) * 100%); background: var(--hud-text); opacity: 0.85; }
-        .hud-cross .load.full .bar span { background: var(--legend); }
+        /* The pouch (play/pouch.js), as Elden Ring's quick item: one kind of
+           what you carry at a time, its count in the corner, a hairline along
+           its foot of how full that carry is (gold when no more fits), and a
+           dot under the slot for each other kind you carry. */
+        .slot.down .icon { transform: translateY(-3px); }
+        .slot.down .count { bottom: 4px; }
+        .slot .fill { position: absolute; left: 7px; right: 7px; bottom: 4px; height: 2px; background: rgba(8, 9, 9, 0.6); }
+        .slot .fill span { display: block; height: 100%; width: calc(var(--fill, 0) * 100%); background: var(--hud-text); opacity: 0.85; }
+        .slot .fill.full span { background: var(--legend); opacity: 1; }
+        .slots .dots { position: absolute; left: 57px; top: 173px; width: 54px; display: flex; justify-content: center; gap: 6px; }
+        .slots .dots span { width: 4px; height: 4px; border-radius: 50%; background: var(--hud-muted); box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4); }
         .hud-store .mats { display: flex; gap: 12px; margin-left: 6px; padding-left: 12px; border-left: 1px solid var(--hud-line); font-size: 17px; }
         .hud-store .mats[hidden] { display: none; }
         .hud-store .mat { display: flex; align-items: center; gap: 4px; }
@@ -351,6 +350,15 @@
         #craft .flint:disabled { opacity: 0.4; }
         #craft .keys { padding: 6px 20px 0; color: var(--hud-muted); font-size: 13px; text-align: center; }
 
+        /* The work bar (hud.js work): what the hands are at, a label and a
+           bar filling, centred just above the prompt; it fades out when done. */
+        #hud-work { position: absolute; left: 50%; bottom: 170px; width: 250px; transform: translateX(-50%); text-align: center; opacity: 0; transition: opacity 0.6s ease 0.25s; }
+        #hud-work.on { opacity: 1; transition: opacity 0.15s ease; }
+        #hud-work .what { display: block; font-size: 17px; font-style: italic; white-space: nowrap; }
+        #hud-work .bar { display: block; height: 3px; margin: 5px 8px 0; background: rgba(8, 9, 9, 0.6); box-shadow: 0 0 0 1px var(--hud-line), 0 1px 4px rgba(0, 0, 0, 0.5); }
+        #hud-work .bar span { display: block; height: 100%; width: calc(var(--done, 0) * 100%); background: linear-gradient(#f4ecd6, #cdbd94); }
+        @media (max-width: 600px) { #hud-work { bottom: 292px; } } /* (narrow: above the cross, not on it) */
+
         #hud-prompt { position: absolute; left: 50%; bottom: 118px; transform: translateX(-50%); min-width: 400px; padding: 8px 70px; text-align: center; font-size: 20px; white-space: nowrap; }
         #hud-prompt[hidden] { display: none; }
         #hud-prompt .pair + .pair { margin-left: 34px; }
@@ -376,7 +384,7 @@
         .hud-cross .call.lit { animation: lit 1.8s ease-out; }
         @keyframes lit { from { color: var(--hud-text); } to { color: var(--hud-muted); } }
         #notice {
-            position: fixed; left: 50%; bottom: 168px; transform: translateX(-50%); min-width: 380px; padding: 7px 64px;
+            position: fixed; left: 50%; bottom: 212px; transform: translateX(-50%); min-width: 380px; padding: 7px 64px;
             text-align: center; white-space: nowrap; pointer-events: none;
             font: 19px var(--serif); color: var(--hud-text); text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85), 0 0 10px rgba(0, 0, 0, 0.45);
         }
@@ -610,12 +618,11 @@
                 <div class="slot up" title="Call"></div>
                 <div class="slot left tool" id="hud-tool" title="Tool (← to change, right click to use)"><span class="icon"></span><span class="spares"></span><span class="wear"><span></span></span></div>
                 <div class="slot right weapon" id="hud-weapon" title="Weapon (→ to change)"><span class="icon"><svg viewBox="0 0 36 36" aria-hidden="true"><path d="M7 29 25.5 10.5"/><path d="M25.5 10.5 30 6l-1.2 5.8-3.3-1.3z"/><path d="M9.5 24.5l2 2"/></svg></span><span class="spares"></span><span class="wear"><span></span></span></div>
-                <div class="slot down" title="Food pouch"><svg viewBox="0 0 36 36" aria-hidden="true"><path d="M13 11.5c-4 3.5-6 8-5 12.5 1 4.2 5.2 6 10 6s9-1.8 10-6c1-4.5-1-9-5-12.5"/><path d="M12.5 11.5h11"/><path d="M14.5 11.5 13 7.5h10l-1.5 4"/></svg><span class="count" id="hud-carry">0</span></div>
-                <div class="load" id="hud-load" title="Wood and flint you carry (E at your camp's store puts them in)" hidden><span class="mat wood" id="hud-load-wood"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 13.5 13 4"/><path d="M7 17 16.5 7.5"/><circle cx="14.75" cy="5.75" r="2.47"/><circle cx="5.25" cy="15.25" r="2.47"/></svg><span class="n">0</span></span><span class="mat flint" id="hud-load-flint"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 13.5 7.5 5l6.5-1.5 3 7-4.5 6.5L6 17z"/><path d="M7.5 5l2 6 4.5-7.5M9.5 11l3 6.5"/></svg><span class="n">0</span></span><span class="bar"><span></span></span></div>
+                <div class="slot down" id="hud-pouch" title="Pouch (↓ to change, R to eat)"><span class="icon" data-kind="food"><svg viewBox="0 0 36 36" aria-hidden="true"><path d="M13 11.5c-4 3.5-6 8-5 12.5 1 4.2 5.2 6 10 6s9-1.8 10-6c1-4.5-1-9-5-12.5"/><path d="M12.5 11.5h11"/><path d="M14.5 11.5 13 7.5h10l-1.5 4"/></svg></span><span class="count">0</span><span class="fill"><span></span></span></div>
+                <div class="dots" id="hud-pouch-dots"></div>
                 <div class="call" id="hud-call"></div>
             </div>
             <div class="item" id="hud-item">Plain spear</div>
-            <div class="crafting" id="hud-craft" hidden><span class="what"></span><span class="bar"><span></span></span></div>
         </div>
         <!-- The craft menu, C at camp (play/craft.js). -->
         <div id="craft" class="fade-box" hidden>
@@ -624,6 +631,7 @@
             <button type="button" class="flint" id="craft-flint" aria-pressed="false"><span class="box"></span>+1 flint <span class="muted">(chance of rare)</span></button>
             <div class="keys">↑↓ choose · Enter craft · F flint · Esc close</div>
         </div>
+        <div id="hud-work"><span class="what"></span><span class="bar"><span></span></span></div>
         <div id="hud-prompt" class="fade-band" hidden></div>
         <div class="hud-store fade-band" title="Your tribe's store of food"><span class="muted">store</span><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M11.5 3.5c3 0 5 2.2 5 4.8 0 3.2-3 5.2-6 5.2-1.6 0-2.6.6-3.3 1.4"/><path d="M11.5 3.5c-3 0-5.5 2.4-5.5 5.4 0 1.5.5 2.6 1.2 3.4"/><path d="M7.2 14.9 5 17.1"/><circle cx="4.2" cy="16.2" r="1.2"/><circle cx="5.9" cy="17.9" r="1.2"/></svg><span id="hud-store">0</span><span class="mats" id="hud-mats" hidden><span class="mat" title="Wood"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 13.5 13 4"/><path d="M7 17 16.5 7.5"/><circle cx="14.75" cy="5.75" r="2.47"/><circle cx="5.25" cy="15.25" r="2.47"/></svg><span id="hud-wood">0</span></span><span class="mat" title="Flint"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 13.5 7.5 5l6.5-1.5 3 7-4.5 6.5L6 17z"/><path d="M7.5 5l2 6 4.5-7.5M9.5 11l3 6.5"/></svg><span id="hud-flint">0</span></span><span class="mat" title="Hide"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 3.5c1.5 1 6.5 1 8 0 .5 2 2.5 3 3 4.5-1.5 1-1.5 3 0 4.5-1 1.5-2.5 2.5-3 4.5-1.5-1-6.5-1-8 0-.5-2-2-3-3-4.5 1.5-1.5 1.5-3.5 0-4.5.5-1.5 2.5-2.5 3-4.5z"/></svg><span id="hud-hide">0</span></span></span></div>
         <div class="hud-dot"></div>

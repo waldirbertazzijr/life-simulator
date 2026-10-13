@@ -4,17 +4,19 @@
 // was just lost; top centre, a compass strip with your camp, your tribe's
 // standing order and your locked target; bottom left, the equipment cross
 // (→ the weapon, swept over while it comes back, ← the tool, each in its
-// rarity's colour with its wear and spares; the pouch, with what it holds,
-// and beside it the wood and flint you carry;
+// rarity's colour with its wear and spares; ↓ the pouch, one kind of what
+// you carry at a time with its count and how full, and dots for the others;
 // the top slot, your call; above, the weapon's skill and its Spirit; below,
-// its name and what is being crafted); bottom centre, what E and R (or P)
-// would do, and above it your tribe's answer to a call (or a word about
-// your items); bottom right, your tribe's store, food and (with items)
-// wood, flint and hide; a dot in the middle, a ring on the locked target,
-// and a red edge when you are bitten; the craft menu (craft.js) in the
-// middle when open. Banners (YOU DIED, your line continuing, LEGEND
-// FORGED, your line ended, with the story) sit in a layer of their own,
-// also seen from the map, as are the answers to calls.
+// its name, or the pouch's while it shows wood or flint); bottom centre,
+// what E and R (or P) would do, above it the work under way (butchering,
+// crafting, chopping...) with a bar filling, and above that your tribe's
+// answer to a call (or a word about your items); bottom right, your
+// tribe's store, food and (with items) wood, flint and hide; a dot in the
+// middle, a ring on the locked target, and a red edge when you are bitten;
+// the craft menu (craft.js) in the middle when open. Banners (YOU DIED,
+// your line continuing, LEGEND FORGED, your line ended, with the story)
+// sit in a layer of their own, also seen from the map, as are the answers
+// to calls.
 //
 // The markup and styles are in index.html; this fills them in. What it
 // shows comes each frame from hud-state.js as one plain object.
@@ -53,6 +55,14 @@ export const ITEM_ICONS = {
     knife: '<path d="M6.6 27.4l3.4-3.4 2 2-3.4 3.4z"/><path d="M9.6 21.4l5 5"/><path d="M12.6 24 29.2 7.6c.9 5.6-3.6 12-12.6 18.4z"/>',
     basket: '<path d="M7.5 15.5h21l-2.8 13.5H10.3z"/><path d="M12 15.5c0-5.2 2.7-8.5 6-8.5s6 3.3 6 8.5"/><path d="M8.8 21.5h18.4"/><path d="M14 15.5l1 13.5M22 15.5l-1 13.5"/>',
     torch: '<path d="M13.6 31.5l4.8-14"/><path d="M16.6 19.8l5.8 2M17.5 17.2l5.8 2"/><path d="M20.6 15.8c-3.8-2-4-7-.4-10.8 0 2.8 2.1 3.4 3 1.3 2.8 3 2.6 8-1 9.6"/>',
+};
+
+// What the pouch's slot can show (pouch.js): a pouch of food, a log, a
+// knapped stone (the calls' own signs for the last two).
+const POUCH_ICONS = {
+    food: '<path d="M13 11.5c-4 3.5-6 8-5 12.5 1 4.2 5.2 6 10 6s9-1.8 10-6c1-4.5-1-9-5-12.5"/><path d="M12.5 11.5h11"/><path d="M14.5 11.5 13 7.5h10l-1.5 4"/>',
+    wood: CALL_ICONS.wood,
+    flint: CALL_ICONS.flint,
 };
 
 export class TrailBar {
@@ -108,8 +118,10 @@ export class Hud {
             const el = this.root.querySelector(`.vbar.${k}`);
             this.bars[k] = { bar: new TrailBar(), fill: el.querySelector('.fill'), trail: el.querySelector('.trail') };
         }
-        this.shown = { name: null, age: null, flag: null, carry: null, store: null, prompt: null, reload: null, charge: null, call: null, gear: null, mats: null, load: null };
+        this.shown = { name: null, age: null, flag: null, store: null, prompt: null, reload: null, charge: null, call: null, gear: null, item: null, mats: null, pouch: null, work: null };
         this.toolSlot = $('hud-tool');
+        this.pouchSlot = $('hud-pouch');
+        this.workEl = $('hud-work');
         this.callSlot = this.root.querySelector('.slot.up');
         this.callName = $('hud-call');
         this.noticeEl = $('notice');
@@ -146,8 +158,6 @@ export class Hud {
         this.bar('life', s.life, dt);
         this.bar('spirit', s.spirit, dt);
         this.bar('stamina', s.stamina, dt);
-        const carry = Math.floor(s.carry);
-        if (carry !== shown.carry) $('hud-carry').textContent = shown.carry = carry;
         const store = Math.round(s.store);
         if (store !== shown.store) $('hud-store').textContent = shown.store = store;
         // The prompt: each key with what it would do ([['E', 'Gather'], ['R', 'Eat']]),
@@ -180,39 +190,77 @@ export class Hud {
         if (s.ring) ring.style.transform = `translate(${s.ring.x.toFixed(1)}px, ${s.ring.y.toFixed(1)}px)`;
         this.showCall(s.call);
         this.showGear(s.gear);
+        this.showPouch(s.pouch);
+        this.showItem(s.item);
         this.showMaterials(s.materials);
-        this.showLoad(s.load);
+        this.work(s.work);
         this.drawCompass(s);
     }
 
-    // By the pouch: the wood and flint you carry (gathered by hand, until
-    // stored at the rack), and a hairline of how full the load is. Hidden
-    // while you carry none.
-    showLoad(l) {
-        const any = !!l && (l.wood > 0 || l.flint > 0);
-        const full = any && l.max > 0 ? Math.min(1, (l.wood + l.flint) / l.max) : 0;
-        const key = any ? `${Math.floor(l.wood)}:${Math.floor(l.flint)}:${l.wood > 0}:${l.flint > 0}:${Math.round(full * 40)}` : '';
-        if (key === this.shown.load) return;
-        this.shown.load = key;
-        const el = this.$('hud-load');
-        el.hidden = !any;
-        if (!any) return;
-        this.$('hud-load-wood').hidden = !(l.wood > 0);
-        this.$('hud-load-flint').hidden = !(l.flint > 0);
-        el.querySelector('.wood .n').textContent = Math.floor(l.wood);
-        el.querySelector('.flint .n').textContent = Math.floor(l.flint);
-        el.style.setProperty('--full', full.toFixed(3));
-        el.classList.toggle('full', full >= 0.999);
+    // The work bar, centred just above the prompt: what your person is at
+    // (hud-state.js workOf), as { label, progress (0..1) }, or null when
+    // nothing is. It shows only while the work goes on, and fades out with
+    // what it last showed. Any timed act can use it: give its label and how
+    // far along it is.
+    work(w) {
+        const key = w ? `${w.label}:${Math.round(w.progress * 500)}` : '';
+        if (key === this.shown.work) return;
+        this.shown.work = key;
+        const el = this.workEl;
+        el.classList.toggle('on', !!w);
+        if (!w) return;
+        const what = el.querySelector('.what');
+        if (what.textContent !== w.label) what.textContent = w.label;
+        el.style.setProperty('--done', Math.min(1, Math.max(0, w.progress)).toFixed(3));
+    }
+
+    // The pouch, the cross's down slot (pouch.js view): the kind it shows,
+    // with its count in the corner and a hairline along its foot of how
+    // full that carry is (gold when no more fits), and under it a dot for
+    // each other kind you carry.
+    showPouch(pc) {
+        if (!pc) return;
+        const key = `${pc.kind}:${pc.count}:${pc.max}:${Math.round(pc.fill * 100)}:${pc.full}:${pc.others.join(',')}`;
+        if (key === this.shown.pouch) return;
+        this.shown.pouch = key;
+        const el = this.pouchSlot;
+        const icon = el.querySelector('.icon');
+        if (icon.dataset.kind !== pc.kind) {
+            icon.dataset.kind = pc.kind;
+            icon.innerHTML = `<svg viewBox="0 0 36 36" aria-hidden="true">${POUCH_ICONS[pc.kind] ?? ''}</svg>`;
+        }
+        el.querySelector('.count').textContent = pc.count;
+        const fill = el.querySelector('.fill');
+        fill.style.setProperty('--fill', pc.fill.toFixed(3));
+        fill.classList.toggle('full', pc.full);
+        el.title = `${pc.name} — Pouch (↓ to change, R to eat)`;
+        this.$('hud-pouch-dots').replaceChildren(...pc.others.map((kind) => {
+            const dot = this.doc.createElement('span');
+            dot.className = kind;
+            return dot;
+        }));
+    }
+
+    // The name under the cross (hud-state.js crossName): { text, tint }, the
+    // tint a rarity's colour or ''.
+    showItem(item) {
+        if (!item) return;
+        const key = `${item.text}|${item.tint}`;
+        if (key === this.shown.item) return;
+        this.shown.item = key;
+        const el = this.$('hud-item');
+        el.textContent = item.text;
+        el.className = `item ${item.tint}`;
     }
 
     // ---- Items (play/gear.js's equipment()) ----
 
-    // The cross's weapon (→) and tool (←) slots, the skill above, the held
-    // weapon's name below, and what is being crafted.
+    // The cross's weapon (→) and tool (←) slots, and the skill above.
+    // (What is being crafted shows on the work bar.)
     showGear(g) {
         if (!g) return;
         const slotKey = (x) => (x ? `${x.id}:${x.kind}:${x.rarity}:${Math.round(x.wear * 50)}:${x.spares}:${x.name}` : '-');
-        const key = `${slotKey(g.weapon)}|${slotKey(g.tool)}|${g.skill?.name}:${g.skill?.cost}|${g.crafting ? `${g.crafting.kind}:${Math.round(g.crafting.progress * 100)}` : ''}`;
+        const key = `${slotKey(g.weapon)}|${slotKey(g.tool)}|${g.skill?.name}:${g.skill?.cost}`;
         if (key === this.shown.gear) return;
         this.shown.gear = key;
         this.showSlot(this.weapon, g.weapon, 'Weapon (→ to change)');
@@ -227,15 +275,6 @@ export class Hud {
             cost.textContent = g.skill.cost;
             skill.appendChild(cost);
         } else skill.textContent = 'no skill';
-        const item = this.$('hud-item');
-        item.textContent = g.weapon ? g.weapon.name : 'Unarmed';
-        item.className = `item ${g.weapon && !g.weapon.legacy ? g.weapon.rarity : ''}`;
-        const craft = this.$('hud-craft');
-        craft.hidden = !g.crafting;
-        if (g.crafting) {
-            craft.querySelector('.what').textContent = `Crafting a ${g.crafting.kind}`;
-            craft.style.setProperty('--done', g.crafting.progress.toFixed(2));
-        }
     }
 
     // One slot: its sign in its rarity's colour, its wear, its spares.

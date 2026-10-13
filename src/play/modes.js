@@ -7,6 +7,7 @@
 //   hands.js      attacks, eating, and E (context.js: what E does here)
 //   kit.js        items in hand: cycling, the tool, the skill, crafting
 //   lead.js       leading your tribe: calls, and the tribe's answers
+//   pouch.js      the pouch's slot: which of what you carry it shows (↓)
 //   aim.js        the look's limits, lock-on, what is within reach
 //   hud-state.js  what the HUD shows (hud.js draws it)
 //
@@ -48,6 +49,7 @@ import { act } from './actions.js';
 import { Hands } from './hands.js';
 import { Kit } from './kit.js';
 import { Lead } from './lead.js';
+import { Pouch } from './pouch.js';
 import { fillHud } from './hud-state.js';
 import { clamp, wrapDelta, angleDelta } from '../view3d/util.js';
 
@@ -137,6 +139,7 @@ export class Modes {
         this.hands = new Hands(this); // attacks, eating, E (hands.js)
         this.kit = new Kit(this);     // items in hand, the craft menu (kit.js)
         this.lead = new Lead(this);   // leading your tribe (lead.js)
+        this.pouch = new Pouch();     // what the pouch's slot shows (pouch.js)
         this.input.onAction = (name, info) => this.action(name, info);
     }
 
@@ -302,6 +305,7 @@ export class Modes {
         this.inBody = false;
         this.hands.reset();
         this.kit.reset();
+        this.pouch.reset();
         this.input.capture = null;
         this.self = 0;
         this.known = null;
@@ -485,6 +489,7 @@ export class Modes {
         if (this.inBody && !this.dying) {
             this.clock += dt;
             this.hands.keep();
+            if (this.mine()) this.pouch.keep(this.self, this.hands.contents()); // (what was just picked up shows)
         }
         const f = this.self && !this.dying ? w.find(this.self) : null;
         if (f) {

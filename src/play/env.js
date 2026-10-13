@@ -61,8 +61,8 @@ export function modesEnv(page) {
 //   play.call(kind)      put a call in the slot (G gives it: play.press('KeyG'))
 //   play.arm(kind), play.mapClick(x, y)    on the map: ready a call, and click
 //                        the world point (x, y) through the view
-//   play.cycle('weapon' | 'tool'), play.tool(), play.skill(), play.craft()
-//                        → or ←, right click, Shift + right click, C (keys
+//   play.cycle('weapon' | 'tool' | 'pouch'), play.tool(), play.skill(), play.craft()
+//                        →, ← or ↓, right click, Shift + right click, C (keys
 //                        in the craft menu: play.press('ArrowDown'), ...)
 //   play.editor          the character editor (open(id), pick(field, value), close())
 //   play.state           who, where, stamina, snaps (moves turned down), the hands, the items...
@@ -105,7 +105,7 @@ export function windowPlay(page, modes) {
         over: () => modes.gameOver(),
         call: (kind) => modes.calls.select(kind),
         arm: (kind) => modes.armCall(kind),
-        cycle: (slot = 'weapon') => modes.action(slot === 'tool' ? 'cycle-tool' : 'cycle-weapon'),
+        cycle: (slot = 'weapon') => modes.action(slot === 'tool' ? 'cycle-tool' : slot === 'pouch' ? 'cycle-pouch' : 'cycle-weapon'),
         tool: () => modes.action('tool'),
         skill: () => modes.action('skill'),
         craft: () => modes.action('craft'),

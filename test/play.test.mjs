@@ -558,11 +558,13 @@ function play() {
             this.banners = [];
             this.story = null;
         },
-        // What a frame showed: the prompt (as 'E Gather', ...) and the reload.
+        // What a frame showed: the prompt (as 'E Gather', ...), the reload,
+        // the pouch and the work bar.
         update(s) {
             this.prompt = s.prompt ? s.prompt.map((p) => p.join(' ')) : null;
             this.reload = s.reload;
-            this.carry = s.carry;
+            this.pouch = s.pouch;
+            this.work = s.work;
         },
     };
     const modes = new Modes({
@@ -1185,7 +1187,7 @@ test('the weapon slot sweeps while reloading', () => {
     const { world, modes, hud, frame } = inBody(play(), { carry: 12.5 });
     modes.drawHud(1 / 60);
     assert.equal(hud.reload, 0);
-    assert.equal(hud.carry, 12.5, 'the pouch');
+    assert.deepEqual([hud.pouch.kind, hud.pouch.count], ['food', 12], 'the pouch');
     modes.action('attack', {});
     modes.drawHud(1 / 60);
     assert.equal(hud.reload, 1, 'thrown: the spear is gone');

@@ -1,8 +1,9 @@
 // What the HUD shows each frame, as one plain object (hud.js draws it, in
 // update): who you are and your bars, the compass's marks, what you carry
-// and hold, your tribe's store, the prompt, the call in the slot, and the
-// ring on the locked target. Filled in place every frame (no garbage),
-// after the camera has moved, so the ring sits on what is drawn.
+// (the pouch) and hold, your tribe's store, the prompt, the work under way,
+// the call in the slot, and the ring on the locked target. Filled in place
+// every frame, after the camera has moved, so the ring sits on what is
+// drawn.
 //
 // Something new on the HUD: a field here, drawn in hud.js (update), with its
 // markup and style in index.html.
@@ -34,8 +35,9 @@ export function fillHud(m, s) {
     s.tribe = tribe;
     s.yaw = b.yaw;
     s.camp = tribe ? Math.atan2(wrapDelta(tribe.camp.y - b.y, w.height), wrapDelta(tribe.camp.x - b.x, w.width)) : null;
-    s.carry = f ? m.hands.carried(f) : 0;
-    s.load = m.hands.load(); // (wood and flint, by the pouch)
+    // The pouch (pouch.js): the kind in the down slot, its count and how full.
+    const pouch = m.hands.contents();
+    s.pouch = m.pouch.view(pouch);
     s.store = tribe ? tribe.store : 0;
     s.prompt = m.dying || m.kit.menu ? null : paused ? [['P', 'Resume']] : promptOf(m, f);
     s.reload = f ? m.hands.reloading() : 0;
@@ -49,6 +51,8 @@ export function fillHud(m, s) {
     // follows the store while it is open.
     s.gear = equipment(w, p);
     s.materials = s.gear.on && tribe ? { wood: tribe.wood ?? 0, flint: tribe.flint ?? 0, hide: tribe.hide ?? 0 } : null;
+    s.item = crossName(s.gear, s.pouch);
+    s.work = m.dying ? null : workOf(w, p, s.gear, pouch);
     if (m.kit.menu) m.kit.showCraft();
     s.ring = null;
     s.target = null;
@@ -62,6 +66,39 @@ export function fillHud(m, s) {
         if (rig && rig.project(tx, ty, h, m.point)) s.ring = m.point;
     }
     return s;
+}
+
+// The name under the cross, { text, tint (a rarity, or '') }: the pouch's
+// ('Wood 5 / 8') while it shows wood or flint, else the weapon in hand's.
+export function crossName(gear, pouch) {
+    if (pouch && pouch.kind !== 'food') return { text: pouch.name, tint: '' };
+    const w = gear?.weapon ?? null;
+    return { text: w ? w.name : 'Unarmed', tint: w && !w.legacy ? w.rarity : '' };
+}
+
+// The work bar above the prompt (hud.js work): what your person is at, by
+// the simulation's report `p`, as { label, progress (0..1) }, or null.
+// Butchering, by the carcass's cut; chopping and knapping, by the load
+// filling up; gathering, by the pouch filling (the simulation stops it
+// when full); crafting, by the time left (gear.js). The hands' work comes
+// first. `gear` is equipment()'s, `pouch` pouch.js's contents. A new timed
+// act: a line here.
+export function workOf(world, p, gear, pouch) {
+    if (!p) return null;
+    if (p.butchering) return { label: 'Butchering', progress: cutOf(world, p.butchering) };
+    if (p.gathering === 'wood') return { label: 'Chopping wood', progress: share(pouch.load, pouch.max.wood) };
+    if (p.gathering === 'flint') return { label: 'Knapping flint', progress: share(pouch.load, pouch.max.flint) };
+    if (p.gathering === 'food' || p.gathering === true) return { label: 'Gathering', progress: share(pouch.food, pouch.max.food) };
+    if (gear?.crafting) return { label: `Crafting a ${gear.crafting.kind}`, progress: gear.crafting.progress };
+    return null;
+}
+
+const share = (v, most) => (most > 0 ? Math.min(1, Math.max(0, v / most)) : 0);
+
+// How far the carcass `id` is cut up (0..1; the Mirror's `carcasses`).
+function cutOf(world, id) {
+    for (const c of world.carcasses ?? []) if (c.id === id) return share(c.cut ?? 0, 1);
+    return 0;
 }
 
 // The prompt: what E would do (or is doing: context.js), and R while you

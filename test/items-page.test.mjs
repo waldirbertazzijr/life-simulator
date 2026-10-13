@@ -15,6 +15,8 @@ import {
 import { personName } from '../src/play/names.js';
 import { ITEM_KINDS, TASK, flatSpot } from '../src/items.js';
 import { noticeFor } from '../src/play/calls.js';
+import { workOf, crossName } from '../src/play/hud-state.js';
+import { Pouch, contents } from '../src/play/pouch.js';
 
 // An item as the Mirror keeps it (its kind a KIND code), and a legend (with
 // its skill's name, as items.js's forge gives it).
@@ -472,7 +474,11 @@ test('E chops wood and knaps flint where the ground gives them, while held; the 
     frame();
     assert.equal(modes.doing?.kind, 'chop', 'the simulation is at it');
     assert.deepEqual(prompt(), ['E Chopping wood']);
-    assert.deepEqual(t.hud.s.load, { wood: 1.3, flint: 0, max: world.p.items.load });
+    // The pouch turns to the wood picked up; the work bar fills as the load does.
+    const most = world.p.items.load;
+    assert.deepEqual([t.hud.s.pouch.kind, t.hud.s.pouch.name], ['wood', `Wood 1 / ${most}`]);
+    assert.equal(t.hud.s.work.label, 'Chopping wood');
+    assert.ok(Math.abs(t.hud.s.work.progress - 1.3 / most) < 1e-9);
     modes.action('interact-end');
     assert.deepEqual([t.last().action, t.last().on], ['gather', false], 'let go of E: it stops');
     assert.deepEqual(state.poses.at(-1), ['release', 7]);
@@ -561,4 +567,157 @@ test('the calls slot and the map learn Gather wood and Gather flint', () => {
     assert.equal(noticeFor({ type: 'call', kind: 'wood', tribe: 1 }), 'Gather wood — the idle go for wood');
     assert.equal(noticeFor({ type: 'call', kind: 'flint', tribe: 1, hungry: true }), 'Gather flint — once the camp is fed');
     assert.equal(noticeFor({ type: 'refused', kind: 'flint', reason: 'nowhere', tribe: 1 }), 'No flint within reach of the camp');
+});
+
+// ---- The work bar and the pouch (hud-state.js workOf, pouch.js) ----
+
+// The simulation's report on Ana, at rest, merged with `more`.
+const report = (w, more = {}) => ({
+    id: 7, carry: 0, wood: 0, flint: 0, loadMax: w.p.items.load, gathering: false, butchering: 0,
+    weapon: 0, tool: 0, kit: { weapons: [], tools: [] }, crafting: null, skill: 0, ...more,
+});
+const near = (a, b) => Math.abs(a - b) < 1e-9;
+
+test("the work bar: each timed act with how far along it is, from the simulation's report", () => {
+    const w = fakeWorld();
+    const P = w.p;
+    const work = (more) => {
+        const p = report(w, more);
+        return workOf(w, p, equipment(w, p), contents(w, p, p.carry));
+    };
+    assert.equal(work({}), null, 'idle: no bar');
+    assert.equal(workOf(w, null, null, null), null, 'no report yet: none');
+    // Butchering: the carcass's cut.
+    w.carcasses = [{ id: 41, x: 0, y: 0, meat: 50, cut: 0.9 }, { id: 40, x: 103, y: 102, meat: 30, cut: 0.5 }];
+    assert.deepEqual(work({ butchering: 40 }), { label: 'Butchering', progress: 0.5 });
+    w.carcasses = [];
+    assert.deepEqual(work({ butchering: 40 }), { label: 'Butchering', progress: 0 }, 'its carcass not seen yet');
+    // Crafting: the time left of items.craftSteps.
+    const craft = work({ crafting: { kind: ITEM_KINDS.indexOf('spear'), until: w.time + P.items.craftSteps / 4 } });
+    assert.equal(craft.label, 'Crafting a spear');
+    assert.ok(near(craft.progress, 0.75));
+    // Chopping and knapping: the load (wood and flint together) filling toward loadMax.
+    assert.deepEqual(work({ gathering: 'wood', wood: 2, flint: 2 }), { label: 'Chopping wood', progress: 4 / P.items.load });
+    assert.deepEqual(work({ gathering: 'flint', flint: 6, loadMax: 12 }), { label: 'Knapping flint', progress: 0.5 }, 'a basket carries more');
+    // Gathering food: the pouch filling toward full, where the simulation stops it (more with a basket).
+    assert.deepEqual(work({ gathering: 'food', carry: 40 }), { label: 'Gathering', progress: 40 / P.human.carryMax });
+    const basket = work({ gathering: true, carry: 60, loadMax: P.items.load * P.items.basket });
+    assert.equal(basket.label, 'Gathering');
+    assert.ok(near(basket.progress, 60 / (P.human.carryMax * P.items.basket)));
+});
+
+test('the work bar on the HUD: E at a kill shows Butchering filling, gone when it is cut up', () => {
+    const t = inBody();
+    const { modes, world, frame, hud } = t;
+    world.carcasses = [{ id: 40, x: 103, y: 102, meat: 30, cut: 0 }];
+    modes.action('interact');
+    assert.equal(t.last().action, 'butcher');
+    world.player.butchering = 40;
+    world.carcasses[0].cut = 0.5;
+    frame();
+    modes.drawHud(1 / 60);
+    assert.deepEqual(hud.s.work, { label: 'Butchering', progress: 0.5 });
+    world.carcasses = [];
+    world.player.butchering = 0;
+    frame();
+    modes.drawHud(1 / 60);
+    assert.equal(hud.s.work, null, 'done: the bar goes');
+    // Crafting at camp, once the simulation says so (nothing more under the cross).
+    world.player.crafting = { kind: ITEM_KINDS.indexOf('bow'), until: world.time + world.p.items.craftSteps / 2 };
+    modes.drawHud(1 / 60);
+    assert.equal(hud.s.work.label, 'Crafting a bow');
+    assert.ok(near(hud.s.work.progress, 0.5));
+});
+
+test('the pouch: ↓ goes through the kinds you carry, passing empty ones by; food is always there', () => {
+    const w = fakeWorld();
+    const pouch = new Pouch();
+    const c = (food, wood = 0, flint = 0) => contents(w, report(w, { wood, flint }), food);
+    assert.equal(pouch.cycle(c(30)), 'food', 'food alone: it stays');
+    assert.equal(pouch.cycle(c(0)), 'food', 'even empty');
+    assert.equal(pouch.cycle(c(30, 0, 2)), 'flint', 'no wood: passed by');
+    assert.equal(pouch.cycle(c(30, 0, 2)), 'food');
+    assert.equal(pouch.cycle(c(30, 3, 2)), 'wood');
+    assert.equal(pouch.cycle(c(30, 3, 2)), 'flint');
+    assert.equal(pouch.cycle(c(30, 3, 2)), 'food');
+    assert.equal(pouch.cycle(c(0, 3)), 'wood');
+    assert.equal(pouch.cycle(c(0, 3)), 'food', 'an empty pouch of food still has its turn');
+});
+
+test('the pouch turns to what you pick up, and back to food from a kind gone', () => {
+    const w = fakeWorld();
+    const pouch = new Pouch();
+    const c = (food, wood = 0, flint = 0) => contents(w, report(w, { wood, flint }), food);
+    pouch.keep(7, c(20, 3));
+    assert.equal(pouch.kind, 'food', 'someone new starts on food, whatever they carry');
+    pouch.keep(7, c(20, 3.4));
+    assert.equal(pouch.kind, 'wood', 'chopping');
+    pouch.keep(7, c(20, 3.4, 0.2));
+    assert.equal(pouch.kind, 'flint', 'knapping');
+    pouch.keep(7, c(18, 3.4, 0.2));
+    assert.equal(pouch.kind, 'flint', 'eating does not turn it');
+    pouch.keep(7, c(25, 3.4, 0.2));
+    assert.equal(pouch.kind, 'food', 'gathering or butchering');
+    pouch.cycle(c(25, 3.4, 0.2));
+    assert.equal(pouch.kind, 'wood');
+    pouch.keep(7, c(25, 3.4, 0.2));
+    assert.equal(pouch.kind, 'wood', 'nothing new: it stays where ↓ left it');
+    pouch.keep(7, c(25));
+    assert.equal(pouch.kind, 'food', 'stored at the rack: back to food');
+    pouch.cycle(c(25, 0, 1));
+    pouch.keep(8, c(0, 0, 1));
+    assert.equal(pouch.kind, 'food', 'someone else: food again');
+});
+
+test("the pouch's slot: the count inside, how full, the other kinds, and the name under the cross", () => {
+    const w = fakeWorld();
+    const P = w.p;
+    const load = P.items.load;
+    const pouch = new Pouch();
+    const c = (food, wood = 0, flint = 0, loadMax = load) => contents(w, report(w, { wood, flint, loadMax }), food);
+    assert.deepEqual(pouch.view(c(40.7, 5, 3)), {
+        kind: 'food', count: 40, max: P.human.carryMax, fill: 40.7 / P.human.carryMax, full: false, others: ['wood', 'flint'], name: `Food 40 / ${P.human.carryMax}`,
+    });
+    pouch.cycle(c(40.7, 5, 3));
+    assert.deepEqual(pouch.view(c(40.7, 5, 3)), {
+        kind: 'wood', count: 5, max: load, fill: 5 / load, full: true, others: ['food', 'flint'], name: `Wood 5 / ${load}`,
+    }, 'the load full (wood and flint share it): no more fits');
+    assert.deepEqual(pouch.view(c(0.5, 2.6)), {
+        kind: 'wood', count: 2, max: load, fill: 2.6 / load, full: false, others: [], name: `Wood 2 / ${load}`,
+    }, 'less than a bite of food: no dot for it');
+    const bag = pouch.view(c(0, 2, 0, load * P.items.basket));
+    assert.deepEqual([bag.name, bag.max], [`Wood 2 / ${load * P.items.basket}`, load * P.items.basket], 'a basket carries more');
+    assert.equal(pouch.view(c(10)).kind, 'food', 'its kind gone: food');
+    const food = new Pouch().view(c(P.human.carryMax));
+    assert.deepEqual([food.fill, food.full], [1, true]);
+    // Under the cross: the pouch's reading on wood or flint, else the weapon's name.
+    const spear = { name: 'Grey Fang', rarity: 'legendary' };
+    assert.deepEqual(crossName({ weapon: spear }, pouch.view(c(0, 5))), { text: `Wood 5 / ${load}`, tint: '' });
+    assert.deepEqual(crossName({ weapon: spear }, new Pouch().view(c(9, 5))), { text: 'Grey Fang', tint: 'legendary' });
+    assert.deepEqual(crossName({ weapon: null }, new Pouch().view(c(9))), { text: 'Unarmed', tint: '' });
+});
+
+test('↓ in a body turns the slot, the name under the cross follows, and R still eats food', () => {
+    const bow = item('bow', { rarity: 1, trait: 'reload' });
+    const t = inBody([bow], { weapon: bow.id, skill: 30, carry: 30, wood: 5, flint: 0, loadMax: 8 });
+    const { modes, world, frame, hud } = t;
+    modes.drawHud(1 / 60);
+    assert.deepEqual([hud.s.pouch.kind, hud.s.pouch.count, hud.s.pouch.others], ['food', 30, ['wood']]);
+    assert.deepEqual(hud.s.item, { text: 'Swift bow', tint: 'rare' });
+    modes.action('cycle-pouch');
+    modes.drawHud(1 / 60);
+    assert.deepEqual([hud.s.pouch.kind, hud.s.pouch.count, hud.s.pouch.others], ['wood', 5, ['food']]);
+    assert.deepEqual(hud.s.item, { text: 'Wood 5 / 8', tint: '' });
+    modes.action('eat');
+    assert.equal(t.last().action, 'eat', 'R eats food, whatever the slot shows');
+    modes.action('cycle-pouch');
+    modes.drawHud(1 / 60);
+    assert.equal(hud.s.pouch.kind, 'food', 'no flint: passed by');
+    // Knapping: the slot turns to the flint as it comes.
+    world.player.gathering = 'flint';
+    world.player.flint = 0.4;
+    frame();
+    modes.drawHud(1 / 60);
+    assert.deepEqual([hud.s.pouch.kind, hud.s.item.text], ['flint', 'Flint 0 / 8']);
+    assert.deepEqual(hud.s.work, { label: 'Knapping flint', progress: 5.4 / 8 });
 });

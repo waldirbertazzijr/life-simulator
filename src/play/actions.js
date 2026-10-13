@@ -5,7 +5,7 @@
 //
 // A new key: name its action in input.js (ACTIONS), and say here what it
 // does, as a line in IN_BODY that hands it to the part it is about
-// (m.hands, m.kit, m.lead, or modes.js itself).
+// (m.hands, m.kit, m.lead, m.pouch, or modes.js itself).
 //
 // `m` is modes.js's Modes: who you are, your body, the world, the page.
 import { PITCH, lockTarget } from './aim.js';
@@ -45,13 +45,13 @@ const IN_BODY = {
     call: (m) => m.lead.callHere(),
     'cycle-weapon': (m) => m.kit.cycle('weapon'),
     'cycle-tool': (m) => m.kit.cycle('tool'),
+    'cycle-pouch': (m) => m.pouch.cycle(m.hands.contents()), // (↓: what the pouch's slot shows)
     tool: (m) => m.kit.useTool(),
     skill: (m) => m.kit.useSkill(),
     craft(m) {
         if (m.kit.menu) m.kit.closeCraft();
         else m.kit.openCraft();
     },
-    // (↓, the pouch: nothing to cycle yet.)
 };
 
 // Do what the action `name` asks of `m`.
