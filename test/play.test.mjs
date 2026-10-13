@@ -1558,3 +1558,15 @@ test('a shot goes for whoever is under the crosshair, at its middle, else for th
     assert.equal(a.lock, false);
     assert.ok(Math.abs(a.dx) < 1e-6 && Math.abs(a.dy - 1) < 1e-6, 'toward the ground under the crosshair');
 });
+
+test('Shift held runs, as Space held does', () => {
+    const { input, key } = hands();
+    input.setMode('body');
+    assert.equal(input.sprinting, false);
+    key('keydown', 'ShiftLeft');
+    assert.equal(input.sprinting, true);
+    assert.equal(input.x, 0);
+    assert.equal(input.y, 0, 'running is not moving');
+    key('keyup', 'ShiftLeft');
+    assert.equal(input.sprinting, false);
+});

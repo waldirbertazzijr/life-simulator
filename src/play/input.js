@@ -16,7 +16,7 @@
 // A menu open on top (the craft menu) sets `capture(code, repeat)`: keys it
 // takes (returning true) go to it alone, and clicks on the view do nothing.
 //
-// Held past TAP_MS, Space sprints (`sprinting`), and the left button
+// Held past TAP_MS, Space sprints (`sprinting`; so does Shift held), and the left button
 // charges (`charging`, `charge`). Keys go by physical key (event.code), so
 // WASD sits under the same fingers on any layout.
 //
@@ -156,6 +156,10 @@ export class Input {
             e.preventDefault();
             return;
         }
+        if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+            this.held.add('run'); // (Shift held runs too, as Space held does)
+            return;
+        }
         const move = MOVE[e.code];
         if (move) {
             e.preventDefault();
@@ -177,6 +181,7 @@ export class Input {
     keyup(e) {
         const move = MOVE[e.code];
         if (move) this.held.delete(move);
+        if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') this.held.delete('run');
         if (this.mode !== 'body' || typing(e)) return;
         if (e.code === 'Space') {
             e.preventDefault();
@@ -269,6 +274,6 @@ export class Input {
     }
 
     get sprinting() {
-        return this.space.held(this.now());
+        return this.space.held(this.now()) || this.held.has('run');
     }
 }
