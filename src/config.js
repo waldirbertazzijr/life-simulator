@@ -20,6 +20,21 @@ export const params = {
         pace: 2,
     },
 
+    // The calendar (src/calendar.js): a day of 5 minutes at 1×, seasons of 6
+    // days, years of 4 seasons (about 2 hours). Read by stage 4's day and
+    // night, seasons and lifetimes, and by the page's sky.
+    calendar: {
+        day: 4500,     // steps in a day: dawn + light + dusk + night
+        dawn: 450,     // 30 s
+        light: 2250,   // 2.5 min of daylight
+        dusk: 450,     // 30 s (the night is the rest: 1.5 min)
+        seasonDays: 6,
+        moonDays: 8,   // a moon's cycle, new to new
+        noon: 47,      // the sun's noon height at the equinoxes (degrees)...
+        tilt: 23,      // ...± this between midsummer and midwinter
+        winterOdds: [0.3, 0.45], // a year's winter: mild, normal (the rest hard)
+    },
+
     world: {
         // The world always has this AREA; its aspect ratio follows the screen.
         // Densities — and so the balance — are identical on any display.

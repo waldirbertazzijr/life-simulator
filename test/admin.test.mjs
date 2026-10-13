@@ -604,7 +604,7 @@ test('set and get: live parameters, typed as they are', () => {
     run(w, 'set items.costs.spear {"wood": 1, "flint": 0, "hide": 0}');
     assert.deepEqual(w.p.items.costs.spear, { wood: 1, flint: 0, hide: 0 });
     assert.equal(run(w, 'get herbivore.speed').text, 'herbivore.speed: 0.7');
-    assert.match(run(w, 'get').text, /^groups: life world terrain biomes/);
+    assert.match(run(w, 'get').text, /^groups: life calendar world terrain biomes/);
     assert.match(run(w, 'get items.costs').text, /^items\.costs\.spear: \{"wood":1/);
 });
 
