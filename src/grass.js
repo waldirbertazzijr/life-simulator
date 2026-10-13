@@ -13,6 +13,7 @@ export class Grass {
         this.fertility = null; // flat world: every patch can hold a full 1.0
         this.land = this.g.length;
         this.boost = 1;
+        this.level = this.mean(); // the mean grass over the land (regrow keeps it)
     }
 
     // With terrain, each patch can hold at most its fertility (0 on water and
@@ -34,6 +35,7 @@ export class Grass {
             if (fertility[i] > grazed) supply += fertility[i] - grazed;
         }
         this.boost = compensate && supply > 0 ? (g.length * (1 - grazed)) / supply : 1;
+        this.level = this.mean();
     }
 
     index(x, y) {
@@ -48,15 +50,18 @@ export class Grass {
     // down, never from zero. With terrain each patch fills toward its own
     // fertility f instead of 1 (a smaller pond): g += rate·(f − g). Bare peaks
     // stay bare, water stays empty, and the regrowth is still supply-driven.
+    // Also keeps `level`, the mean grass over the land after it (as mean()).
     regrow(rate) {
         const g = this.g;
         const f = this.fertility;
+        let sum = 0;
         if (f === null) {
-            for (let i = 0; i < g.length; i++) g[i] += rate * (1 - g[i]);
-            return;
+            for (let i = 0; i < g.length; i++) sum += g[i] += rate * (1 - g[i]);
+        } else {
+            const r = rate * this.boost;
+            for (let i = 0; i < g.length; i++) sum += g[i] += r * (f[i] - g[i]);
         }
-        const r = rate * this.boost;
-        for (let i = 0; i < g.length; i++) g[i] += r * (f[i] - g[i]);
+        this.level = sum / (this.land || 1);
     }
 
     // Mean grass over the land (water holds none, so it is left out).

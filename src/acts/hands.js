@@ -179,10 +179,12 @@ export const loadMax = (world, i) => world.p.items.load * carryOf(world, world.h
 // ---- Butchering ---------------------------------------------------------------------------
 
 // A step's cutting at the carcass pl.butcher: play.butcherSteps of them cut
-// it up (with a knife, twice as fast), each putting its share of the meat
-// into the pouch (as much as fits; the rest is left), with a stroke for the
-// page every play.butcherEvery. Out of reach (or gone), it stops; started
-// again, it goes on where it was. With items, the hides come at the end.
+// up the whole of it (with a knife, twice as fast), each putting its share of
+// the meat into the pouch, with a stroke for the page every
+// play.butcherEvery. When the pouch is full it stops, and the rest waits in
+// the carcass (a big kill is more than one load); out of reach (or gone), it
+// stops; started again, it goes on where it was. With items, the hides come
+// with the first load.
 export function butcher(world, i) {
     const P = world.p.human;
     const Q = world.p.play;
@@ -196,27 +198,36 @@ export function butcher(world, i) {
         return;
     }
     const fast = world.itemsOn && (pop.gear[i] & 7) === KIND.KNIFE;
+    const room = P.carryMax * (world.itemsOn ? carryOf(world, pop, i) : 1) - pop.carry[i];
+    if (room <= 0) {
+        pl.butcher = 0;
+        if (world.itemsOn) takeHides(world, i, c, fast);
+        return;
+    }
     const before = c.done;
     c.done += fast ? 2 : 1;
     const steps = c.steps ?? Q.butcherSteps; // (a hunter's kill: items.butcher)
-    const last = c.done >= steps;
     const share = ((fast ? 2 : 1) * c.total) / steps;
-    const meat = last || share > c.meat ? c.meat : share;
+    let meat = share > c.meat ? c.meat : share;
+    if (meat > room) meat = room;
     c.meat -= meat;
-    c.cut = last ? 1 : c.done / steps;
-    const room = P.carryMax * (world.itemsOn ? carryOf(world, pop, i) : 1) - pop.carry[i];
-    pop.carry[i] += meat < room ? meat : room > 0 ? room : 0;
+    c.cut = 1 - c.meat / c.total;
+    pop.carry[i] += meat;
     const { time } = world;
     if (before % Q.butcherEvery === 0) world.events.push({ type: 'butcher', id: pop.id[i], carcass: c.id, x: c.x, y: c.y, time });
-    if (last) {
+    if (c.meat <= 1e-6) {
         world.carcasses.delete(c.id);
         world.events.push({ type: 'butchered', id: pop.id[i], carcass: c.id, time });
         pl.butcher = 0;
-        if (world.itemsOn) {
-            pop.hides[i] += c.hide ?? 0;
-            if (fast) wearItem(world, i, world.items.get(pop.tool[i]));
-        }
+        if (world.itemsOn) takeHides(world, i, c, fast);
     }
+}
+
+// The hides of carcass c, if nobody has taken them, and the knife's wear.
+function takeHides(world, i, c, fast) {
+    world.humans.hides[i] += c.hide ?? 0;
+    c.hide = 0;
+    if (fast) wearItem(world, i, world.items.get(world.humans.tool[i]));
 }
 
 // ---- Attacks -----------------------------------------------------------------------------

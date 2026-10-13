@@ -5,7 +5,6 @@
 import { drawFlag } from '../flag.js';
 import { STATE, STATE_LABEL } from '../world.js';
 import { personName, ageText, years } from '../play/names.js';
-import { SLEEPING, SLEEPING_LABEL } from '../view3d/animate.js';
 
 // States shown in the alarm colour.
 const ALARM = new Set([STATE.FLEEING, STATE.CHASING, STATE.FIGHTING, STATE.RAIDING]);
@@ -61,7 +60,7 @@ export function fillCard($, world, id, target, actions) {
         const { pop, i } = target;
         const state = pop.state[i];
         $('f-gen').textContent = `generation ${pop.generation[i]}`;
-        $('f-state').textContent = STATE_LABEL[state] ?? (state === SLEEPING ? SLEEPING_LABEL : '');
+        $('f-state').textContent = STATE_LABEL[state];
         $('f-state').className = ALARM.has(state) ? 'alarm' : '';
         $('f-carry').textContent = Math.round(pop.carry[i]);
         const e = pop.energy[i];

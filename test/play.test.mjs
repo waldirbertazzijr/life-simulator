@@ -486,7 +486,8 @@ function fakeWorld() {
     const pop = () => Object.fromEntries([['n', 0], ...COLS.map((c) => [c, []])]);
     const flag = { pattern: 'bands', colors: ['#4a90e2', '#f2c14e', '#1b1d22'] };
     const w = {
-        p: structuredClone(defaults), width: 1000, height: 600, terrain: null, time: 0,
+        // (The ages below were written for people who come of age at 1800 steps.)
+        p: { ...structuredClone(defaults), human: { ...defaults.human, maturity: 1800 } }, width: 1000, height: 600, terrain: null, time: 0,
         herbivores: pop(), carnivores: pop(), humans: pop(),
         tribeById: new Map([
             [1, { id: 1, name: 'Kamari', camp: { x: 100, y: 100 }, store: 120, flag, aggression: 0.3, sociality: 0.6 }],
@@ -935,7 +936,7 @@ test('Play with nobody left is over, with the story', () => {
     frame(DEATH_SECONDS);
     assert.ok(hud.story, 'the summary card');
     const { people, generations, years: lived, kills, children, line } = hud.story;
-    assert.deepEqual({ people, generations, lived, kills, children, line }, { people: 1, generations: 1, lived: Math.floor(1000 / yearOf(defaults.human.maturity)), kills: 0, children: 0, line: [personName(20)] });
+    assert.deepEqual({ people, generations, lived, kills, children, line }, { people: 1, generations: 1, lived: Math.floor(1000 / yearOf(world.p.human.maturity)), kills: 0, children: 0, line: [personName(20)] });
     assert.equal(hud.banners.at(-1), 'ended');
     assert.equal(modes.self, 0);
     assert.equal(state.inBody, false);

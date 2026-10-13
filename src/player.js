@@ -16,6 +16,7 @@
 //   speed     the pace the page says it moves at (units/step): walking or running
 //   rollUntil a dodge roll lasts until this world time
 //   resting   sitting at camp
+//   sleeping  resting at camp at night: asleep until dawn, or a move
 //   spirit    the player's own reserve (weapon skills, calls: later packages)
 //   snap      the simulation moved the body itself: the page must jump to it
 //   heir      the id taken over at the latest hand-off, until it is reported
@@ -80,6 +81,7 @@ export function takeControl(world, id, mode) {
         speed: 0,
         rollUntil: 0,
         resting: false,
+        sleeping: false, // resting at camp at night (stepPlayer), until dawn or a move
         // Spirit is the player's, not the body's: it carries over to the next one.
         spirit: before !== null && !before.over ? before.spirit : world.p.play.spiritMax,
         snap: false,
@@ -123,7 +125,8 @@ export function applyInput(world, msg) {
 
 // A one-off action {seq, action, ...}: 'roll', a dodge roll (bites miss for
 // play.rollSteps steps); 'rest' {on}, to sit down at camp (only inside it)
-// or get up; 'auto' {on}, autopilot on or off; 'call' {kind, x, y}, a call
+// or get up (at night that is sleeping, until dawn or a move: stepPlayer);
+// 'auto' {on}, autopilot on or off; 'call' {kind, x, y}, a call
 // to your tribe (orders.js); and the hands' (ACTS and the work that goes
 // on, see handAct). Others are ignored, so the page can be ahead of the
 // simulation. On autopilot, only 'auto' and 'call' count (orders can be
@@ -141,6 +144,7 @@ export function applyAct(world, msg) {
         pl.crouch = false;
         pl.speed = 0;
         pl.resting = false;
+        pl.sleeping = false;
         pl.rollUntil = 0;
         idleHands(pl);
         stopCrafting(world, pl);
@@ -266,6 +270,11 @@ export function stepPlayer(world, i) {
     const campDy = wrapDelta(tribe.camp.y - y[i], H);
     const atCamp = campDx * campDx + campDy * campDy < P.campRadius * P.campRadius;
     if (!atCamp) pl.resting = false; // walked off
+    // Resting at camp at night is sleeping, until dawn or a move; then it is up.
+    if (pl.sleeping && (!pl.resting || !world.night || moved > MOVED)) {
+        pl.sleeping = false;
+        pl.resting = false;
+    } else if (pl.resting && world.night) pl.sleeping = true;
     let e = energy[i];
     let c = carry[i];
     if (atCamp) {
@@ -285,13 +294,15 @@ export function stepPlayer(world, i) {
         e += take;
     }
     e -= P.baseCost * upkeep[i] + moveCost;
+    if (e < P.starving * P.maxEnergy) lifespan[i]--; // (hunger ages, as anyone)
     if (e > P.maxEnergy) e = P.maxEnergy;
     carry[i] = c;
 
     // What it is doing, for the panel and the bodies drawn: the page's gait,
     // a run being nearer a sprint than a walk.
     const speed = pl.speed;
-    state[i] = pl.resting ? STATE.AT_CAMP
+    state[i] = pl.sleeping ? STATE.SLEEPING
+        : pl.resting ? STATE.AT_CAMP
         : pl.crafting !== null ? STATE.CRAFTING
         : pl.butcher !== 0 ? STATE.BUTCHERING
         : pl.gather ? (pl.work === TASK.WOOD ? STATE.CHOPPING : pl.work === TASK.FLINT ? STATE.QUARRYING : STATE.GATHERING)
@@ -341,6 +352,7 @@ export function afterStep(world) {
             pl.crouch = false;
             pl.speed = 0;
             pl.resting = false;
+            pl.sleeping = false;
             pl.rollUntil = 0;
             idleHands(pl);
             stopCrafting(world, pl);
@@ -364,6 +376,7 @@ export function afterStep(world) {
     pl.crouch = false;
     pl.speed = 0;
     pl.resting = false;
+    pl.sleeping = false;
     pl.rollUntil = 0;
     idleHands(pl);
     stopCrafting(world, pl);

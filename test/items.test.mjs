@@ -26,6 +26,10 @@ const world = (set = {}, seed = 1) => new World(config(set), { seed, aspect: 1.6
 
 // Flat, one tribe, and no animals but those a test puts there.
 const EMPTY = { 'terrain.enabled': false, 'carnivore.initial': 0, 'herbivore.initial': 0, 'human.tribes': 1 };
+// A day that does not end (no dusk, no night: nobody goes home to sleep), and
+// grazers worth only their stomachs (a kill that fits in one pair of hands).
+const ALLDAY = { 'calendar.day': 1e9, 'calendar.light': 1e9 - 1000 };
+const SMALL = { 'herbivore.meat': 0 };
 
 const wrap = (v, size) => ((v % size) + size) % size;
 const wrapDelta = (d, size) => (d > size / 2 ? d - size : d < -size / 2 ? d + size : d);
@@ -186,7 +190,7 @@ test('a tribe finds wood in forest and flint on rock, by land; on a flat world, 
 });
 
 test('an errand: to the spot for wood, a load home, into the store', () => {
-    const w = world(EMPTY);
+    const w = world({ ...EMPTY, ...ALLDAY }); // (an errand of a whole day)
     const t = w.tribes[0];
     const [first] = adults(w);
     disarm(w, first); // someone needs a spear...
@@ -196,7 +200,7 @@ test('an errand: to the spot for wood, a load home, into the store', () => {
     let load = 0;
     let before = t.wood;
     let brought = 0;
-    for (let k = 0; k < 4000 && brought === 0; k++) {
+    for (let k = 0; k < 8000 && brought === 0; k++) {
         w.step();
         chopped += happened(w, 'chop').length;
         for (let i = 0; i < w.humans.n; i++) {
@@ -372,7 +376,7 @@ test('costs (params.items.costs, by name): spear 2 wood, bow 3 wood and a hide, 
     assert.deepEqual([t.wood, t.flint, t.hide], [3, 0, 1], 'and back');
     // The other numbers the page reads.
     assert.equal(p.items.enabled, true);
-    assert.equal(p.items.craftSteps, 150);
+    assert.equal(p.items.craftSteps, 300);
     assert.equal(p.items.pickReach, 6);
 });
 
@@ -462,7 +466,7 @@ test('culture: aggressive tribes make clubs and knives, social ones bows and bas
 // ---- Butchering for everyone -------------------------------------------------------------
 
 test('a hunter\'s kill waits in a carcass: it cuts it up (items.butcher steps), eats its share, carries the rest and the hide home', () => {
-    const w = world({ ...EMPTY, 'human.perTribe': 1 });
+    const w = world({ ...EMPTY, ...SMALL, 'human.perTribe': 1 });
     const t = w.tribes[0];
     t.sociality = 0.5;
     t.aggression = 0;
@@ -498,7 +502,7 @@ test('a hunter\'s kill waits in a carcass: it cuts it up (items.butcher steps), 
     assert.ok(Math.abs(after - before - c.total) < 4, `${before} + ${c.total} ≈ ${after} (less what living costs)`);
     assert.ok(w.humans.carry[0] > 0.4 * c.total, 'half of it to carry home');
     // With a knife: twice as fast.
-    const v = world({ ...EMPTY, 'human.perTribe': 1 });
+    const v = world({ ...EMPTY, ...SMALL, 'human.perTribe': 1 });
     alone(v, 0, v.tribes[0].camp.x + 150, v.tribes[0].camp.y);
     give(v, 0, KIND.KNIFE);
     const h = grazer(v, v.tribes[0].camp.x + 152, v.tribes[0].camp.y, { energy: 80 });
@@ -513,19 +517,60 @@ test('a hunter\'s kill waits in a carcass: it cuts it up (items.butcher steps), 
     assert.equal(knifeSteps, w.p.items.butcher / 2);
 });
 
+test('a big kill: tribe-mates near help carry it, and the camp fetches the rest', () => {
+    const w = world({ ...EMPTY, ...ALLDAY, 'human.perTribe': 6 });
+    const t = w.tribes[0];
+    t.store = 0; // (a camp that could use the meat)
+    const P = w.p.human;
+    const all = adults(w);
+    const [hunter, mate] = all;
+    const x = t.camp.x + 150;
+    alone(w, hunter, x, t.camp.y);
+    alone(w, mate, x + 10, t.camp.y);
+    for (const i of all.slice(2)) alone(w, i, t.camp.x, t.camp.y); // (the rest at camp)
+    const g = grazer(w, x + 2, t.camp.y, { energy: 80 });
+    const j = indexIn(w.herbivores, g);
+    w.herbivores.age[j] = w.p.herbivore.maturity; // (grown)
+    killed(w, hunter, w.herbivores, j, efficiencyOf(w, w.humans, hunter));
+    w.die(w.herbivores, j, 'hunted', w.humans.id[hunter]);
+    const c = w.carcasses.get(g);
+    assert.ok(c.total > 3 * P.carryMax, `a grown grazer is several loads: ${c.total.toFixed(0)}`);
+    assert.equal(c.tribe, t.id);
+    w.step();
+    assert.equal(w.humans.task[mate], TASK.BUTCHER, 'the mate near comes to help');
+    assert.equal(w.humans.work[mate], g);
+    let fetched = false;
+    let stored = 0;
+    for (let k = 0; k < 4000 && w.carcasses.has(g); k++) {
+        const before = t.store;
+        w.step();
+        if (t.store > before) stored += t.store - before;
+        for (const i of all.slice(2)) if (w.humans.task[i] === TASK.BUTCHER && w.humans.work[i] === g) fetched = true;
+    }
+    assert.ok(fetched, 'someone from camp goes for the rest');
+    assert.equal(w.carcasses.has(g), false, 'all of it cut and carried');
+    for (let k = 0; k < 600; k++) {
+        const before = t.store;
+        w.step();
+        if (t.store > before) stored += t.store - before;
+    }
+    assert.ok(stored > c.total * 0.5, `most of it home: ${stored.toFixed(0)} of ${c.total.toFixed(0)}`);
+    assert.equal(t.hide, 1, 'and the hide');
+});
+
 test('in a whole world, hunters butcher their kills and hides reach the stores', () => {
     const w = world();
-    let butchered = 0;
+    let strokes = 0;
     let carcasses = 0;
-    for (let k = 0; k < 3000; k++) {
+    for (let k = 0; k < 4500; k++) {
         w.step();
         for (const e of w.events) {
-            if (e.type === 'butchered' && e.id !== 0) butchered++;
+            if (e.type === 'butcher') strokes++;
             if (e.type === 'death' && e.cause === 'hunted' && w.carcasses.has(e.id)) carcasses++;
         }
     }
-    assert.ok(butchered > 20, `${butchered} butchered`);
-    assert.ok(carcasses > 20, 'each kill a carcass');
+    assert.ok(carcasses > 5, `each kill a carcass: ${carcasses}`);
+    assert.ok(strokes >= 2 * carcasses, `${strokes} strokes for ${carcasses} kills`);
     assert.ok(w.tribes.some((t) => t.hide > 0), 'hides in store');
 });
 
@@ -571,7 +616,7 @@ test('a legend from killing a famous predator, or from its sixtieth kill', () =>
 });
 
 test('a legend from three generations of one line, handed down at death in camp', () => {
-    const w = world(EMPTY);
+    const w = world({ ...EMPTY, 'items.generations': 3 }); // (three: the deed as first written)
     const t = w.tribes[0];
     const [a] = adults(w);
     const pop = w.humans;
@@ -950,12 +995,12 @@ test('weapon skills cost Spirit: a piercing throw, a volley, a ground slam', () 
 });
 
 test('tools: a knife cuts up a kill at double speed, a torch drives predators off and burns, a basket gathers', () => {
-    const w = world(EMPTY);
+    const w = world({ ...EMPTY, ...SMALL });
     const far = farSpot(w);
     const id = control(w, far.x, far.y);
     const i = at(w, id);
     const knife = give(w, i, KIND.KNIFE);
-    const g = grazer(w, far.x + 2, far.y, { heading: 0 });
+    const g = grazer(w, far.x + 2, far.y, { heading: 0, sense: 0.01 }); // (it does not see you: an ambush)
     act(w, 'attack', { heavy: false, dx: 1, dy: 0, power: 0, target: 0 }); // a jab from behind: a kill
     w.step();
     assert.ok(w.carcasses.has(g));

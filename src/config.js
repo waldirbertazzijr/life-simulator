@@ -1,30 +1,23 @@
-// Every tunable number in the simulation lives here. Units:
-//   distance — world units (the world is ~1600 × 1000 of them)
+// Every tunable number in the simulation lives here, as the world reads it
+// (world.p is a copy). Units:
+//   distance — world units (the world is ~2263 × 1414 of them)
 //   time     — steps (the browser runs 15 steps per second at 1×)
 //   energy   — arbitrary; 1 unit of grass is worth `grassEnergy`
 //
 // planning/THEORY.md explains which knobs stabilise the system and why.
 //
-// Times and rates of life below are written for pace 1; the simulation reads
-// them through paced() (at the end of this file), at `life.pace`.
-export const params = {
-    // The pace of life: every life takes this many times longer than the
-    // numbers below say (paced() lists what it touches). Growing up, ageing,
-    // hunger, births, spoiling, crafting and fetching wood all slow down
-    // together; walking, running, seeing and throwing do not. Encounters
-    // keep their rate in a life only if the world is that much emptier, so
-    // the grass feeds that many fewer, too. At 2, the world moves as at 1 but
-    // lives half as fast, with about half as many of everyone. Applies to a
-    // new world.
-    life: {
-        pace: 2,
-    },
+// Daily needs (hunger, eating, metabolism, a hunter's reload, crafting) are
+// in plain steps. Lives (growing up, old age, births) follow the calendar:
+// a day of DAY steps (5 minutes at 1×), a year of YEAR (about 2 hours).
+const DAY = 4500;
+const YEAR = DAY * 6 * 4;
 
+export const params = {
     // The calendar (src/calendar.js): a day of 5 minutes at 1×, seasons of 6
     // days, years of 4 seasons (about 2 hours). Read by stage 4's day and
     // night, seasons and lifetimes, and by the page's sky.
     calendar: {
-        day: 4500,     // steps in a day: dawn + light + dusk + night
+        day: DAY,      // steps in a day: dawn + light + dusk + night
         dawn: 450,     // 30 s
         light: 2250,   // 2.5 min of daylight
         dusk: 450,     // 30 s (the night is the rest: 1.5 min)
@@ -38,7 +31,7 @@ export const params = {
     world: {
         // The world always has this AREA; its aspect ratio follows the screen.
         // Densities — and so the balance — are identical on any display.
-        area: 1600 * 1000,
+        area: 3200 * 1000, // about 2263 × 1414 at the usual aspect (1.6)
         grassCell: 10, // size of one grass patch
         hashCell: 40,  // spatial-hash bucket size (performance only)
     },
@@ -102,11 +95,15 @@ export const params = {
         // Each patch regrows toward full (1.0) at this rate: g += regrowth·(1 − g).
         // Supply-driven regrowth (like rain filling a pond) cannot be grazed to
         // extinction, and it does not amplify oscillations the way logistic
-        // prey growth does. This is the base of the whole food web. (At pace 2 it
-        // regrows half as fast: about 520 grazers and 48 predators; more grass
-        // feeds more of both, and is calmer still: THEORY.md §7.)
-        regrowth: 0.0012,
+        // prey growth does. This is the base of the whole food web. (More grass
+        // feeds more of everyone, and is calmer still: THEORY.md §7.)
+        regrowth: 0.00075,
         initial: 0.25,       // start near the level herbivores graze it down to
+        // The seasons: regrowth × these in spring, summer, autumn and winter
+        // (eased from one into the next), the winter's × its severity, mild,
+        // normal or hard (calendar.js winterOf): under the snow, hardly at all.
+        seasons: [1.6, 1, 0.5, 0.1],
+        winters: [1.5, 1, 0.4],
     },
 
     herbivore: {
@@ -118,15 +115,36 @@ export const params = {
         speed: 0.6,          // top speed (fleeing), units/step at speed gene 1.0
         cruise: 0.5,         // fraction of top speed used while looking for grass
         sense: 20,           // how far it sees: approaching predators, greener patches
-        bite: 0.05,          // grass eaten per step
-        grassEnergy: 10,     // energy per unit of grass
-        maxEnergy: 100,      // stomach size; surplus is never stored
-        birthEnergy: 80,     // reproduce once energy reaches this...
-        maturity: 300,       // ...and the animal is at least this old
-        childShare: 0.5,     // fraction of the parent's energy given to the child
-        lifespan: 3000,
-        baseCost: 0.05,      // basal metabolism per step (scaled by trait upkeep)
-        moveCost: 0.1,       // × speed² — moving fast is expensive
+        bite: 0.05,          // grass eaten per step...
+        snowBite: 0.5,       // ...this much less in deep winter (grazing under the snow)
+        grassEnergy: 5,      // energy per unit of grass
+        maxEnergy: 100,      // stomach size; a full one lays on fat...
+        fatMax: 1300,        // ...up to this × fatten (spring, summer, autumn, winter)...
+        fatten: [0.5, 1, 1, 0],
+        draw: 0.5,           // ...and draws on it below this fraction of maxEnergy
+        meat: 1500,          // a grown body's meat, besides stomach and fat (a hunter's or predator's meal)
+        // Births: a grown, well-fed animal (stomach + fat at least birthReserve)
+        // gives birth with this chance a step, × the season's (births: spring,
+        // summer, autumn, winter), at most once every birthGap; the young gets
+        // childShare of its stomach, and it pays birthCost from its fat.
+        birthReserve: 230,
+        birthChance: 0.0003,
+        births: [1, 0.5, 0.5, 0], // (in autumn only where the herds are few: the pasture lush)
+        pasture: [0.3, 0.6], // ...× how much grass the land holds: none below the first, all above the second
+        birthGap: 16000,     // (spring, again late in spring or in summer; after a hard year, autumn too)
+        birthCost: 150,
+        litter: 2,           // twins
+        maturity: 0.3 * YEAR, // born in spring, grown by the end of summer
+        childShare: 0.5,
+        lifespan: 1.5 * YEAR,
+        baseCost: 0.025,     // basal metabolism per step (scaled by trait upkeep)
+        moveCost: 0.05,      // × speed² — moving fast is expensive
+        // The herd: at night and in winter a grazer keeps within `herd` of
+        // another (looking as far as herdSight); in winter it looks for grass
+        // downhill, where it is warmer (descend: how much lower ground counts).
+        herd: 10,
+        herdSight: 40,
+        descend: 0.5,
     },
 
     carnivore: {
@@ -135,28 +153,47 @@ export const params = {
         speed: 0.75,
         cruise: 0.6,
         sense: 50,           // how far it spots prey — predators see first, then stalk
-        hunger: 0.9,         // hunts only below this fraction of maxEnergy
+        hunt: 400,           // hunts only with less than this in stomach and fat (at night × bold)
+        bold: 1.5,
         catchRadius: 3,
-        efficiency: 0.7,     // fraction of the prey's energy assimilated
-        handling: 120,       // steps spent eating/digesting after a kill
-        stamina: 200,        // average chase length before giving up...
+        efficiency: 0.7,     // fraction of the prey's meat assimilated
+        handling: 240,       // steps spent eating/digesting after a kill
+        stamina: 200,        // average chase length before giving up (at night × bold)...
         rest: 60,            // ...and has to catch its breath
         turn: 0.6,           // random heading change while searching (radians)
+        // Roaming wider at night (+roamNight) and in winter (+roamWinter):
+        // faster, and turning less, as it looks for prey.
+        roamNight: 0.3,
+        roamWinter: 0.3,
+        wary: 60,            // full, it keeps this far from people (they would see it, and fight)
         crowdRadius: 40,     // a rival closer than this interferes...
         crowdCost: 0.2,      // ...costing this much energy per step
-        maxEnergy: 120,      // small reserves: predators feel a prey shortage quickly
-        birthEnergy: 96,
-        maturity: 600,
+        maxEnergy: 120,      // a small stomach: a big meal goes to fat...
+        fatMax: 1500,
+        draw: 0.5,           // ...drawn on below this fraction of maxEnergy
+        meat: 400,
+        // Births as the grazers', a litter at a time, and only with at most
+        // `rivals` others within `territory`, and at least `prey` grazers.
+        birthReserve: 700,
+        birthChance: 0.001,
+        births: [1, 0.2, 0, 0],
+        birthGap: 81000,     // three seasons: once a year
+        birthCost: 400,
+        litter: 2,
+        territory: 190,
+        rivals: 0,
+        prey: 20,
+        maturity: 0.5 * YEAR,
         childShare: 0.5,
-        lifespan: 6000,
-        baseCost: 0.06,
-        moveCost: 0.1,
+        lifespan: 2 * YEAR,
+        baseCost: 0.03,
+        moveCost: 0.05,
     },
 
     // People: hunter-gatherers living in tribes (src/humans.js).
     human: {
         enabled: true,
-        tribes: 4,           // tribes at the start...
+        tribes: 8,           // tribes at the start...
         perTribe: 10,        // ...with this many people each
         initialStore: 300,   // food in each starting camp
         genes: { speed: 1, sense: 1 },
@@ -172,17 +209,25 @@ export const params = {
         // Gathering plants (from the same grass field the grazers eat)
         gatherRate: 0.02,    // grass collected per step
         gatherMin: 0.1,      // thinner patches are not worth it
-        plantEnergy: 6,      // energy per unit gathered (grazers get 10: people digest it worse)
+        plantEnergy: 3,      // energy per unit gathered (grazers get 5: people digest it worse)
         tripLoad: 40,        // carry food home once holding this much
         carryMax: 160,
         // Body
         maxEnergy: 150,
         hunger: 0.6,         // eat from the camp store below this fraction
         starving: 0.25,      // eat what they carry below this fraction
-        baseCost: 0.03,
-        moveCost: 0.1,
-        maturity: 900,       // children stay at camp until this age
-        lifespan: 9000,
+        baseCost: 0.015,
+        moveCost: 0.05,
+        // A life: a child stays at camp until it comes of age (an hour at 1×;
+        // the page counts 16 years to it, a year of 3,375 steps), and dies of
+        // old age at about `lifespan` (4.7 hours, 75 "years"; old age comes
+        // from about 4 hours, 64), give or take lifespanJitter (70 to 80),
+        // less for costly genes (÷ √upkeep, when it is over 1), and a step
+        // less for every step it goes hungry (below `starving`).
+        maturity: 54000,
+        lifespan: 253000,
+        lifespanJitter: 0.066,
+        meat: 300,           // a grown body's meat, to a predator
         // Camp and neighbours
         campRadius: 20,
         homeRange: 260,      // how far from camp they forage
@@ -191,7 +236,7 @@ export const params = {
         fightDamage: 30,
         partySpacing: 15,    // social foragers close up when a tribe-mate is farther than this
         // Raids (aggressive tribes, when their own store runs low)
-        raidRate: 0.001,     // × aggression: per-step chance a hungry forager sets off on a raid
+        raidRate: 0.0005,    // × aggression: per-step chance a hungry forager sets off on a raid
         raidRange: 450,      // only camps this close, holding a full load, are worth raiding
         raidLoad: 150,       // most a raider can carry off
         guard: 0.3,          // each defender at the camp hurts the raider with this chance (×0.5–1 by sociality)
@@ -200,13 +245,16 @@ export const params = {
         killPredator: 0.3,   // × aggression: chance the defenders kill it
         // The tribe
         storeTarget: 30,     // food per member the tribe wants in store before resting
-        spoil: 0.0005,       // the store loses this fraction per step
+        spoil: 0.00025,      // the store loses this fraction per step
         birthCost: 120,      // a birth takes this much from the store (90 made tribes too many)...
         childEnergy: 60,     // ...of which the newborn gets this
         reserve: 5,          // food per member kept back when deciding on a birth
-        birthInterval: 200,  // steps between births in one tribe
-        splitSize: 30,       // a tribe this large splits in two
-        splitDistance: 300,  // how far the daughter tribe settles
+        birthInterval: 4000, // steps between births in one tribe, at least...
+        birthChance: 0.00025,// ...then this chance a step, × the season's (spring, summer, autumn, winter)
+        births: [1, 0.6, 0.2, 0],
+        splitSize: 22,       // a tribe this large splits in two...
+        splitDistance: 300,  // ...the daughter settling about this far off...
+        room: 550,           // ...and no nearer than this to any other camp: a tribe needs land of its own
         cultureDrift: 0.08,  // how much a daughter tribe's culture differs from its parent's
     },
 
@@ -240,7 +288,7 @@ export const params = {
         jabArc: Math.PI / 4, // ...this far to either side of the aim
         jabHit: 0.5,         // chance a jab kills; from behind an unwary animal, always (an ambush)
         // The player's kills wait to be butchered (acts/hands.js).
-        spoil: 900,          // steps an untouched carcass lasts
+        spoil: 4500,         // steps a carcass lasts (a day: a big kill takes more than one load home)
         butcherSteps: 60,    // steps to cut one up...
         butcherReach: 4,     // ...standing this close to it
         butcherEvery: 10,    // a stroke (blood, for the page) every this many steps
@@ -281,13 +329,13 @@ export const params = {
         // rich (wood: forest; flint: bare rock), and `poor` × as much where it
         // is poor (wood: anywhere grass grows; flint: tundra, or anywhere on a
         // flat world), and carries up to `load` home.
-        wood: 0.04,
-        flint: 0.03,
+        wood: 0.02,
+        flint: 0.015,
         poor: 0.25,
         load: 8,
         spotReach: 500,      // a tribe goes no farther than this (by land) for them: where a load comes soonest
         initialWood: 6,      // wood in each starting camp (spears for the children who come of age)
-        errand: 1500,        // steps a worker keeps at it before going home with what it has
+        errand: 3000,        // steps a worker keeps at it before going home with what it has
         // Kinds (the plain spear is today's hunting: human.throwRange, hit, reload).
         arrowRange: 1.6,     // a bow: × the spear's reach (a hunter's throw; the player's arrows: × play.throwRange, heavyRange)...
         arrowSpeed: 1.6,     // ...its arrows fly × as fast as a thrown spear (play.throwSpeed, heavySpeed)...
@@ -297,16 +345,16 @@ export const params = {
         clubDamage: 1.5,     // ...hurts strangers this much more...
         clubGuard: 2,        // ...and counts as this many defenders against a predator (a bow, none)
         knife: 0.85,         // a knife: food per kill (human.efficiency without), and butchering at double speed
-        butcher: 20,         // steps a hunter takes to cut up a kill (the player: play.butcherSteps)
+        butcher: 40,         // steps a hunter takes to cut up a kill (the player: play.butcherSteps)
         basket: 1.5,         // a basket: × what can be carried (tripLoad, carryMax)
-        torch: 3000,         // a torch burns this many steps; a predator does not take its bearer
+        torch: 6000,         // a torch burns this many steps; a predator does not take its bearer
         torchReach: 8,       // the player's brandish drives off predators this close
         // Wear, rarity, crafting.
         uses: 40,            // uses before a normal item breaks...
         rareUses: 60,        // ...a rare one
         rare: 1.25,          // a rare item's trait...
         legendary: 1.5,      // ...a legend's
-        craftSteps: 150,
+        craftSteps: 300,
         // What each kind costs to make (from the store).
         costs: {
             spear: { wood: 2, flint: 0, hide: 0 },
@@ -324,13 +372,13 @@ export const params = {
         worn: 0.2,           // below this much wear left, a tribe makes a replacement
         // Lying about.
         pickReach: 6,        // an item this close is picked up, if better
-        vanish: 3000,        // steps a fallen item lasts (legends: forever)
+        vanish: 6000,        // steps a fallen item lasts (legends: forever)
         // Legends: the deeds, as thresholds. Legends never wear out or vanish,
         // so they must stay rare: at the spec's numbers (a predator with 5
         // kills, 30 kills, one raider) hundreds arose in a long run.
-        famous: 30,          // a predator with this many kills is famous
+        famous: 12,          // a predator with this many kills is famous (a predator kills ~7 a year)
         kills: 50,           // an item with this many kills
-        generations: 3,      // borne by this many generations of one line
+        generations: 4,      // borne by this many generations of one line (lives are long: things outlast their bearers)
         defender: 3,         // raiders an item has killed at its own camp
         outlived: 10,        // kills an item needs to be remembered when its makers are gone
         // Weapon skills (the player's, for Spirit).
@@ -376,48 +424,3 @@ export const params = {
     lifespanJitter: 0.2,
 };
 
-// The parameters a world runs on (World's constructor applies this): a copy
-// of `p` at life.pace = k. Pace 1 gives back the numbers as written.
-//
-// Each life runs k times slower: it lasts k times longer, burns energy k
-// times slower, and so needs k times less food a step and breeds k times
-// less often. But everyone still moves as fast. So that encounters (a
-// predator finding prey, a hunter a grazer, strangers meeting) come no more
-// often in a life than before, a slower world must hold k times fewer of
-// everyone: grass regrows k times slower, a bite of grass (or a handful
-// gathered) is worth k times less, and the world starts with k times fewer
-// animals. Meat is found by encounter, so a kill is worth as much as ever.
-// The upshot: the same ecology in a life's terms (the same balance between
-// predators and prey, the same genes evolve), at half the bustle per step,
-// on half the crowd. Kept as written: speeds, senses, bites, throws, the
-// crowding cost (rivals nearby are k times rarer already), everything in
-// play.* and orders.*.
-const LONGER = [ // × k
-    'herbivore.maturity', 'herbivore.lifespan',
-    'carnivore.maturity', 'carnivore.lifespan', 'carnivore.handling',
-    'human.maturity', 'human.lifespan', 'human.birthInterval',
-    'items.craftSteps', 'items.butcher', 'items.errand', 'items.torch', 'items.vanish',
-];
-const SLOWER = [ // ÷ k
-    'grass.regrowth',
-    'herbivore.baseCost', 'herbivore.moveCost', 'herbivore.grassEnergy',
-    'carnivore.baseCost', 'carnivore.moveCost',
-    'human.baseCost', 'human.moveCost', 'human.plantEnergy', 'human.spoil', 'human.raidRate',
-    'items.wood', 'items.flint',
-];
-const FEWER = ['herbivore.initial', 'carnivore.initial']; // ÷ k, whole
-
-export function paced(p) {
-    const q = structuredClone(p);
-    const k = q.life?.pace ?? 1;
-    const each = (paths, f) => {
-        for (const path of paths) {
-            const [a, b] = path.split('.');
-            q[a][b] = f(q[a][b]);
-        }
-    };
-    each(LONGER, (v) => v * k);
-    each(SLOWER, (v) => v / k);
-    each(FEWER, (v) => Math.round(v / k));
-    return q;
-}

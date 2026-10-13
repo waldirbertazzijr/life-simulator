@@ -21,7 +21,7 @@
 import { setParam } from './sim.js';
 import { applyAct } from './player.js';
 import { spawnPerson } from './tribes.js';
-import { personName, YEAR } from './play/names.js';
+import { personName, yearOf } from './play/names.js'; // (a year as the page counts ages)
 import { ITEM_KINDS, KIND, isWeapon, newItem, hold, heldLike, putDown, forge, fraction, carryOf } from './items.js';
 import { TAU, wrapDelta, wrapMod, livingIndexOf } from './util.js';
 
@@ -81,7 +81,7 @@ export const COMMANDS = {
     skip: { usage: 'skip <steps>', about: `run the world forward fast (at most ${MAX_SKIP}); your person lives on under the AI meanwhile`, changes: true },
     set: { usage: 'set <param.path> <value>', about: 'change a live parameter', changes: true, complete: ['param'] },
     get: { usage: 'get [param.path]', about: 'read a parameter (none: the groups)', complete: ['param'] },
-    seed: { usage: 'seed <n>', about: 'a new world, from seed n', changes: true, page: true },
+    seed: { usage: 'seed <n>', about: 'a new world, from seed n (with the numbers as set)', changes: true, page: true },
     stats: { usage: 'stats', about: 'populations, tribes, items by kind and rarity, legends' },
     clear: { usage: 'clear', about: 'clear this log', page: true },
 };
@@ -514,7 +514,7 @@ const RUN = {
             const P = world.p.human;
             for (let k = 0; k < n; k++) {
                 const at = near(world, x, y);
-                const i = spawnPerson(world, tribe, at.x, at.y, P.maxEnergy * 0.7, P.maturity + 2 * YEAR);
+                const i = spawnPerson(world, tribe, at.x, at.y, P.maxEnergy * 0.7, P.maturity + 2 * yearOf(P.maturity));
                 // (Adults start with a plain spear, as the first ones did.)
                 if (world.itemsOn) hold(world, i, newItem(world, KIND.SPEAR, 0, '', 0, tribe.id));
                 ids.push(world.humans.id[i]);
@@ -695,7 +695,7 @@ export function spared(world, pop, i, cause) {
     const pl = world.player;
     if (pop !== world.humans || !pl.id || pop.id[i] !== pl.id) return false;
     if (cause === 'old age') {
-        pop.lifespan[i] = pop.age[i] + YEAR;
+        pop.lifespan[i] = pop.age[i] + yearOf(world.p.human.maturity);
         return true;
     }
     const im = world.immortal;

@@ -38,7 +38,8 @@ function fakeWorld(items = []) {
     const pop = () => Object.fromEntries([['n', 0], ...COLS.map((c) => [c, []])]);
     const flag = { pattern: 'bands', colors: ['#4a90e2', '#f2c14e', '#1b1d22'] };
     const w = {
-        p: structuredClone(defaults), width: 1000, height: 600, terrain: null, time: 1000,
+        // (The ages below were written for people who come of age at 1800 steps.)
+        p: { ...structuredClone(defaults), human: { ...defaults.human, maturity: 1800 } }, width: 1000, height: 600, terrain: null, time: 1000,
         herbivores: pop(), carnivores: pop(), humans: pop(),
         tribeById: new Map([
             [1, { id: 1, name: 'Kamari', camp: { x: 100, y: 100 }, store: 120, wood: 5, flint: 1, hide: 0, flag, aggression: 0.3, sociality: 0.6 }],
@@ -169,7 +170,7 @@ test('the HUD shows the weapon and tool in hand, with rarity, wear, spares, skil
     assert.deepEqual(g.skill, { name: 'Flight of Grey Fang', cost: 45 });
     assert.equal(g.crafting, null);
     // Crafting a bow, a third of the way.
-    g = equipment(w, { ...p, crafting: { kind: 2, until: w.time + 100 } });
+    g = equipment(w, { ...p, crafting: { kind: 2, until: w.time + (2 / 3) * w.p.items.craftSteps } });
     assert.equal(g.crafting.kind, 'bow');
     assert.ok(Math.abs(g.crafting.progress - 1 / 3) < 1e-9);
     // Empty hands.

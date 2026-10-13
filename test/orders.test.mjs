@@ -10,6 +10,7 @@ import { Mirror } from '../src/mirror.js';
 import { campSite } from '../src/tribes.js';
 import { issueOrder, ORDER_KINDS, fighting, heeded } from '../src/orders.js';
 import { takeControl, applyAct, applyInput } from '../src/player.js';
+import { TASK } from '../src/items.js';
 
 const config = (set = {}) => {
     const p = structuredClone(defaults);
@@ -247,10 +248,11 @@ test('gather food: nobody hunts', () => {
         let hunted = 0;
         for (let k = 0; k < 2000; k++) {
             if (ordered && k % 1000 === 0) issueOrder(w, tribe, { kind: 'gather', x: 0, y: 0 });
-            keep(tribe);
+            keep(tribe, ordered ? 25 : 20); // (ordered: fed clear of hungry, as people eat from it within the step)
             w.step();
             hunted += w.events.filter((e) => e.type === 'death' && e.cause === 'hunted').length;
-            for (let i = 0; i < w.humans.n; i++) if (w.humans.state[i] === STATE.HUNTING) hunting++;
+            // (On the way to cut up a kill made before the order is not hunting.)
+            for (let i = 0; i < w.humans.n; i++) if (w.humans.state[i] === STATE.HUNTING && w.humans.task[i] !== TASK.BUTCHER) hunting++;
         }
         return { hunting, hunted };
     };

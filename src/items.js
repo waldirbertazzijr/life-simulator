@@ -575,15 +575,16 @@ export function guards(world, j) {
 // ---- Kills, butchering ------------------------------------------------------------------
 
 // Person i has killed individual j of `prey` (before world.die): its meat
-// (`eff` of its energy) and hide wait in a carcass, which i will butcher if
-// it has nothing else to do.
+// (`eff` of what it is worth: World.meatOf) and hide wait in a carcass, of
+// its tribe, which i will butcher if it has nothing else to do.
 export function killed(world, i, prey, j, eff) {
     const pop = world.humans;
-    const meat = prey.energy[j] * eff;
+    const meat = world.meatOf(prey, j) * eff;
     const id = prey.id[j];
     world.carcasses.set(id, {
         id, kind: world.kindOf(prey), x: prey.x[j], y: prey.y[j], meat, total: meat, done: 0, cut: 0,
         by: pop.id[i], born: world.time, hide: prey === world.carnivores ? 2 : 1, steps: world.p.items.butcher,
+        tribe: pop.tribe[i], // (the tribe that may fetch it: tasks.js)
     });
     if (pop.task[i] === TASK.NONE) {
         pop.task[i] = TASK.BUTCHER;
@@ -642,15 +643,16 @@ export function raiderKilled(world, i, target) {
     else if (item.raiders >= I.defender) forge(world, item, 'defender', text, pop.id[best]);
 }
 
-// Can person i still butcher the carcass it is at (it lasts, and it is not
-// far off)?
+// Can person i still butcher the carcass it is at, or going to (it lasts,
+// and it is no farther than a forager goes from camp)?
 export function butcherable(world, i) {
     const pop = world.humans;
     const c = world.carcasses.get(pop.work[i]);
     if (!c) return false;
     const dx = wrapDelta(c.x - pop.x[i], world.width);
     const dy = wrapDelta(c.y - pop.y[i], world.height);
-    return dx * dx + dy * dy < 60 * 60;
+    const far = world.p.human.homeRange * 1.5;
+    return dx * dx + dy * dy < far * far;
 }
 
 // ---- Tribes coming and going -------------------------------------------------------------

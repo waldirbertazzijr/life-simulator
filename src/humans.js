@@ -78,7 +78,7 @@ export function throwAt(world, i, tribe, mates, prey, j, cause) {
         world.die(prey, j, cause, pop.id[i]);
         pop.kills[i]++;
     } else if (hit) {
-        meat = prey.energy[j] * P.efficiency;
+        meat = world.meatOf(prey, j) * P.efficiency;
         world.die(prey, j, cause, pop.id[i]);
         pop.kills[i]++;
     }
@@ -134,6 +134,8 @@ const me = {
 //   cutting up a kill (items)   doTask, before anything but danger
 //   rallied (orders.js)         rallied: with the player
 //   Defend camp (adults)        keepToCamp, on guard
+//   dusk and night              bedtime: home, and asleep at night (but
+//                               a craft at camp goes on)
 //   on a raid                   raid
 //   a child                     keepToCamp, playing
 //   a task for the tribe        doTask: wood, flint, or crafting (items)
@@ -154,6 +156,7 @@ export function stepHumans(world) {
     const rally = player !== null ? lead(world) : null; // its calls heard, and a rally under way (orders.js)
     const itemsOn = world.itemsOn; // items (items.js): what people hold, and their tasks
     const { gear, task } = pop;
+    const evening = world.night || world.dusk; // home at dusk, asleep at night (bedtime)
 
     for (let i = 0; i < n; i++) {
         if (energy[i] <= 0) continue; // killed earlier this step
@@ -206,6 +209,7 @@ export function stepHumans(world) {
         else if (itemsOn && task[i] === TASK.BUTCHER) doTask(world, i, tribe);
         else if (rally !== null && rally.ids.has(id[i])) rallied(world, rally, i, tribe);
         else if (adult && order !== null && order.kind === 'defend') keepToCamp(world, i, tribe, STATE.GUARDING);
+        else if (evening && !(itemsOn && task[i] === TASK.CRAFT)) bedtime(world, i, tribe);
         else if (goal[i] && me.c < trip) {
             if (!raid(world, i)) continue; // (struck down by the camp's defenders)
         } else if (!adult) keepToCamp(world, i, tribe, STATE.PLAYING);
@@ -226,6 +230,7 @@ export function stepHumans(world) {
 
         const v = me.v;
         let e = me.e - (P.baseCost * upkeep[i] + P.moveCost * v * v);
+        if (e < P.starving * P.maxEnergy) lifespan[i]--; // (hunger ages)
         if (e > P.maxEnergy) e = P.maxEnergy;
         carry[i] = me.c;
         state[i] = me.s;
@@ -270,7 +275,8 @@ function facePredator(world, i, tribe, j) {
 
 // A stranger near (person j, of another tribe, the nearest: the hash keeps
 // the offset). Hawk, as often as the tribe is aggressive: attack and rob;
-// the stranger may fight back. (Items: a club hits harder; each blow wears
+// the stranger may fight back. A blow takes human.reload to ready again,
+// as a throw does. (Items: a club hits harder; each blow wears
 // what struck it.) Otherwise dove: walk away.
 function meetStranger(world, i, tribe, j) {
     const P = world.p.human;
@@ -281,11 +287,14 @@ function meetStranger(world, i, tribe, j) {
     pop.focus[i] = id[j];
     if (rng.next() < tribe.aggression) {
         me.s = STATE.FIGHTING;
+        if (pop.timer[i] > 0) return; // (between blows: a blow, like a throw, takes human.reload to ready again)
+        pop.timer[i] = P.reload;
         const other = world.tribeById.get(pop.tribe[j]);
         energy[j] -= itemsOn ? P.fightDamage * blowOf(world, pop, i) : P.fightDamage;
         me.c += carry[j];
         carry[j] = 0;
-        const back = rng.next() < other.aggression;
+        const back = pop.timer[j] === 0 && rng.next() < other.aggression; // (a blow back, if it has one ready)
+        if (back) pop.timer[j] = P.reload;
         if (back) me.e -= itemsOn ? P.fightDamage * blowOf(world, pop, j) : P.fightDamage;
         const weapon = itemsOn && pop.weapon[i] ? world.items.get(pop.weapon[i]) : null;
         if (energy[j] <= 0) {
@@ -332,6 +341,22 @@ function rallied(world, rally, i, tribe) {
 function keepToCamp(world, i, tribe, s) {
     me.s = s;
     if (me.campD > world.p.human.campRadius * 0.6) headHome(world, i, tribe);
+}
+
+// Dusk and night: home (a raid is called off, an errand brings home what it
+// has), and at camp rest at dusk, asleep at night, until dawn.
+function bedtime(world, i, tribe) {
+    const pop = world.humans;
+    pop.goal[i] = 0;
+    if (world.itemsOn && pop.task[i] !== TASK.NONE) {
+        pop.work[i] = world.p.items.errand; // (an errand: done for the day)
+        doTask(world, i, tribe);
+        return;
+    }
+    if (me.campD > world.p.human.campRadius * 0.6) {
+        me.s = STATE.HOMEWARD;
+        headHome(world, i, tribe);
+    } else me.s = world.night ? STATE.SLEEPING : STATE.AT_CAMP;
 }
 
 // Hands full: home with it.
@@ -427,11 +452,16 @@ function hunt(world, i, tribe, ground) {
             const mates = world.humanHash.count(x[i], y[i], P.groupRadius, i, pop.tribe, pop.tribe[i], true);
             const food = throwAt(world, i, tribe, mates, herbivores, target, 'hunted');
             if (food >= 0) {
-                // Eat a share now; the rest goes home to the camp.
+                // Eat a share now; the rest goes home to the camp, carried
+                // by the hunter and the tribe-mates near (what none can
+                // carry is left).
                 let eat = food * (1 - tribe.sociality);
                 if (eat > P.maxEnergy - me.e) eat = P.maxEnergy - me.e;
                 me.e += eat;
-                me.c += food - eat;
+                let rest = food - eat;
+                const room = P.carryMax - me.c;
+                if (rest > room) rest = room + shareMeat(world, i, rest - room);
+                me.c += rest;
             }
         }
     } else {
@@ -441,6 +471,29 @@ function hunt(world, i, tribe, ground) {
         me.v = me.top * P.cruise;
     }
     return true;
+}
+
+// Meat from person i's kill (items off: no carcass waits) that its hands
+// cannot hold: the adult tribe-mates within human.groupRadius take what they
+// can carry. What they took.
+function shareMeat(world, i, meat) {
+    const P = world.p.human;
+    const pop = world.humans;
+    const r2 = P.groupRadius * P.groupRadius;
+    let given = 0;
+    for (let k = 0; k < pop.n && given < meat; k++) {
+        if (k === i || pop.tribe[k] !== pop.tribe[i] || pop.energy[k] <= 0 || pop.age[k] < P.maturity) continue;
+        if (world.player !== null && pop.id[k] === world.player.id && !world.player.auto) continue; // (its pouch is its own)
+        const dx = wrapDelta(pop.x[k] - pop.x[i], world.width);
+        const dy = wrapDelta(pop.y[k] - pop.y[i], world.height);
+        if (dx * dx + dy * dy > r2) continue;
+        let take = P.carryMax - pop.carry[k];
+        if (take <= 0) continue;
+        if (take > meat - given) take = meat - given;
+        pop.carry[k] += take;
+        given += take;
+    }
+    return given;
 }
 
 // Gathering plants: back toward home (or the Hunt here marker) from beyond
@@ -537,7 +590,7 @@ function atHome(world, i, tribe, order) {
     }
     me.e = e;
     if (itemsOn) campItems(world, i, tribe);
-    if (order !== null && itemsOn) errand(world, i, tribe, order);
+    if (order !== null && itemsOn && !world.night && !world.dusk) errand(world, i, tribe, order); // (not after dusk)
 }
 
 // Away from home: starving, it eats what it carries. (Items: now and then,

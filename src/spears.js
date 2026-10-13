@@ -180,10 +180,13 @@ export function strike(world, pop, i, by, ux, uy, weapon = KIND.SPEAR, item = 0,
         world.die(pop, i, 'killed', by);
     } else {
         // (With items, a knife in the thrower's hands gets more of it.)
-        const meat = pop.energy[i] * (items && thrower >= 0 ? efficiencyOf(world, people, thrower) : world.p.human.efficiency);
+        const meat = world.meatOf(pop, i) * (items && thrower >= 0 ? efficiencyOf(world, people, thrower) : world.p.human.efficiency);
         // (meat: what is left; total: what it held; done: steps of
         // butchering so far, of play.butcherSteps; cut: done as a fraction)
         const c = { id: pop.id[i], kind, x: pop.x[i], y: pop.y[i], meat, total: meat, done: 0, cut: 0, by, born: time };
+        // (With items, the thrower's tribe may come for what the thrower
+        // cannot carry: tasks.js fetch. A big kill is several loads.)
+        if (items && thrower >= 0) c.tribe = people.tribe[thrower];
         if (items) c.hide = pop === world.carnivores ? 2 : 1;
         world.carcasses.set(pop.id[i], c);
         if (weaponItem) credit(world, weaponItem, pop, i);

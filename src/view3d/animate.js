@@ -40,10 +40,8 @@ export const PART = Object.freeze({ TORSO: 0, HEAD: 1, LEG_FL: 2, LEG_FR: 3, LEG
 export const KINDS = ['herbivore', 'carnivore', 'human'];
 
 // People asleep at camp at night (stage 4, wp-1-interface.md): the
-// simulation's STATE.SLEEPING, appended as 26 (the page knows the number
-// until the simulation has it), lying down in the SLEEP pose.
-export const SLEEPING = STATE.SLEEPING ?? 26;
-export const SLEEPING_LABEL = 'sleeping';
+// simulation's STATE.SLEEPING, lying down in the SLEEP pose.
+export const SLEEPING = STATE.SLEEPING;
 
 // How each species walks:
 // - leg: from the hip joint to the sole (shapes.js puts the joints there; a

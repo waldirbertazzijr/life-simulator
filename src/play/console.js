@@ -261,7 +261,7 @@ export class Console {
                 this.write('usage', `usage: ${c.usage}`);
                 return;
             }
-            this.env.start(n);
+            this.env.start(n, this.env.params?.() ?? undefined); // (with the numbers as set: set world.area, then seed)
             this.write('ok', `a new world, from seed ${n}`);
             return;
         }

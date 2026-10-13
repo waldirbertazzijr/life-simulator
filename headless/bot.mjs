@@ -19,6 +19,10 @@
 // and chops wood (knaps flint) until its load is full, then takes the load
 // home to the rack; and its calls include Gather wood and Gather flint.
 //
+// The night (stage 4): at dusk it goes home and rests at camp, which at
+// night must be sleeping (STATE.SLEEPING), until the simulation wakes it at
+// dawn; on its first night it stirs once (a step's move), which must wake it.
+//
 // It fails (exit code 1) on an exception, more than 1% of its moves turned
 // down, anyone alive with no energy, a snapshot.player field missing, food
 // moving as it should not (the pouch out of bounds, a store that is not all
@@ -29,9 +33,11 @@
 // errand's rate, a load over its most, a store that is not all of the load),
 // or, over all sessions, no kill, none butchered, nothing stored, or (with
 // items) nothing crafted, taken up, cycled, no skill or tool used, no wood
-// or flint gathered and stored, no Gather wood or flint order taken.
+// or flint gathered and stored, no Gather wood or flint order taken; no night
+// slept, no waking at dawn or by a move; resting at night but not asleep,
+// asleep by day, or still asleep at dawn.
 //
-//   make bot                                     # seeds 1-6 × 6000 steps × life.pace
+//   make bot                                     # seeds 1-6 × 12000 steps
 //   make bot ARGS="--seeds 1-20 --steps 20000"
 //   make bot ARGS="--set terrain.enabled=false"  # a flat world
 import { params as defaults } from '../src/config.js';
@@ -39,6 +45,7 @@ import { Sim, setParam } from '../src/sim.js';
 import { createRng } from '../src/rng.js';
 import { KIND, TASK, costOf, isWeapon, handWork } from '../src/items.js';
 import { wrapDelta, wrapPos } from '../src/util.js';
+import { STATE } from '../src/population.js';
 
 // What snapshot.player must hold, and of what type (gathering: false, or
 // what: GATHERING).
@@ -59,6 +66,7 @@ const MATERIAL_FOR = 1500;
 const MATERIAL_NAME = { [TASK.WOOD]: 'wood', [TASK.FLINT]: 'flint' };
 const CYCLE_EVERY = 700;  // with a spare weapon: into the hand this often
 const SKILL_EVERY = 400;  // a weapon skill at most this often (Spirit allowing)
+const DROP_AT = 2000;     // after this step, once, a spare weapon put down (and taken up again)
 
 // Stamina lives on the page and only limits what it sends (SPEC §5).
 const STAMINA = { max: 100, sprint: 1, roll: 20, light: 10, regen: 2, rest: 7 }; // rest: steps without spending before it regenerates
@@ -76,8 +84,8 @@ const GATHER_EVERY = 1500; // out of every this many steps...
 const GATHER_FOR = 300;    // ...it gathers for this many, hunting or not
 
 function parseArgs(argv) {
-    // (6000 steps of life: × the pace, so that as much happens around the bot.)
-    const opts = { seeds: [1, 2, 3, 4, 5, 6], steps: 6000 * defaults.life.pace, sets: [] };
+    // (12000 steps: as much happens around the bot as in 6000 before the pace of life.)
+    const opts = { seeds: [1, 2, 3, 4, 5, 6], steps: 12000, sets: [] };
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
         const next = () => argv[++i];
@@ -109,7 +117,8 @@ function nearest(w, pop, x, y, r) {
 }
 
 // The nearest of the player's kills (snapshot.carcasses, which with items
-// lists everyone's: those `by` it) within 60 of (x, y): its id and offset, or null.
+// lists everyone's: those `by` it) within 300 of (x, y) (a big kill is
+// several pouches: it comes back for more): its id and offset, or null.
 function nearestCarcass(w, list, x, y, by) {
     let best = null;
     for (const c of list) {
@@ -117,7 +126,7 @@ function nearestCarcass(w, list, x, y, by) {
         const dx = wrapDelta(c.x - x, w.width);
         const dy = wrapDelta(c.y - y, w.height);
         const d = Math.hypot(dx, dy);
-        if (d < 60 && (!best || d < best.d)) best = { id: c.id, dx, dy, d };
+        if (d < 300 && (!best || d < best.d)) best = { id: c.id, dx, dy, d };
     }
     return best;
 }
@@ -161,6 +170,9 @@ function play(params, seed, mode, steps) {
     const stats = {
         seed, mode, controlled: 0, moves: 0, rejected: 0, bites: 0, dodges: 0, heirs: 0, deaths: 0,
         rests: 0, auto: 0, probe: '—', end: '—', problems: [],
+        // The night: nights it went to sleep at camp, steps asleep, mornings
+        // it woke at dawn, and times a move woke it.
+        nights: 0, asleep: 0, woke: 0, stirred: 0,
         calls: 0, answers: { call: 0, rally: 0, refused: 0 }, // calls given, and the tribe's answers
         // The hands: spears thrown, jabs, blows that struck, kills; and food:
         // butchered, gathered, eaten from the pouch, put in the store, taken.
@@ -195,13 +207,13 @@ function play(params, seed, mode, steps) {
     };
 
     // The body, as the page has it.
-    const body = { id: 0, x: 0, y: 0, heading: 0, crouch: false, stamina: STAMINA.max, idle: 0, rolling: 0, rx: 0, ry: 0, resting: false, rested: 0 };
+    const body = { id: 0, x: 0, y: 0, heading: 0, crouch: false, stamina: STAMINA.max, idle: 0, rolling: 0, rx: 0, ry: 0, resting: false, rested: 0, night: -1, stir: false, stirAt: -1, turns: 0, bedtime: false };
     // The hands: when each was last asked for (a step), the carcass being
     // butchered, what the person held before this step (for the checks),
     // and each kill's meat when first seen, with what butchering it gave.
     const hands = { attackAt: -99, butcher: 0, butcherAt: -99, storeAt: -99, gatherAt: -99, eatAt: -99, pre: null, meat: new Map(), cut: new Map() };
     // Items: when each was last tried (a step), and what a cycle should bring.
-    const kit = { craftAt: -999, pickAt: -99, cycleAt: 0, skillAt: -999, toolAt: -99, expect: 0, expectId: 0, tried: new Set() };
+    const kit = { craftAt: -999, pickAt: -99, cycleAt: 0, skillAt: -999, toolAt: -99, expect: 0, expectId: 0, tried: new Set(), dropped: false };
     const itemsOn = w.itemsOn;
     let seq = 0;
     let probing = false;
@@ -237,6 +249,7 @@ function play(params, seed, mode, steps) {
             body.id = p.id;
             body.rolling = 0;
             body.resting = false;
+            body.turns = 0;
             mine.add(p.id);
         }
         probing = false;
@@ -262,6 +275,23 @@ function play(params, seed, mode, steps) {
         body.crouch = false;
 
         const danger = nearest(w, w.carnivores, body.x, body.y, DANGER);
+        // The night (the simulation's clock, as the page reads its Mirror's
+        // time): resting at camp at night is sleeping, until dawn or a move.
+        const evening = w.now.part === 'dusk' || w.now.part === 'night';
+        const posture = w.humans.state[me];
+        if (body.turns++ > 0) {
+            // (Its own body since the last step: a new one may still lie as the AI left it.)
+            if (p.resting && w.night) {
+                stats.asleep++;
+                if (posture !== STATE.SLEEPING) problem(`step ${w.time}: resting at night, but state ${posture}, not sleeping`);
+            } else if (posture === STATE.SLEEPING) problem(`step ${w.time}: sleeping ${p.resting ? 'by day' : 'without resting'}`);
+            if (body.resting && body.bedtime && p.resting && w.now.part === 'dawn') problem(`step ${w.time}: still asleep at dawn (state ${posture}, sleeping ${w.player.sleeping}, rested ${body.rested})`);
+            if (body.resting && body.bedtime && !p.resting && body.rested > 1) {
+                // Up: woken at dawn, or by the stir.
+                if (w.now.part === 'dawn') stats.woke++;
+                else if (body.stir && w.night && body.stirAt === w.time - 1) stats.stirred++;
+            }
+        }
         // Items: what it holds, whether it is in camp.
         const tool = itemsOn && p.tool ? w.items.get(p.tool) : undefined;
         const weapon = itemsOn && p.weapon ? w.items.get(p.weapon) : undefined;
@@ -309,13 +339,48 @@ function play(params, seed, mode, steps) {
         } else if (body.resting) {
             body.rested++;
             if (!p.resting && body.rested > 1) {
-                body.resting = false; // turned down, or bitten: up again
+                body.resting = false; // turned down, bitten, woken at dawn or by a move: up again
+            } else if (evening) {
+                // Asleep until dawn (the simulation wakes it). On its first
+                // night, once, a stir: a step's move, which must wake it.
+                if (stats.nights === 1 && !body.stir && w.night && body.rested > 200) {
+                    body.stir = true;
+                    ux = 1;
+                    uy = 0;
+                    v = 0.5;
+                    body.stirAt = w.time;
+                }
             } else if ((p.energy >= 0.85 * P.maxEnergy && body.rested > 60) || body.rested > 400) {
                 send({ type: 'act', seq: ++seq, action: 'rest', on: false });
                 body.resting = false;
             }
         } else if (itemsOn && p.crafting) {
             v = 0; // making something: a move would stop it
+        } else if (evening) {
+            // Dusk and night: home, and to sleep at camp ("Rest at camp").
+            const dx = wrapDelta(tribe.camp.x - body.x, w.width);
+            const dy = wrapDelta(tribe.camp.y - body.y, w.height);
+            const d = Math.hypot(dx, dy) || 1;
+            if (d < P.campRadius * 0.5) {
+                send({ type: 'act', seq: ++seq, action: 'rest', on: true });
+                body.resting = true;
+                body.bedtime = true; // (a rest for the night)
+                body.rested = 0;
+                if (body.night !== w.now.day) {
+                    body.night = w.now.day;
+                    stats.nights++;
+                }
+            } else {
+                if (T !== null) {
+                    T.way(tribe.paths, body.x, body.y, dx, dy, d);
+                    ux = T.ux;
+                    uy = T.uy;
+                } else {
+                    ux = dx / d;
+                    uy = dy / d;
+                }
+                v = Math.min(d, top * P.cruise);
+            }
         } else if (itemsOn && atCamp && w.time > kit.craftAt + 300 && (make = craftable())) {
             // In camp, with the materials in store: make something (a flint more when there is one).
             send({ type: 'act', seq: ++seq, action: 'craft', kind: make, flint: tribe.flint >= costOf(w.p, make).flint + 1 });
@@ -328,6 +393,7 @@ function play(params, seed, mode, steps) {
             if (d < P.campRadius * 0.5) {
                 send({ type: 'act', seq: ++seq, action: 'rest', on: true });
                 body.resting = true;
+                body.bedtime = false; // (a rest by day)
                 body.rested = 0;
                 stats.rests++;
             } else {
@@ -370,7 +436,7 @@ function play(params, seed, mode, steps) {
                 send({ type: 'act', seq: ++seq, action: 'pickup', item: lying.id });
                 kit.pickAt = w.time;
                 kit.tried.add(lying.id);
-            } else if (kill) {
+            } else if (kill && p.carry < P.carryMax - 1) {
                 ux = kill.dx / (kill.d || 1);
                 uy = kill.dy / (kill.d || 1);
                 if (kill.d < 2.5) {
@@ -513,6 +579,11 @@ function play(params, seed, mode, steps) {
             kit.cycleAt = w.time;
             kit.expect = p.kit.weapons[0];
             kit.expectId = p.id;
+        } else if (itemsOn && !kit.dropped && p.kit.weapons.length && w.time > DROP_AT && !p.crafting && !kit.expect) {
+            // Once, a spare weapon put down where it stands (to be taken up
+            // again: in a world where few things lie about, something to pick up).
+            send({ type: 'act', seq: ++seq, action: 'drop', item: p.kit.weapons[0] });
+            kit.dropped = true;
         }
 
         // Now and then a call to the tribe (orders.js): each kind in turn, 30
@@ -582,7 +653,6 @@ function play(params, seed, mode, steps) {
                 struck.add(e.id);
             } else if (e.type === 'death' && struck.has(e.id) && mine.has(e.by)) stats.kills++;
             else if (e.type === 'butchered' && mine.has(e.id)) {
-                stats.carcasses++;
                 const gave = hands.cut.get(e.carcass) ?? 0;
                 const had = hands.meat.get(e.carcass);
                 if (had !== undefined && gave > had + 1e-6) problem(`step ${w.time}: butchering gave ${gave.toFixed(2)} from a kill of ${had.toFixed(2)}`);
@@ -612,7 +682,8 @@ function play(params, seed, mode, steps) {
         for (const c of snap.carcasses) if (!hands.meat.has(c.id)) hands.meat.set(c.id, c.meat);
         if (itemsOn) items(p);
         if (!p || !pre || p.id !== pre.id || p.auto) return;
-        if (!(p.carry >= 0 && p.carry <= P.carryMax + 1e-9)) problem(`step ${w.time}: carrying ${p.carry}`);
+        const pouch = P.carryMax * (itemsOn ? p.loadMax / w.p.items.load : 1); // (a basket carries more)
+        if (!(p.carry >= 0 && p.carry <= pouch + 1e-9)) problem(`step ${w.time}: carrying ${p.carry}, at most ${pouch}`);
         if (itemsOn) materials(p, pre);
         // What butchering or gathering put in the pouch (when nothing else
         // moved food, nor starving ate some).
@@ -620,6 +691,7 @@ function play(params, seed, mode, steps) {
         if (moved || pre.energy < P.starving * P.maxEnergy || gain <= 0) return;
         const cutting = pre.butchering || p.butchering;
         if (cutting) {
+            if (!hands.cut.has(cutting)) stats.carcasses++; // (a kill it cut up, all of it or a pouch at a time)
             stats.butchered += gain;
             hands.cut.set(cutting, (hands.cut.get(cutting) ?? 0) + gain);
         } else if (pre.gathering || p.gathering) stats.gathered += gain;
@@ -679,6 +751,7 @@ function play(params, seed, mode, steps) {
         if (snap.player.auto !== on) problem(`autopilot ${on ? 'on' : 'off'} did not take`);
         if (!on) {
             resuming = true;
+            body.turns = 0;
             body.rolling = 0;
             body.resting = false;
             if (!snap.player.snap) problem('back from autopilot without a snap');
@@ -752,6 +825,7 @@ for (const seed of opts.seeds) {
         );
         const a = s.answers;
         console.log(`        calls: ${s.calls} given; orders taken ${a.call}, rallies ${a.rally}, refused ${a.refused}`);
+        console.log(`        nights: ${s.nights} to sleep at camp, ${s.asleep} steps asleep, woke ${s.woke} times at dawn, ${s.stirred} by a move`);
         console.log(
             `        hands: ${s.throws} throws, ${s.jabs} jabs, ${s.hits} struck, ${s.kills} kills, ${s.carcasses} butchered; food: `
             + `${s.butchered.toFixed(0)} cut, ${s.gathered.toFixed(0)} gathered, ${s.eaten.toFixed(0)} eaten, ${s.stored.toFixed(0)} stored`,
@@ -771,9 +845,10 @@ const bad = all.filter((s) => s.problems.length);
 // and stored, and the tribe sent for them.
 const sum = (k) => all.reduce((t, s) => t + s[k], 0);
 const ITEM_WORK = ['crafted', 'picked', 'cycled', 'skills', 'tools', 'chopped', 'knapped', 'woodStored', 'flintStored', 'matOrders'];
-const idle = ['kills', 'carcasses', 'stored', ...(params.items.enabled ? ITEM_WORK : [])].filter((k) => !(sum(k) > 0));
+const NIGHT = ['nights', 'asleep', 'woke', 'stirred'];
+const idle = ['kills', 'carcasses', 'stored', ...NIGHT, ...(params.items.enabled ? ITEM_WORK : [])].filter((k) => !(sum(k) > 0));
 if (idle.length) console.log(`        ✗ no ${idle.join(', no ')} in any session`);
 console.log(`\n${all.length - bad.length}/${all.length} sessions clean · ${sum('kills')} kills, ${sum('carcasses')} butchered, `
-    + `${sum('stored').toFixed(0)} food stored${params.items.enabled ? ` · items: ${ITEM_WORK.map((k) => `${+sum(k).toFixed(1)} ${k}`).join(', ')}` : ''} · `
+    + `${sum('stored').toFixed(0)} food stored · ${NIGHT.map((k) => `${sum(k)} ${k}`).join(', ')}${params.items.enabled ? ` · items: ${ITEM_WORK.map((k) => `${+sum(k).toFixed(1)} ${k}`).join(', ')}` : ''} · `
     + `${(all.reduce((a, s) => a + s.ms, 0) / 1000).toFixed(1)} s\n`);
 process.exit(bad.length || idle.length ? 1 : 0);

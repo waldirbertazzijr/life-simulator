@@ -228,7 +228,7 @@ export class Mirror {
     reset(params, seed, aspect) {
         const world = new World(params, { seed, aspect });
         this.gen++;
-        this.p = world.p; // (the numbers the world lives by: at params.life.pace, config.js)
+        this.p = world.p; // (the numbers the world lives by: config.js)
         this.seed = seed;
         this.width = world.width;
         this.height = world.height;

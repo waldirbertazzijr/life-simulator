@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { params as defaults, paced } from '../src/config.js';
+import { params as defaults } from '../src/config.js';
 import { World, STATE } from '../src/world.js';
 import { Sim, setParam } from '../src/sim.js';
 import { takeControl, applyInput, applyAct, playerSnapshot } from '../src/player.js';
@@ -310,7 +310,7 @@ test('moving costs energy, standing costs less', () => {
         return e0 - p.energy;
     };
     const extra = drop(true) - drop(false);
-    const expected = paced(defaults).human.moveCost * v * v * steps; // (at the pace of life)
+    const expected = defaults.human.moveCost * v * v * steps;
     assert.ok(Math.abs(extra - expected) < expected * 0.01, `moving cost ${extra} more; expected ${expected}`);
 });
 

@@ -8,12 +8,15 @@
 // The fourth, people's items (items.js): the weapon and the tool in hand (item
 // ids, 0: none) and their kinds (`gear`: weapon × 8 + tool); a task (TASK in
 // items.js), its progress, and the kind it makes; wood or flint carried home,
-// and hides; and how many items each has made.
+// and hides; and how many items each has made. The last, the seasons (stage
+// 4): a reserve of fat, laid on in the good months and drawn on in the lean
+// ones, and the step an animal last gave birth.
 const FLOAT_FIELDS = [
     'x', 'y', 'heading', 'energy', 'age', 'lifespan', 'speedGene', 'senseGene', 'upkeep',
     'id', 'parent', 'lineage', 'generation', 'children', 'kills', 'focus',
     'tribe', 'carry', 'goal',
     'weapon', 'tool', 'gear', 'task', 'work', 'make', 'load', 'hides', 'crafted',
+    'fat', 'bred',
 ];
 const INT_FIELDS = ['timer', 'state'];
 
@@ -30,6 +33,8 @@ export const STATE = {
     BUTCHERING: 22,
     // items (items.js): going for and gathering wood, or flint; making an item
     CHOPPING: 23, QUARRYING: 24, CRAFTING: 25,
+    // the night (stage 4): asleep at camp
+    SLEEPING: 26,
 };
 export const STATE_LABEL = [
     'grazing', 'looking for grass', 'fleeing', 'looking for prey', 'chasing', 'eating', 'catching its breath', 'full, ambling',
@@ -38,6 +43,7 @@ export const STATE_LABEL = [
     'following the leader', 'guarding the camp',
     'butchering',
     'chopping wood', 'quarrying flint', 'crafting',
+    'sleeping',
 ];
 
 // One species, stored as parallel arrays. An individual is an index.

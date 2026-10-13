@@ -80,6 +80,26 @@ export function isNight(c, time) {
     return t >= (c.dawn + c.light + c.dusk) / c.day;
 }
 
+// A value that follows the seasons: a, b, c, d for spring, summer, autumn and
+// winter, each held through its season and eased into the next across the
+// turn of the season, over `ease` of a season (half on either side). `w` is
+// when(c, time).
+export function seasonal(w, a, b, c, d, ease = 0.25) {
+    const s = w.season;
+    const u = w.seasonT;
+    const half = ease / 2;
+    const now = s === 0 ? a : s === 1 ? b : s === 2 ? c : d;
+    if (u > 1 - half) {
+        const next = s === 0 ? b : s === 1 ? c : s === 2 ? d : a;
+        return now + (next - now) * smooth((u - (1 - half)) / ease);
+    }
+    if (u < half) {
+        const last = s === 0 ? d : s === 1 ? a : s === 2 ? b : c;
+        return last + (now - last) * smooth((u + half) / ease);
+    }
+    return now;
+}
+
 // How hard the winter of `year` is, for the world of `seed`: 0 mild, 1 normal,
 // 2 hard (WINTERS). The same seed always has the same winters, and the odds
 // are c.winterOdds ([mild, normal], the rest hard).

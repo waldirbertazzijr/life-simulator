@@ -16,10 +16,103 @@ import { availableParallelism } from 'node:os';
 import { params as defaults } from '../src/config.js';
 import { World } from '../src/world.js';
 import { ITEM_KINDS } from '../src/items.js';
+import { SEASONS, WINTERS, winterOf } from '../src/calendar.js';
+
+const KINDS = ['herbivore', 'carnivore', 'human'];
 
 // ---- the actual run (worker side) ------------------------------------------
+
+// The seasons, one by one (stage 4's calendar): each species' mean, lowest
+// and last count, its births and deaths by cause, the tribes, and the
+// winter's severity. Births are what the counts cannot otherwise explain.
+function seasonBook(world) {
+    const c = world.p.calendar;
+    const length = c.day * c.seasonDays;
+    const pops = { herbivore: world.herbivores, carnivore: world.carnivores, human: world.humans };
+    const out = [];
+    let cur = null;
+    const open = (k) => {
+        cur = { k, year: Math.floor(k / 4) + 1, season: k % 4, winter: winterOf(c, world.seed, Math.floor(k / 4) + 1), sum: {}, min: {}, end: {}, fat: {}, grass: 0, under: 0, low: 0, samples: 0, born: {}, died: {}, start: {}, deaths: {}, tribes: 0 };
+        for (const kind of KINDS) {
+            cur.start[kind] = pops[kind].n;
+            cur.deaths[kind] = { ...world.deaths[kind] };
+            cur.sum[kind] = 0;
+            cur.fat[kind] = 0;
+            cur.min[kind] = Infinity;
+        }
+    };
+    const close = () => {
+        for (const kind of KINDS) {
+            const died = {};
+            let total = 0;
+            for (const [cause, v] of Object.entries(world.deaths[kind])) {
+                const d = v - (cur.deaths[kind][cause] ?? 0);
+                if (d) died[cause] = d;
+                total += d;
+            }
+            cur.died[kind] = died;
+            cur.born[kind] = total + pops[kind].n - cur.start[kind];
+            cur.end[kind] = pops[kind].n;
+        }
+        cur.tribes = world.tribes.length;
+        delete cur.deaths;
+        delete cur.start;
+        out.push(cur);
+    };
+    open(0);
+    return {
+        // After each step.
+        step() {
+            const k = Math.floor(world.time / length);
+            if (k !== cur.k) {
+                close();
+                open(k);
+            }
+        },
+        sample() {
+            cur.samples++;
+            cur.grass += world.grass.mean();
+            const h = world.herbivores;
+            let under = 0;
+            for (let i = 0; i < h.n; i++) under += world.grass.g[world.grass.index(h.x[i], h.y[i])];
+            cur.under += h.n ? under / h.n : 0;
+            // How high the grazers stand (0 the shore, 1 the summits): lower in winter.
+            if (world.lowland) {
+                let low = 0;
+                for (let i = 0; i < h.n; i++) low += world.lowland[world.grass.index(h.x[i], h.y[i])];
+                cur.low += h.n ? low / h.n : 0;
+            }
+            for (const kind of KINDS) {
+                const pop = pops[kind];
+                const v = pop.n;
+                cur.sum[kind] += v;
+                if (v < cur.min[kind]) cur.min[kind] = v;
+                let fat = 0;
+                for (let i = 0; i < v; i++) fat += pop.fat[i];
+                cur.fat[kind] += v ? fat / v : 0;
+            }
+        },
+        // The book, the season under way closed as it stands.
+        done() {
+            close();
+            for (const s of out) {
+                s.grass = s.samples ? s.grass / s.samples : 0;
+                s.under = s.samples ? s.under / s.samples : 0;
+                s.low = s.samples ? s.low / s.samples : 0;
+                s.mean = {};
+                for (const kind of KINDS) {
+                    s.mean[kind] = s.samples ? s.sum[kind] / s.samples : s.end[kind];
+                    s.fat[kind] = s.samples ? s.fat[kind] / s.samples : 0;
+                }
+            }
+            return out.map(({ sum, ...s }) => s);
+        },
+    };
+}
+
 function runSeed({ params, seed, steps, sample, shock, aspect }) {
     const world = new World(params, { seed, aspect });
+    const book = seasonBook(world);
     const series = { herbivore: [], carnivore: [], grass: [], human: [], tribes: [] };
     // With biomes: where the herds graze, summed over the samples.
     const biomeOf = world.terrain ? world.terrain.biomeGrid : null;
@@ -42,6 +135,7 @@ function runSeed({ params, seed, steps, sample, shock, aspect }) {
             h.compact();
         }
         world.step();
+        book.step();
         if (hadHumans) {
             const pop = world.humans;
             raidingNow.clear();
@@ -53,6 +147,7 @@ function runSeed({ params, seed, steps, sample, shock, aspect }) {
             [raiding, raidingNow] = [raidingNow, raiding];
         }
         if (t % sample === 0) {
+            book.sample();
             series.herbivore.push(world.herbivores.n);
             series.carnivore.push(world.carnivores.n);
             series.grass.push(+world.grass.mean().toFixed(3));
@@ -103,6 +198,7 @@ function runSeed({ params, seed, steps, sample, shock, aspect }) {
         } : null,
         items: world.itemsOn ? itemSummary(world) : null,
         pace: paceSummary(world, start, raids),
+        seasons: book.done(),
     };
 }
 
@@ -200,6 +296,9 @@ function parseArgs(argv) {
             opts.shock = { fraction, at };
         } else if (a === '--spark') opts.spark = true;
         else if (a === '--json') opts.json = true;
+        else if (a === '--merge') opts.merge = next();
+        else if (a === '--workers') opts.workers = +next();
+        else if (a === '--trace') opts.trace = true;
         else throw new Error(`unknown argument: ${a}`);
     }
     return opts;
@@ -247,7 +346,7 @@ function period(a, sample) {
 }
 
 function summarise(r) {
-    const out = { seed: r.seed, steps: r.steps, extinct: r.extinct, stepsPerSec: r.stepsPerSec, genes: r.genes, terrain: r.terrain, biomes: r.biomes, items: r.items, pace: r.pace };
+    const out = { seed: r.seed, steps: r.steps, extinct: r.extinct, stepsPerSec: r.stepsPerSec, genes: r.genes, terrain: r.terrain, biomes: r.biomes, items: r.items, pace: r.pace, seasons: r.seasons };
     for (const s of ['herbivore', 'carnivore', 'grass', 'human', 'tribes']) {
         const ser = r.series[s];
         const back = ser.slice(Math.floor(ser.length / 2));
@@ -266,6 +365,67 @@ function summarise(r) {
     return out;
 }
 
+// The seasons over all the seeds: each species' mean count by season (and
+// the lowest of any season), summer against winter, births by season, deaths
+// by cause a year and in each kind of winter, and the tribes year by year.
+// Full seasons only (the last, if cut short, is left out), and the first
+// year apart from the rest (it starts from the warm start).
+function seasonReport(sums, f) {
+    const avg = (a) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : 0);
+    // Full seasons only: as many samples as the most any season has.
+    const most = Math.max(...sums.flatMap((s) => (s.seasons ?? []).map((x) => x.samples)));
+    const book = sums.map((s) => ({ seed: s.seed, seasons: (s.seasons ?? []).filter((x) => x.samples >= most) }));
+    const all = book.flatMap((b) => b.seasons);
+    if (!all.length) return;
+    const later = all.filter((x) => x.year > 1);
+    const pick = later.length ? later : all;
+    const kinds = KINDS.filter((k) => all.some((x) => x.mean[k] > 0));
+    const short = { herbivore: 'herbivores', carnivore: 'carnivores', human: 'people' };
+    const years = Math.max(...all.map((x) => x.year));
+    console.log(`\nseasons (means over ${pick === later ? 'years 2+' : 'all years'}; ${sums.length} seeds, ${years} years, full seasons only):`);
+    for (const k of kinds) {
+        const means = SEASONS.map((_, s) => avg(pick.filter((x) => x.season === s).map((x) => x.mean[k])));
+        const lows = SEASONS.map((_, s) => Math.min(...all.filter((x) => x.season === s).map((x) => x.min[k])));
+        // Winter against the summer before it, seed by seed.
+        const ratios = [];
+        for (const b of book) {
+            for (const su of b.seasons.filter((x) => x.season === 1 && x.year > 1)) {
+                const wi = b.seasons.find((x) => x.year === su.year && x.season === 3);
+                if (wi && su.mean[k] > 0) ratios.push(wi.mean[k] / su.mean[k]);
+            }
+        }
+        console.log(`  ${short[k].padEnd(10)} mean ${SEASONS.map((n, s) => `${n} ${f(means[s])}`).join(' · ')} · winter/summer ${f(avg(ratios), 2)}` +
+            ` (lowest ${f(ratios.length ? Math.min(...ratios) : 0, 2)}) · lowest count ${SEASONS.map((n, s) => `${n.slice(0, 3)} ${lows[s] === Infinity ? '—' : lows[s]}`).join(' ')}`);
+        const births = SEASONS.map((_, s) => avg(pick.filter((x) => x.season === s).map((x) => x.born[k])));
+        console.log(`             births a season ${SEASONS.map((n, s) => `${n} ${f(births[s], 1)}`).join(' · ')}`);
+        const causes = {};
+        for (const x of all) for (const [c, v] of Object.entries(x.died[k])) causes[c] = (causes[c] ?? 0) + v;
+        const seedYears = all.length / 4 || 1;
+        console.log(`             deaths a year ${Object.entries(causes).sort((a, b) => b[1] - a[1]).map(([c, v]) => `${c} ${f(v / seedYears, 1)}`).join(', ') || 'none'}`);
+        const winters = WINTERS.map((name, w) => {
+            const xs = all.filter((x) => x.season === 3 && x.winter === w);
+            if (!xs.length) return null;
+            const by = {};
+            for (const x of xs) for (const [c, v] of Object.entries(x.died[k])) by[c] = (by[c] ?? 0) + v / xs.length;
+            const kept = avg(xs.map((x) => (x.mean[k] > 0 ? x.end[k] / x.mean[k] : 1)));
+            return `${name} ×${xs.length}: ${Object.entries(by).sort((a, b) => b[1] - a[1]).map(([c, v]) => `${c} ${f(v, 1)}`).join(', ') || 'none'} (end/mean ${f(kept, 2)})`;
+        }).filter(Boolean);
+        console.log(`             deaths a winter ${winters.join(' · ')}`);
+    }
+    if (pick.some((x) => x.low > 0)) {
+        const at = (key) => SEASONS.map((n, s) => `${n} ${f(avg(pick.filter((x) => x.season === s).map((x) => x[key])), key === "low" ? 3 : 2)}`).join(" · ");
+        console.log(`  grazers stand at a height (0 the shore, 1 the summits) of ${at("low")}; the land's grass ${at("grass")}`);
+    }
+    if (kinds.includes('human')) {
+        const line = [];
+        for (let y = 1; y <= years; y++) {
+            const ends = book.map((b) => b.seasons.filter((x) => x.year === y).at(-1)).filter((x) => x && x.season === 3);
+            if (ends.length) line.push(`y${y} ${f(avg(ends.map((x) => x.tribes)), 1)} (${Math.min(...ends.map((x) => x.tribes))}) ${f(avg(ends.map((x) => x.end.human)))}p`);
+        }
+        console.log(`  tribes at each year's end, mean (lowest), and people: ${line.join(' · ')}`);
+    }
+}
+
 function spark(a, width = 72) {
     const chars = ' ▁▂▃▄▅▆▇█';
     const stride = Math.max(1, Math.floor(a.length / width));
@@ -276,8 +436,9 @@ function spark(a, width = 72) {
 
 async function main() {
     const opts = parseArgs(process.argv.slice(2));
+    if (opts.merge) return merged(opts);
     const params = applySets(structuredClone(defaults), opts.sets);
-    const workers = Math.min(availableParallelism(), opts.seeds.length);
+    const workers = Math.min(opts.workers || availableParallelism(), opts.seeds.length);
 
     const queue = [...opts.seeds];
     const results = [];
@@ -302,7 +463,25 @@ async function main() {
         console.log(JSON.stringify({ opts, summaries: sums }));
         return;
     }
+    report(opts, sums, results);
+}
 
+// Runs saved with --json (e.g. a few containers at once, each on some of
+// the seeds), reported together: --merge a.json,b.json.
+async function merged(opts) {
+    const { readFileSync } = await import('node:fs');
+    const sums = [];
+    let first = null;
+    for (const file of opts.merge.split(',')) {
+        const run = JSON.parse(readFileSync(file, 'utf8').trim().split('\n').at(-1)); // (the last line: make echoes its command first)
+        first ??= run.opts;
+        sums.push(...run.summaries);
+    }
+    sums.sort((a, b) => a.seed - b.seed);
+    report({ ...first, seeds: sums.map((s) => s.seed), spark: false, trace: opts.trace }, sums, []);
+}
+
+function report(opts, sums, results) {
     const f = (x, d = 0) => x.toFixed(d);
     console.log(`\n${opts.seeds.length} seeds × ${opts.steps} steps · aspect ${opts.aspect}${opts.sets.length ? '  ' + opts.sets.join(' ') : ''}${opts.shock ? `  shock ${opts.shock.fraction}@${opts.shock.at}` : ''}\n`);
     console.log('seed  result          herbivores (mean cv min)   carnivores (mean cv min)   grass   cycle   genes h(spd/sns) c(spd/sns)   steps/s');
@@ -354,7 +533,18 @@ async function main() {
             console.log(`        c ${spark(r.series.carnivore)}`);
             if (s.humans) console.log(`        p ${spark(r.series.human)}`);
         }
+        if (opts.trace && s.seasons) {
+            // Season by season: each species' mean count (lowest), mean fat,
+            // births, and deaths by cause.
+            const deaths = (d) => Object.entries(d).map(([c, v]) => `${c.slice(0, 5)} ${v}`).join(' ');
+            for (const x of s.seasons) {
+                const part = (k) => `${f(x.mean[k])} (${x.min[k] === Infinity ? '—' : x.min[k]}) fat ${f(x.fat[k])} +${x.born[k]} −[${deaths(x.died[k])}]`;
+                console.log(`        y${x.year} ${SEASONS[x.season].slice(0, 3)}${x.season === 3 ? `(${WINTERS[x.winter]})` : ''}  g ${f(x.grass, 2)}/${f(x.under, 2)} hgt ${f(x.low, 3)}  h ${part('herbivore')} | c ${part('carnivore')}` +
+                    (s.humans ? ` | p ${part('human')} t${x.tribes}` : ''));
+            }
+        }
     }
+    if (sums.some((s) => s.seasons?.length)) seasonReport(sums, f);
     const ok = sums.filter((s) => !s.extinct).length;
     const withPeople = sums.filter((s) => s.humans);
     const peopleOk = withPeople.filter((s) => !s.humans.gone).length;

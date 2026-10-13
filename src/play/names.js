@@ -7,8 +7,6 @@
 // may be just a vowel), and the last may close on a soft consonant: Tiko,
 // Ana, Maren, Shulavi.
 
-import { params } from '../config.js';
-
 const ONSETS = ['b', 'd', 'g', 'h', 'k', 'l', 'm', 'n', 'p', 'r', 's', 't', 'v', 'y', 'z', 'sh', 'th', 'k', 't', 'm', 'n', 'r', 'l', 's'];
 const VOWELS = ['a', 'e', 'i', 'o', 'u', 'a', 'i', 'o'];
 const CODAS = ['', '', '', 'n', 'r', 'l', 's', 'k'];
@@ -19,11 +17,6 @@ const CODAS = ['', '', '', 'n', 'r', 'l', 's', 'k'];
 // display only (stage 4, wp-1-interface.md).
 export const COMING_OF_AGE = 16;
 export const yearOf = (maturity) => maturity / COMING_OF_AGE;
-
-// The admin console's year (admin.js: `spawn person`, `immortal`), as it was
-// before the calendar; the page no longer shows ages by it. (When life.pace
-// goes, admin.js can take yearOf(world.p.human.maturity) instead.)
-export const YEAR = 150 * params.life.pace;
 
 // A 32-bit integer hash (lowbias32): neighbouring ids give unrelated names.
 function hash(n) {

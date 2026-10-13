@@ -279,8 +279,8 @@ world.onSamples = (s) => {
     for (let k = 0; k < s.length; k += 4) panel.record(s[k], s[k + 1], s[k + 2], s[k + 3]);
 };
 
-function start(seed) {
-    world.reset(params, seed, window.innerWidth / window.innerHeight);
+function start(seed, p = params) {
+    world.reset(p, seed, window.innerWidth / window.innerHeight);
     editor?.close();
     renderer.attach(world);
     panel.reset(world);
@@ -382,7 +382,7 @@ requestAnimationFrame(frame);
 //   sim.follow(id)   follow anyone; sim.reset(seed), sim.pause(on), sim.speed(s)
 //   sim.set('herbivore.speed', 0.7)   change a parameter in the running simulation
 //   sim.params       the parameters a new world starts with (edits apply on reset;
-//                    e.g. sim.params.life.pace = 1, then sim.reset())
+//                    e.g. sim.params.world.area = 1600000, then sim.reset())
 //   sim.frameMs      JavaScript time per frame spent drawing; sim.mainMs, all of it
 //   sim.worker       whether the simulation runs in a Web Worker
 //   sim.timing       how the snapshots flow (interpolation delay, size)

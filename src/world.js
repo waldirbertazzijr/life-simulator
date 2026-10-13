@@ -10,8 +10,17 @@
 // Terrain (terrain.js) is optional: with params.terrain.enabled off,
 // world.terrain is null and every terrain branch below is skipped, so the
 // flat world runs exactly as it always did.
+//
+// Time (stage 4): each step begins with clock(), the moment by the calendar
+// (calendar.js) and what follows from it for everyone: night and dusk, the
+// season and this year's winter, how fast the grass grows, how fat grazers
+// may grow, and the season's chance of a birth. Lives are long: an animal
+// keeps a reserve of fat, eats a big kill into it, and is worth its stomach,
+// fat and body to whoever eats it (meatOf); births come in their season, to
+// the well fed, and (grazers) the better the pasture, (predators) the emptier
+// their territory.
 import { createRng } from './rng.js';
-import { paced } from './config.js';
+import { when, winterOf, seasonal } from './calendar.js';
 import { Population, STATE } from './population.js';
 import { SpatialHash } from './spatial.js';
 import { Grass } from './grass.js';
@@ -32,6 +41,9 @@ const LOOK_ANGLE = 0.8; // a grazer peeks this far (radians) to either side
 const LOOK_COS = Math.cos(LOOK_ANGLE);
 const LOOK_SIN = Math.sin(LOOK_ANGLE);
 
+// What a mother has left after a birth (World.bear), read at once.
+const born = { e: 0, f: 0 };
+
 // Size a world with the configured AREA and the given aspect ratio (w / h).
 export function worldSize(area, aspect) {
     return {
@@ -42,9 +54,9 @@ export function worldSize(area, aspect) {
 
 export class World {
     constructor(params, { seed = 1, aspect = 1.6 } = {}) {
-        // The numbers this world lives by: life's spans and rates at
-        // params.life.pace (config.js). Everything reads these, world.p.
-        this.p = params = paced(params);
+        // The numbers this world lives by (config.js), its own copy: the
+        // console's `set` changes them live. Everything reads these, world.p.
+        this.p = params = structuredClone(params);
         this.seed = seed;
         this.rng = createRng(seed);
         const { width, height } = worldSize(params.world.area, aspect);
@@ -98,12 +110,20 @@ export class World {
         this.tribeById = new Map();
         this.fallen = [];          // the most recent tribes to die out
         this.nextTribeId = 1;
+        // How high each grass patch lies, 0 at the shore .. 1 at the highest
+        // summit (null on a flat world): grazers look for lower, warmer
+        // ground in winter.
+        this.lowland = this.terrain ? this.heights() : null;
 
+        // The moment (calendar.js) and what follows from it: see clock().
+        this.clock();
         this.seedPopulation(this.herbivores, params.herbivore);
         this.seedPopulation(this.carnivores, params.carnivore);
         if (params.human.enabled) seedTribes(this);
     }
 
+    // The first animals: of every age up to six tenths of a life, fed, with a
+    // little fat left from the winter.
     seedPopulation(pop, sp) {
         const { rng, terrain } = this;
         const spread = this.p.evolution.initialSpread;
@@ -114,12 +134,78 @@ export class World {
                 x = rng.next() * this.width;
                 y = rng.next() * this.height;
             }
-            this.spawn(pop, sp, x, y,
-                sp.birthEnergy * (0.4 + 0.5 * rng.next()),
+            const i = this.spawn(pop, sp, x, y,
+                sp.maxEnergy * (0.4 + 0.5 * rng.next()),
                 sp.genes.speed * Math.exp(spread * rng.gauss()),
                 sp.genes.sense * Math.exp(spread * rng.gauss()),
                 rng.next() * sp.lifespan * 0.6);
+            pop.fat[i] = sp.fatMax * 0.2;
         }
+    }
+
+    heights() {
+        const { grass, terrain } = this;
+        const out = new Float32Array(grass.cols * grass.rows);
+        const span = terrain.peak - terrain.seaLevel;
+        for (let r = 0; r < grass.rows; r++) {
+            for (let c = 0; c < grass.cols; c++) {
+                const h = (terrain.heightAt((c + 0.5) * grass.cellW, (r + 0.5) * grass.cellH) - terrain.seaLevel) / span;
+                out[r * grass.cols + c] = h < 0 ? 0 : h > 1 ? 1 : h;
+            }
+        }
+        return out;
+    }
+
+    // The moment, once a step (calendar.js): the part of the day, the season
+    // and this year's winter (0 mild, 1 normal, 2 hard), and what follows
+    // from them for everyone: `cold`, how deep into winter (0..1, eased in at
+    // the end of autumn and out at the end of winter); how fast the grass
+    // grows; the grazers' fattening and the animals' chance of a birth.
+    clock() {
+        const c = this.p.calendar;
+        const now = when(c, this.time);
+        const G = this.p.grass;
+        const H = this.p.herbivore;
+        const C = this.p.carnivore;
+        this.now = now;
+        this.night = now.part === 'night';
+        this.dusk = now.part === 'dusk';
+        this.winter = winterOf(c, this.seed, now.year);
+        this.cold = seasonal(now, 0, 0, 0, 1);
+        // (The winter that eases into spring is last year's.)
+        const winter = now.season === 0 ? winterOf(c, this.seed, now.year - 1) : this.winter;
+        this.regrowth = G.regrowth * seasonal(now, G.seasons[0], G.seasons[1], G.seasons[2], G.seasons[3] * G.winters[winter]);
+        this.fatCap = H.fatMax * seasonal(now, H.fatten[0], H.fatten[1], H.fatten[2], H.fatten[3]);
+        this.breedH = H.birthChance * seasonal(now, H.births[0], H.births[1], H.births[2], H.births[3], 0.1);
+        this.breedC = C.birthChance * seasonal(now, C.births[0], C.births[1], C.births[2], C.births[3], 0.1);
+        const Hu = this.p.human;
+        this.breedP = Hu.birthChance * seasonal(now, Hu.births[0], Hu.births[1], Hu.births[2], Hu.births[3], 0.1);
+    }
+
+    // What individual i of `pop` is worth to whoever eats it: its stomach, its
+    // fat, and its body's meat (a newborn's a quarter of a grown one's).
+    meatOf(pop, i) {
+        const P = this.p[this.kindOf(pop)];
+        const grown = pop.age[i] < P.maturity ? pop.age[i] / P.maturity : 1;
+        return pop.energy[i] + pop.fat[i] + P.meat * (0.25 + 0.75 * grown);
+    }
+
+    // Animal i of `pop` (species P), with `e` in its stomach and `f` of fat,
+    // gives birth: a litter of P.litter young (its fraction, the chance of
+    // one more), sharing childShare of the stomach and birthCost of the fat
+    // (or what fat there is). What it has left goes in `born`.
+    bear(pop, P, i, e, f) {
+        let young = Math.floor(P.litter);
+        if (young < P.litter && this.rng.next() < P.litter - young) young++;
+        const food = e * P.childShare;
+        const fat = f < P.birthCost ? f : P.birthCost;
+        pop.bred[i] = this.time;
+        for (let k = 0; k < young; k++) {
+            const c = this.spawn(pop, P, pop.x[i], pop.y[i], food / young, this.mutate(pop.speedGene[i]), this.mutate(pop.senseGene[i]), 0, i);
+            pop.fat[c] = fat / young;
+        }
+        born.e = e - food;
+        born.f = f - fat;
     }
 
     spawn(pop, sp, x, y, energy, speedGene, senseGene, age = 0, parent = -1) {
@@ -130,7 +216,7 @@ export class World {
         pop.heading[i] = rng.next() * TAU;
         pop.energy[i] = energy;
         pop.age[i] = age;
-        pop.lifespan[i] = sp.lifespan * (1 + this.p.lifespanJitter * (2 * rng.next() - 1));
+        pop.lifespan[i] = sp.lifespan * (1 + (sp.lifespanJitter ?? this.p.lifespanJitter) * (2 * rng.next() - 1));
         pop.speedGene[i] = speedGene;
         pop.senseGene[i] = senseGene;
         pop.upkeep[i] = this.upkeep(speedGene, senseGene);
@@ -143,6 +229,8 @@ export class World {
         pop.kills[i] = 0;
         pop.focus[i] = 0;
         pop.state[i] = STATE.GRAZING;
+        pop.fat[i] = 0;
+        pop.bred[i] = -1e9; // (never yet)
         return i;
     }
 
@@ -252,8 +340,12 @@ export class World {
     // Advance the world by one step.
     step() {
         this.events.length = 0;
+        this.clock();
         this.carnivoreHash.build(this.carnivores);
         this.humanHash.build(this.humans);
+        // (At night and in winter grazers keep together: they need to know
+        // where the others are as they move.)
+        if (this.night || this.cold > 0.5) this.herbivoreHash.build(this.herbivores);
         this.stepHerbivores();
         this.herbivoreHash.build(this.herbivores);
         if (this.hidden !== null) this.markCover();
@@ -261,7 +353,7 @@ export class World {
         if (this.humans.n) stepHumans(this);
         if (this.spears.n) stepSpears(this);            // the player's, in flight (spears.js)
         if (this.carcasses.size) spoilCarcasses(this);  // the player's kills, left too long
-        this.grass.regrow(this.p.grass.regrowth);
+        this.grass.regrow(this.regrowth); // (grass.regrowth, by the season: clock)
         this.herbivores.compact();
         this.carnivores.compact();
         this.humans.compact();
@@ -272,13 +364,19 @@ export class World {
         this.time++;
     }
 
+    // One step of every grazer. Besides fleeing, grazing and looking for
+    // grass, the seasons and the hour (clock): it grazes slower under the
+    // snow; it lays on fat when full in the good months and draws on it when
+    // hungry; at night and in winter it keeps near the others; in winter it
+    // looks for grass downhill, where it is warmer; and it gives birth in its
+    // season, when well fed.
     stepHerbivores() {
         const P = this.p.herbivore;
         const pop = this.herbivores;
         const n = pop.n;
-        pop.reserve(n); // at most one birth each
-        const { x, y, heading, energy, age, lifespan, speedGene, senseGene, upkeep, state, focus } = pop;
-        const { rng, width: W, height: H, carnivoreHash: threats, humanHash: hunters, grass, terrain } = this;
+        pop.reserve(n * Math.ceil(P.litter)); // at most one litter each
+        const { x, y, heading, energy, age, lifespan, speedGene, senseGene, upkeep, state, focus, fat, bred } = pop;
+        const { rng, width: W, height: H, carnivoreHash: threats, humanHash: hunters, herbivoreHash: herd, grass, terrain, time } = this;
         const g = grass.g;
         const predatorIds = this.carnivores.id;
         const hunterIds = this.humans.id;
@@ -287,6 +385,20 @@ export class World {
         // (0: nobody crouches), and that fraction of a grazer's range.
         const creeper = this.player !== null && this.player.crouch ? this.player.id : 0;
         const creep = creeper ? this.p.play.crouchSense : 0;
+        // The season and the hour.
+        const cold = this.cold;
+        const biteMax = P.bite * (1 - P.snowBite * cold);
+        const fatCap = this.fatCap;
+        const drawAt = P.draw * P.maxEnergy;
+        // Births, the more readily the better the pasture: the land's grass
+        // between pasture[0] (none) and [1] (as many as the season allows).
+        // Where the herds are many, the grass is grazed short.
+        const lush = (grass.level - P.pasture[0]) / (P.pasture[1] - P.pasture[0]);
+        const breed = lush <= 0 ? 0 : lush >= 1 ? this.breedH : this.breedH * lush;
+        const herding = this.night || cold > 0.5; // (step() built the herd's hash for it)
+        const near2 = P.herd * P.herd;
+        const lowland = this.lowland;
+        const down = lowland !== null ? P.descend * cold : 0;
 
         for (let i = 0; i < n; i++) {
             if (++age[i] > lifespan[i]) {
@@ -329,15 +441,25 @@ export class World {
                 v = top;
                 state[i] = STATE.FLEEING;
                 focus[i] = threatId;
-            } else if (g[grass.index(x[i], y[i])] < P.bite) {
+            } else if (herding && herd.nearest(x[i], y[i], P.herdSight, i) >= 0 && herd.d2 > near2) {
+                // Alone at night or in winter: back to the others, the nearest first.
+                const d = Math.sqrt(herd.d2);
+                dx = herd.dx / d;
+                dy = herd.dy / d;
+                h = Math.atan2(dy, dx);
+                v = top * P.cruise;
+                state[i] = STATE.SEARCHING;
+            } else if (g[grass.index(x[i], y[i])] < biteMax) {
                 state[i] = STATE.SEARCHING;
                 // Patch grazed out: peek straight ahead and 0.8 rad to either
-                // side, and head for the greenest. If none is better than here,
-                // wander off in a new direction.
+                // side, and head for the greenest (in winter, counting lower
+                // ground as greener). If none is better than here, wander off
+                // in a new direction.
                 const look = P.sense * vg;
                 const ch = Math.cos(h);
                 const sh = Math.sin(h);
-                let best = g[grass.index(x[i], y[i])];
+                const here = grass.index(x[i], y[i]);
+                let best = down > 0 ? g[here] - down * lowland[here] : g[here];
                 let turn = 2; // none found yet
                 for (let k = -1; k <= 1; k++) {
                     // (cos, sin) of h + k·LOOK_ANGLE, by rotating (ch, sh).
@@ -347,7 +469,8 @@ export class World {
                     let ly = y[i] + uy * look;
                     if (lx < 0) lx += W; else if (lx >= W) lx -= W;
                     if (ly < 0) ly += H; else if (ly >= H) ly -= H;
-                    const gv = g[grass.index(lx, ly)];
+                    const there = grass.index(lx, ly);
+                    const gv = down > 0 ? g[there] - down * lowland[there] : g[there];
                     if (gv > best) {
                         best = gv;
                         turn = k;
@@ -383,15 +506,26 @@ export class World {
             }
 
             let e = energy[i] - P.baseCost * upkeep[i] - P.moveCost * v * v;
+            let f = fat[i];
 
+            // Graze: into the stomach, and past a full one into fat, as far as
+            // the season lets it fatten. Hungry, it draws on its fat.
             const gi = grass.index(x[i], y[i]);
-            if (e < P.maxEnergy) {
+            const room = P.maxEnergy - e + (f < fatCap ? fatCap - f : 0);
+            if (room > 0) {
                 let bite = g[gi];
-                if (bite > P.bite) bite = P.bite;
-                const room = (P.maxEnergy - e) / P.grassEnergy;
-                if (bite > room) bite = room;
+                if (bite > biteMax) bite = biteMax;
+                if (bite * P.grassEnergy > room) bite = room / P.grassEnergy;
                 g[gi] -= bite;
                 e += bite * P.grassEnergy;
+            }
+            if (e > P.maxEnergy) {
+                f += e - P.maxEnergy;
+                e = P.maxEnergy;
+            } else if (e < drawAt && f > 0) {
+                const d = drawAt - e < f ? drawAt - e : f;
+                f -= d;
+                e += d;
             }
 
             if (e <= 0) {
@@ -399,26 +533,38 @@ export class World {
                 continue;
             }
 
-            if (e >= P.birthEnergy && age[i] >= P.maturity) {
-                const child = e * P.childShare;
-                e -= child;
-                this.spawn(pop, P, x[i], y[i], child, this.mutate(sg), this.mutate(vg), 0, i);
+            // A birth, in its season, when grown and well fed.
+            if (breed > 0 && age[i] >= P.maturity && e + f >= P.birthReserve && time - bred[i] >= P.birthGap && rng.next() < breed) {
+                this.bear(pop, P, i, e, f);
+                e = born.e;
+                f = born.f;
             }
             energy[i] = e;
+            fat[i] = f;
         }
     }
 
+    // One step of every predator: hunting when its stomach and fat run low
+    // (more readily at night), eating its kill (what the stomach cannot hold
+    // goes to fat), and roaming wider at night and in winter; a birth in its
+    // season, when well fed, with its territory not too crowded.
     stepCarnivores() {
         const P = this.p.carnivore;
         const pop = this.carnivores;
         const n = pop.n;
-        pop.reserve(n);
-        const { x, y, heading, energy, age, lifespan, speedGene, senseGene, upkeep, timer, state, focus, kills, id } = pop;
-        const { rng, width: W, height: H, herbivoreHash: grazers, humanHash: people, carnivoreHash: rivals, terrain } = this;
+        pop.reserve(n * Math.ceil(P.litter));
+        const { x, y, heading, energy, age, lifespan, speedGene, senseGene, upkeep, timer, state, focus, kills, id, fat, bred } = pop;
+        const { rng, width: W, height: H, herbivoreHash: grazers, humanHash: people, carnivoreHash: rivals, terrain, time } = this;
         const { herbivores, humans } = this;
         const anyPeople = humans.n > 0;
-        const hungry = P.hunger * P.maxEnergy;
         const cover = this.hidden !== null;
+        // The hour and the season: bolder at night, roaming wider at night and in winter.
+        const night = this.night;
+        const hungry = P.hunt * (night ? P.bold : 1);
+        const giveUp = 1 / (P.stamina * (night ? P.bold : 1));
+        const roam = 1 + (night ? P.roamNight : 0) + P.roamWinter * this.cold;
+        const drawAt = P.draw * P.maxEnergy;
+        const breed = this.breedC;
 
         for (let i = 0; i < n; i++) {
             if (++age[i] > lifespan[i]) {
@@ -429,6 +575,7 @@ export class World {
             const vg = senseGene[i];
             const top = P.speed * sg;
             let e = energy[i];
+            let f = fat[i];
             let h = heading[i];
             let v = 0;
 
@@ -439,7 +586,7 @@ export class World {
 
             if (timer[i] > 0) {
                 timer[i]--; // eating, digesting or catching its breath (state unchanged)
-            } else if (e < hungry) {
+            } else if (e + f < hungry) {
                 // The nearest prey: a grazer, or a person.
                 let j = cover ? this.spot(grazers, x[i], y[i], P.sense * vg) : grazers.nearest(x[i], y[i], P.sense * vg);
                 let victims = herbivores;
@@ -480,23 +627,29 @@ export class World {
                             // The person the page steers is only bitten, or
                             // missed mid-roll (player.js), and lives on.
                         } else {
-                            e += victims.energy[j] * P.efficiency;
+                            e += this.meatOf(victims, j) * P.efficiency;
                             this.die(victims, j, 'eaten', id[i]);
                             kills[i]++;
                             timer[i] = P.handling;
                             state[i] = STATE.EATING;
                         }
-                    } else if (rng.next() < 1 / P.stamina) {
+                    } else if (rng.next() < giveUp) {
                         timer[i] = P.rest; // give up, out of breath
                         state[i] = STATE.RESTING;
                         focus[i] = 0;
                     }
                 } else {
-                    h = rival >= 0 ? Math.atan2(-rivals.dy, -rivals.dx) : h + (rng.next() - 0.5) * P.turn;
-                    v = top * P.cruise;
+                    h = rival >= 0 ? Math.atan2(-rivals.dy, -rivals.dx) : h + ((rng.next() - 0.5) * P.turn) / roam;
+                    v = top * P.cruise * roam;
                     state[i] = STATE.ROAMING;
                     focus[i] = 0;
                 }
+            } else if (anyPeople && people.nearest(x[i], y[i], P.wary) >= 0) {
+                // Full, and people near: it keeps away from them.
+                h = Math.atan2(-people.dy, -people.dx);
+                v = top * P.cruise * 0.5;
+                state[i] = STATE.SATED;
+                focus[i] = 0;
             } else {
                 // Full: amble around slowly.
                 h = rival >= 0 ? Math.atan2(-rivals.dy, -rivals.dx) : h + (rng.next() - 0.5) * P.turn;
@@ -525,19 +678,35 @@ export class World {
             heading[i] = h;
 
             e -= P.baseCost * upkeep[i] + P.moveCost * v * v;
-            if (e > P.maxEnergy) e = P.maxEnergy; // a full stomach wastes the rest
+            // What a full stomach cannot hold goes to fat (as much as it can
+            // carry; the rest is wasted); hungry, it draws on it.
+            if (e > P.maxEnergy) {
+                f += e - P.maxEnergy;
+                if (f > P.fatMax) f = P.fatMax;
+                e = P.maxEnergy;
+            } else if (e < drawAt && f > 0) {
+                const d = drawAt - e < f ? drawAt - e : f;
+                f -= d;
+                e += d;
+            }
 
             if (e <= 0) {
                 this.die(pop, i, 'starvation');
                 continue;
             }
 
-            if (e >= P.birthEnergy && age[i] >= P.maturity) {
-                const child = e * P.childShare;
-                e -= child;
-                this.spawn(pop, P, x[i], y[i], child, this.mutate(sg), this.mutate(vg), 0, i);
+            // A litter, in its season, when grown, well fed, and with room
+            // for it: no more than `rivals` others within its territory, and
+            // prey enough there (at least `prey` grazers) to raise it on.
+            if (breed > 0 && age[i] >= P.maturity && e + f >= P.birthReserve && time - bred[i] >= P.birthGap
+                && rivals.count(x[i], y[i], P.territory, i) <= P.rivals && grazers.count(x[i], y[i], P.territory) >= P.prey
+                && rng.next() < breed) {
+                this.bear(pop, P, i, e, f);
+                e = born.e;
+                f = born.f;
             }
             energy[i] = e;
+            fat[i] = f;
         }
     }
 

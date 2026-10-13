@@ -216,7 +216,8 @@ test('a spear kills the first grazer it passes, for a carcass', () => {
     assert.ok(c, 'a carcass');
     assert.equal(c.kind, 'herbivore');
     assert.ok(near(w, c.x, c.y, death.x, death.y));
-    assert.ok(c.meat > 0 && c.meat <= w.p.herbivore.maxEnergy * w.p.human.efficiency);
+    const H = w.p.herbivore;
+    assert.ok(c.meat > 0 && c.meat <= (H.maxEnergy + H.fatMax + H.meat) * w.p.human.efficiency, "what it was worth: World.meatOf");
     assert.equal(c.meat, c.total);
     assert.equal(c.cut, 0);
 });
@@ -473,20 +474,20 @@ function kill(w, id) {
     return { carcass: g, x, y };
 }
 
-test('a carcass spoils after 900 steps untouched', () => {
+test('a carcass spoils after play.spoil steps untouched', () => {
     const w = world(EMPTY);
     const id = control(w);
     const { carcass } = kill(w, id);
     for (let k = 1; k < w.p.play.spoil; k++) w.step();
-    assert.ok(w.carcasses.has(carcass), 'still there after 899 more steps');
+    assert.ok(w.carcasses.has(carcass), 'still there a step before');
     w.step();
     assert.equal(w.carcasses.has(carcass), false, 'gone');
     const [e] = happened(w, 'spoiled');
     assert.ok(e && e.carcass === carcass);
 });
 
-test('butchering takes 60 steps, strikes every 10, and fills the pouch', () => {
-    const w = world(EMPTY);
+test('butchering takes 60 steps, strikes every 10, and fills the pouch (a kill that fits in it)', () => {
+    const w = world({ ...EMPTY, 'herbivore.meat': 0 }); // (a grazer's stomach alone: less than a pouch)
     const id = control(w);
     const { carcass } = kill(w, id);
     const total = w.carcasses.get(carcass).total;
@@ -518,6 +519,28 @@ test('butchering takes 60 steps, strikes every 10, and fills the pouch', () => {
     assert.ok(done && done.carcass === carcass && done.id === id);
     assert.ok(Math.abs(w.humans.carry[at(w, id)] - total) < 1e-9, 'all of it in the pouch');
     assert.equal(playerSnapshot(w).butchering, 0);
+});
+
+test('a big kill fills the pouch; the rest waits in the carcass for another load', () => {
+    const w = world(EMPTY);
+    const id = control(w);
+    const { carcass } = kill(w, id);
+    const c = w.carcasses.get(carcass);
+    const max = w.p.human.carryMax;
+    assert.ok(c.total > max, `a grazer's body is more than a pouch: ${c.total.toFixed(0)}`);
+    act(w, 'butcher', { on: true, id: carcass });
+    for (let k = 0; k < w.p.play.butcherSteps && playerSnapshot(w).butchering; k++) w.step();
+    const i = at(w, id);
+    assert.ok(Math.abs(w.humans.carry[i] - max) < 1e-9, 'the pouch is full');
+    assert.equal(playerSnapshot(w).butchering, 0, 'and the hands stop');
+    assert.ok(w.carcasses.has(carcass), 'the carcass is still there...');
+    assert.ok(Math.abs(c.meat - (c.total - max)) < 1e-9, '...with the rest of its meat');
+    assert.ok(Math.abs(c.cut - max / c.total) < 1e-9);
+    // Emptied (into the store), the hands cut the next load.
+    w.humans.carry[i] = 0;
+    act(w, 'butcher', { on: true, id: carcass });
+    w.step();
+    assert.ok(w.humans.carry[i] > 0 && c.meat < c.total - max, 'and go on where they left off');
 });
 
 test('butchering needs the carcass within reach and stops on a move', () => {
@@ -594,7 +617,7 @@ test('gathering takes from the patch underfoot as the AI does', () => {
     w.step();
     const i = at(w, id);
     assert.ok(Math.abs(w.humans.carry[i] - P.gatherRate * P.plantEnergy) < 1e-12, 'gatherRate × plantEnergy a step');
-    const regrown = 0.5 - P.gatherRate + w.p.grass.regrowth * (1 - (0.5 - P.gatherRate));
+    const regrown = 0.5 - P.gatherRate + w.regrowth * (1 - (0.5 - P.gatherRate)); // (the season's rate: World.clock)
     assert.ok(Math.abs(w.grass.g[gi] - regrown) < 1e-12, 'taken from the patch');
     assert.equal(w.humans.state[i], STATE.GATHERING);
     assert.equal(playerSnapshot(w).gathering, 'food');

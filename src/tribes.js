@@ -109,6 +109,7 @@ export function spawnPerson(world, tribe, x, y, energy, age, parent = -1) {
     const speed = parent >= 0 ? world.mutate(pop.speedGene[parent]) : P.genes.speed * Math.exp(spread * world.rng.gauss());
     const sense = parent >= 0 ? world.mutate(pop.senseGene[parent]) : P.genes.sense * Math.exp(spread * world.rng.gauss());
     const i = world.spawn(pop, P, wrapMod(x, world.width), wrapMod(y, world.height), energy, speed, sense, age, parent);
+    if (pop.upkeep[i] > 1) pop.lifespan[i] /= Math.sqrt(pop.upkeep[i]); // (costly genes, a shorter life)
     pop.tribe[i] = tribe.id;
     pop.carry[i] = 0;
     pop.goal[i] = 0;
@@ -193,7 +194,10 @@ export function stepTribes(world) {
         if (t.order !== null && world.time + 1 >= t.order.until) t.order = null; // its last step: the order lapses (orders.js)
         t.store *= 1 - P.spoil;
         if (t.birthCooldown > 0) t.birthCooldown--;
-        if (t.adults >= 2 && t.birthCooldown === 0 && t.store >= P.birthCost + P.reserve * t.members) {
+        // A birth: in its season (world.breedP), with two adults, the store
+        // able to spare it, and not too soon after the last.
+        if (t.adults >= 2 && t.birthCooldown === 0 && t.store >= P.birthCost + P.reserve * t.members
+            && world.breedP > 0 && world.rng.next() < world.breedP) {
             const parent = randomMember(world, t, true);
             t.store -= P.birthCost;
             const spot = nearCamp(world, t);
@@ -228,9 +232,23 @@ function endTribe(world, t) {
     if (world.fallen.length > 12) world.fallen.pop();
 }
 
+// Is (x, y) within human.room of any camp but tribe t's own? A daughter
+// tribe needs land of its own: the world holds only so many tribes.
+function crowded(world, t, x, y) {
+    const r2 = world.p.human.room * world.p.human.room;
+    for (const o of world.tribes) {
+        if (o === t) continue;
+        const dx = wrapDelta(o.camp.x - x, world.width);
+        const dy = wrapDelta(o.camp.y - y, world.height);
+        if (dx * dx + dy * dy < r2) return true;
+    }
+    return false;
+}
+
 // A tribe too large to hold together splits: half its people walk off to found
-// a new camp at the greenest of a few nearby sites, under a new flag, taking
-// half the store and a slightly changed culture.
+// a new camp at the greenest of a few nearby sites (on land no other tribe
+// holds: crowded), under a new flag, taking half the store and a slightly
+// changed culture.
 function split(world, t) {
     const P = world.p.human;
     const pop = world.humans;
@@ -242,6 +260,7 @@ function split(world, t) {
         const d = P.splitDistance * (0.8 + 0.4 * rng.next());
         const sx = wrapMod(t.camp.x + Math.cos(a) * d, world.width);
         const sy = wrapMod(t.camp.y + Math.sin(a) * d, world.height);
+        if (crowded(world, t, sx, sy)) continue; // (another tribe's land)
         let gv = grassAround(world, sx, sy, 40);
         if (world.terrain) {
             const score = campSite(world, sx, sy);
