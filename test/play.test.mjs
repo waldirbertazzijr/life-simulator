@@ -1178,7 +1178,7 @@ test("the prompt lists E's action and R", () => {
     modes.body.x = 150;
     assert.deepEqual(prompt(), ['E Gather']);
     modes.action('interact');
-    assert.deepEqual(prompt(), ['E Stop gathering']);
+    assert.deepEqual(prompt(), ['E Stop']);
     state.paused = true;
     assert.deepEqual(prompt(), ['P Resume']);
 });

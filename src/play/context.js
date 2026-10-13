@@ -90,8 +90,9 @@ const SAY = {
     gather: 'Gather',
 };
 
-// And while the hands are at it (E again, or let go, stops it).
-export const DOING = { butcher: 'Butchering', gather: 'Stop gathering', chop: 'Chopping wood', knap: 'Knapping flint' };
+// And while the hands are at it: how to stop (the work bar above names
+// what they are at). Held acts stop when E is let go; gathering, with E again.
+export const DOING = { butcher: 'Let go to stop', gather: 'Stop', chop: 'Let go to stop', knap: 'Let go to stop' };
 
 // The prompt's E for a context: ['E', its words], and the colour they read
 // in for an item's rarity.

@@ -473,7 +473,7 @@ test('E chops wood and knaps flint where the ground gives them, while held; the 
     world.player.wood = 1.3;
     frame();
     assert.equal(modes.doing?.kind, 'chop', 'the simulation is at it');
-    assert.deepEqual(prompt(), ['E Chopping wood']);
+    assert.deepEqual(prompt(), ['E Let go to stop']);
     // The pouch turns to the wood picked up; the work bar fills as the load does.
     const most = world.p.items.load;
     assert.deepEqual([t.hud.s.pouch.kind, t.hud.s.pouch.name], ['wood', `Wood 1 / ${most}`]);
@@ -504,7 +504,7 @@ test('E chops wood and knaps flint where the ground gives them, while held; the 
     assert.deepEqual(state.poses.at(-1), ['hold', 7, POSE.KNAP]);
     world.player.gathering = 'flint';
     frame();
-    assert.deepEqual(prompt(), ['E Knapping flint']);
+    assert.deepEqual(prompt(), ['E Let go to stop']);
     modes.action('move');
     assert.deepEqual([t.last().action, t.last().on], ['gather', false], 'a move stops it');
 
