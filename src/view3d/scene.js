@@ -12,18 +12,25 @@
 //
 // Coordinates: world x → three.js X, world y → Z, height → Y; one world unit
 // is one three.js unit. The parts: the ground (terrain-mesh.js), the forests
-// (forest.js), the grass tufts near the camera (tufts.js), creatures, camps,
-// the followed creature's marker, the sky, and the camera with its controls
+// (forest.js), the grass tufts and flowers near the camera (tufts.js),
+// creatures, camps, the followed creature's marker, the sky and its light
+// (sky.js), the rain and snow (weather.js), and the camera with its controls
 // (camera.js), which also keeps the floating origin (see util.js). How each
 // biome looks in all of them is in biomes.js.
 //
-// Draw calls stay few: a handful of ground copies, two instanced meshes for
-// all the trees (one per kind), one for all the tufts, the creatures (one
-// per species, people one per body, each with a far level; the dead
-// included), two for blood (droplets and pools), one for
-// spears in the air (thrown.js), the water sheet, the sky, two per visible
-// camp, two for all the camps' racks, and two for a tribe's standing order
-// (its pole and a hunt's range: order-marker.js).
+// Time and the seasons (stage 4): each frame the moment drawn (almanac.js
+// clockOf: the Mirror's) gives the season's look (seasonLook), which every
+// part takes: the sky and the light, the haze (haze.js), the grass's colour,
+// the snow and the ice, the leaves, the flowers, the lilies, the weather.
+//
+// Draw calls stay few: a handful of ground copies, four instanced meshes for
+// all the trees (one per kind), one for all the tufts and one for the
+// flowers, the creatures (one per species, people one per body, each with a
+// far level; the dead included), two for blood (droplets and pools), one for
+// spears in the air (thrown.js), the water sheet, the sky's dome and its
+// stars, the rain or the snow, two per visible camp, two for all the camps'
+// racks, and two for a tribe's standing order (its pole and a hunt's range:
+// order-marker.js).
 //
 // On the warm lakes float giant water lilies (lilies.js: pads and flowers,
 // two draw calls), with frogs among them (frogs.js: the frogs and their
@@ -34,7 +41,11 @@
 // of wood, flint and hide (camps.js), arrows (thrown.js), and the marks of
 // work and skills (sparks.js: chips and sparks, a streak, a ring of dust).
 import * as THREE from 'three';
+import './haze.js'; // (first: it patches three.js's shaders before anything is compiled)
 import { CameraRig } from './camera.js';
+import { Sky } from './sky.js';
+import { Weather } from './weather.js';
+import { clockOf, seasonLook } from './almanac.js';
 import { Ground } from './terrain-mesh.js';
 import { Forest } from './forest.js';
 import { Tufts } from './tufts.js';
@@ -47,57 +58,22 @@ import { Camps } from './camps.js';
 import { Marker } from './marker.js';
 import { OrderMarkers } from './order-marker.js';
 import { Lineup } from './poses.js';
-import { groundOf } from './util.js';
+import { groundOf, smoothstep } from './util.js';
 import { stubTerrain } from './terrain-stub.js';
 import { Lilies } from './lilies.js';
 import { Looks } from './looks.js';
 import { Preview } from './preview.js';
 import { Frogs } from './frogs.js';
 
-// A soft daytime sky: a light hazy blue at the horizon, a muted blue
-// overhead. The fog has the horizon's colour, so the far ground fades into the
-// haze the way distant hills do (aerial perspective).
-const SKY = '#b3c9da';
-const ZENITH = '#6f90ad';
-// The fog starts at this fraction of the far distance: about halfway near the
-// ground, so the near and middle ground stay crisp, and later from the map's
-// height, so the map stays crisp and only its far edge, toward the horizon,
-// fades.
+// The fog has the horizon's colour (and glows toward the sun: haze.js), so
+// the far ground fades into the haze the way distant hills do (aerial
+// perspective). It starts at this fraction of the far distance: about
+// halfway near the ground, so the near and middle ground stay crisp, and
+// later from the map's height, so the map stays crisp and only its far
+// edge, toward the horizon, fades. Rain and snow draw it in (CLOUDED).
 const FOG_NEAR = { ground: 0.5, map: 0.62 };
+const CLOUDED = 0.4;
 const NONE = Object.freeze([]);
-
-// A dome around the camera with the sky's gradient, drawn behind everything.
-// Below the horizon it is the fog's colour. Above, it turns blue quickly
-// over the first few degrees and then slowly toward the top: a band of haze
-// along the horizon, as on a clear day.
-function skyDome() {
-    const material = new THREE.ShaderMaterial({
-        uniforms: { horizon: { value: new THREE.Color(SKY) }, zenith: { value: new THREE.Color(ZENITH) } },
-        vertexShader: `
-            varying vec3 vDir;
-            void main() {
-                vDir = position;
-                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-            }`,
-        fragmentShader: `
-            uniform vec3 horizon;
-            uniform vec3 zenith;
-            varying vec3 vDir;
-            void main() {
-                float up = clamp(normalize(vDir).y, 0.0, 1.0);
-                float t = 1.0 - pow(1.0 - up, 2.5);
-                gl_FragColor = vec4(mix(horizon, zenith, t), 1.0);
-                #include <colorspace_fragment>
-            }`,
-        side: THREE.BackSide,
-        depthTest: false,
-        depthWrite: false,
-    });
-    const dome = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 12), material);
-    dome.renderOrder = -1;
-    dome.frustumCulled = false;
-    return dome;
-}
 
 // DEV ONLY: `?stubterrain` shows a made-up terrain while the engine has none.
 const STUB = new URLSearchParams(location.search).has('stubterrain');
@@ -109,20 +85,13 @@ export class View3D {
     constructor(canvas) {
         this.canvas = canvas;
         this.gl = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-        this.gl.setClearColor(SKY);
         this.scene = new THREE.Scene();
-        this.scene.background = new THREE.Color(SKY);
-        this.scene.fog = new THREE.Fog(SKY, 1000, 3000);
-        // Plenty of soft light from the sky (a little blue), some bounced off
-        // the ground, and a fairly low sun (40°) from the north-west, the top
-        // left of the map: it models the hills. Under a daytime sky the land
-        // is a little brighter than the 2D view's colours, and slopes facing
-        // away from the sun stay readable rather than going black.
-        const sky = new THREE.HemisphereLight('#e0e9f0', '#6a6c5a', 2.6);
-        const sun = new THREE.DirectionalLight('#fff6ea', 3.0);
-        sun.position.set(-0.6, 0.62, -0.45);
-        this.dome = skyDome();
-        this.scene.add(sky, sun, this.dome);
+        this.scene.background = new THREE.Color();
+        this.scene.fog = new THREE.Fog('#b3c9da', 1000, 3000);
+        // The sky and its light, the sun's or the moon's, by the time of day
+        // (sky.js); the weather near the camera (weather.js).
+        this.sky = new Sky(this.scene);
+        this.weather = new Weather(this.scene);
 
         this.rig = new CameraRig(canvas);
         this.ground = new Ground(this.scene, this.gl);
@@ -175,6 +144,10 @@ export class View3D {
         this.camps.attach();
         this.orders.attach();
         this.rig.attach(world, this.terrain);
+        // Every material now, hidden ones too (the stars wait for the night,
+        // the rain and snow for their weather): a first compile later would
+        // stall that frame.
+        this.gl.compile(this.scene, this.rig.camera);
     }
 
     resize() {
@@ -199,16 +172,21 @@ export class View3D {
         }
         const t0 = performance.now();
         const view = this.rig.view;
-        this.scene.fog.far = view.fogFar;
-        this.scene.fog.near = view.fogFar * (FOG_NEAR.ground + (FOG_NEAR.map - FOG_NEAR.ground) * view.mapness);
-        this.dome.position.set(view.camX, view.camY, view.camZ);
-        this.dome.scale.setScalar(view.fogFar * 0.9);
-        this.ground.update(world);
+        // The moment drawn, and what its season looks like (almanac.js).
+        const cal = world.p.calendar;
+        const look = seasonLook(cal, world.seed, clockOf(world));
+        this.look = look;
+        this.sky.update(look.w, cal, look.overcast, view, this.scene, t0 / 1000, this.gl.getPixelRatio());
+        const clear = 1 - CLOUDED * look.overcast;
+        this.scene.fog.far = view.fogFar * clear;
+        this.scene.fog.near = view.fogFar * clear * (FOG_NEAR.ground + (FOG_NEAR.map - FOG_NEAR.ground) * view.mapness);
+        this.ground.update(world, look);
         this.ground.place(view);
-        this.forest.update(view, this.rig.pose.fy);
-        this.tufts.update(world, view, this.rig.camera, this.heightAt);
-        this.lilies.update(view);
-        this.frogs.update(world, view, this.creatures.motion);
+        this.forest.update(view, this.rig.pose.fy, look);
+        this.tufts.update(world, view, this.rig.camera, this.heightAt, look);
+        this.lilies.update(view, look);
+        this.frogs.update(world, view, this.creatures.motion, look);
+        this.weather.update(view, look, t0 / 1000, this.gl.getPixelRatio());
         // In first person we look out of the followed creature's eyes, so its
         // own body is not drawn (once the camera is close enough to be inside it).
         const inside = target && this.rig.mode === 'first' && this.rig.pose.dist < 6;
@@ -226,8 +204,9 @@ export class View3D {
         this.thrown.handle(events, motion, self, playerBow(world));
         this.sparks.handle(events, this.heightAt, motion.clock);
         const hidden = inside ? target.pop.id[target.i] : 0;
+        this.creatures.night = look.w.part === 'night';
         this.creatures.update(world, view, this.heightAt, hidden, this.effects);
-        this.items.update(world, view, this.heightAt, motion, hidden, motion.clock);
+        this.items.update(world, view, this.heightAt, motion, hidden, motion.clock, 1 - smoothstep(-0.1, 0.1, look.w.sun.alt));
         this.effects.update(view);
         this.thrown.update(world, view, this.heightAt, motion.clock);
         this.sparks.update(view, motion.clock);

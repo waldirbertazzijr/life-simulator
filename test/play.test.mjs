@@ -3,7 +3,8 @@
 // EventTarget, and the world is a small fake with the Mirror's shape.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { personName, years, ageText, relation, YEAR, deathPhrase, deathText } from '../src/play/names.js';
+import { personName, years, ageText, yearOf, relation, deathPhrase, deathText } from '../src/play/names.js';
+import { sleepWork, restSpeed, nightNow } from '../src/play/sleep.js';
 import { Input } from '../src/play/input.js';
 import { Body } from '../src/play/body.js';
 import { Mirror } from '../src/mirror.js';
@@ -61,14 +62,23 @@ test('names are varied and pronounceable', () => {
     }
 });
 
-test('ages are in years of 150 steps × the pace of life (people come of age at 6)', () => {
-    const k = defaults.life.pace;
-    assert.equal(YEAR, 150 * k);
-    assert.equal(years(900 * k), 6);
-    assert.equal(years(150 * k - 1), 0);
-    assert.equal(ageText(100 * k), 'under a year');
-    assert.equal(ageText(150 * k), '1 year');
-    assert.equal(ageText(4000 * k), '26 years');
+test('ages are human-style years: one comes of age at 16, by the species\' own maturity', () => {
+    // People: a "year" is maturity / 16 steps (wp-1-interface.md).
+    const M = 54000;
+    assert.equal(yearOf(M), 3375);
+    assert.equal(years(M, M), 16, 'of age at 16');
+    assert.equal(years(3374, M), 0);
+    assert.equal(years(3375, M), 1);
+    assert.equal(years(5 * M, M), 80);
+    assert.equal(ageText(1000, M), 'under a year');
+    assert.equal(ageText(3375, M), '1 year');
+    assert.equal(ageText(70 * 3375 + 10, M), '70 years');
+    // Animals by theirs: a grazer grown at 600 steps is 16 at 600.
+    assert.equal(ageText(600, 600), '16 years');
+    assert.equal(years(300, 600), 8);
+    // With today's numbers (as the World paces them).
+    const P = new World(defaults, { seed: 1, aspect: 1.6 }).p.human;
+    assert.equal(years(P.maturity, P.maturity), 16);
 });
 
 test('relations by generations', () => {
@@ -753,6 +763,68 @@ test('resting runs 16× until a move key', () => {
     assert.equal(modes.resting, false);
 });
 
+test('at night, resting is "Sleep until dawn": 64× till first light, then up at 1×', () => {
+    const { world, state, hud, modes, frame } = play();
+    const C = world.p.calendar;
+    const night0 = C.dawn + C.light + C.dusk;
+    world.tribeById.get(1).store = 0; // (nothing on the rack to take: E rests)
+    modes.become(7);
+    world.player = { id: 7, x: 100, y: 102, heading: 0, carry: 0 };
+    const prompt = () => {
+        modes.drawHud(1 / 60);
+        return hud.prompt;
+    };
+    world.time = 2 * C.day + night0 + 100; // the third night, a little in
+    assert.deepEqual(prompt(), ['E Sleep until dawn']);
+    assert.deepEqual(modes.interaction(), { kind: 'rest', night: true });
+    modes.action('interact');
+    assert.equal(modes.resting, true);
+    assert.equal(modes.asleep, true);
+    assert.deepEqual(world.sent.at(-1), ['act', 'rest', true], 'the same rest act');
+    assert.equal(state.speed, 64);
+    assert.deepEqual(prompt(), ['E Wake']);
+    assert.equal(hud.work.label, 'Sleeping');
+    const before = hud.work.progress;
+    world.time += 400;
+    frame();
+    prompt();
+    assert.ok(hud.work.progress > before && hud.work.progress < 1, `the night goes by: ${before} → ${hud.work.progress}`);
+    assert.equal(state.speed, 64, 'still night');
+    world.time = 3 * C.day + 5; // first light
+    frame();
+    assert.equal(modes.resting, false, 'up at dawn');
+    assert.equal(state.speed, 1);
+    assert.deepEqual(world.sent.at(-1), ['act', 'rest', false]);
+    // By day it is resting, 16×; night falling on it lays you down at 64×.
+    world.time = 3 * C.day + night0 - 30;
+    assert.deepEqual(prompt(), ['E Rest at camp']);
+    modes.action('interact');
+    assert.equal(state.speed, 16);
+    assert.deepEqual(prompt(), ['E Rise']);
+    world.time += 60;
+    frame();
+    assert.equal(modes.asleep, true);
+    assert.equal(state.speed, 64);
+    // Any move wakes you.
+    modes.action('move');
+    assert.equal(modes.resting, false);
+    assert.equal(modes.asleep, false);
+    assert.equal(state.speed, 1);
+});
+
+test('the work bar while asleep shows how much of the night is gone', () => {
+    const C = defaults.calendar;
+    const night0 = C.dawn + C.light + C.dusk;
+    const at = (time) => sleepWork({ p: defaults, time });
+    assert.deepEqual(at(night0), { label: 'Sleeping', progress: 0 });
+    assert.ok(Math.abs(at(night0 + (C.day - night0) / 2).progress - 0.5) < 1e-9);
+    assert.ok(at(C.day - 1).progress > 0.99);
+    assert.equal(restSpeed(true), 64);
+    assert.equal(restSpeed(false), 16);
+    assert.equal(nightNow({ p: defaults, time: night0 + 1 }), true);
+    assert.equal(nightNow({ p: defaults, time: C.day }), false, 'dawn');
+});
+
 test('a bite stands you up and flashes', () => {
     const { world, state, hud, modes, frame } = play();
     world.tribeById.get(1).store = 0; // (nothing on the rack to take: E rests)
@@ -863,7 +935,7 @@ test('Play with nobody left is over, with the story', () => {
     frame(DEATH_SECONDS);
     assert.ok(hud.story, 'the summary card');
     const { people, generations, years: lived, kills, children, line } = hud.story;
-    assert.deepEqual({ people, generations, lived, kills, children, line }, { people: 1, generations: 1, lived: Math.floor(1000 / YEAR), kills: 0, children: 0, line: [personName(20)] });
+    assert.deepEqual({ people, generations, lived, kills, children, line }, { people: 1, generations: 1, lived: Math.floor(1000 / yearOf(defaults.human.maturity)), kills: 0, children: 0, line: [personName(20)] });
     assert.equal(hud.banners.at(-1), 'ended');
     assert.equal(modes.self, 0);
     assert.equal(state.inBody, false);
@@ -1062,10 +1134,10 @@ test('E does what the place offers, in order', () => {
     world.carcasses = [];
     world.player.carry = 0;
     world.tribeById.get(1).store = 0;
-    assert.deepEqual(what(), { kind: 'rest' }, 'nothing to take');
+    assert.deepEqual(what(), { kind: 'rest', night: false }, 'nothing to take');
     world.tribeById.get(1).store = 120;
     modes.body.x = 112;
-    assert.deepEqual(what(), { kind: 'rest' }, 'in camp, away from the rack');
+    assert.deepEqual(what(), { kind: 'rest', night: false }, 'in camp, away from the rack');
     modes.body.x = 150;
     assert.deepEqual(what(), { kind: 'gather' }, 'on grass outside camp');
     world.grass.g[0] = 0.05;

@@ -585,14 +585,16 @@ export class Frogs {
 
     // `motion`: the creatures' Motion (animate.js), only to know whether the
     // world is moving (frogs wait while it is paused).
-    update(world, view, motion) {
+    // `look`: the season (almanac.js): with the lilies gone, the frogs sleep
+    // in the mud.
+    update(world, view, motion, look) {
         const t0 = performance.now();
         const real = Number.isNaN(this.last) ? 0 : Math.min(0.1, (t0 - this.last) / 1000);
         this.last = t0;
         const dt = motion && motion.dt > 0 ? real : 0;
         this.clock += dt;
         const st = this.stats;
-        if (!this.homes.length) {
+        if (!this.homes.length || look.lilies < 0.5) {
             this.mesh.count = 0;
             this.ripples.visible = false;
             return;

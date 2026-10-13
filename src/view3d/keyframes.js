@@ -13,6 +13,7 @@ export const POSE = Object.freeze({
     NONE: 0, THROW: 1, JAB: 2, SWING: 3, GATHER: 4, BUTCHER: 5, EAT: 6, CHOP: 7, KNAP: 8,
     CRAFT: 9, SIT: 10, ROLL: 11, FALL: 12, CROUCH: 13, POUNCE: 14, GRAZE: 15, HOP: 16,
     SHOOT: 17, // (package 3: a bow drawn and loosed)
+    SLEEP: 18, // (stage 4: asleep at camp, on the side)
 });
 export const POSE_NAMES = Object.keys(POSE);
 
@@ -47,6 +48,13 @@ const CURL = { torso: [-0.5, 0, 0], head: [-0.3, 0, 0], legL: [1.3, 0.05, 0], le
 const CROUCHED = {
     shift: [0, -0.8, 0], legL: [0.97, 0.05, 0], legR: [-0.97, 0.05, 0], torso: [-0.6, 0, 0], head: [0.45, 0, 0],
     armL: [0.6, 0.2, 0], armR: [0.7, 0.15, 0],
+};
+// Asleep on the right side, knees drawn up, the right arm under the head:
+// the body rolls over about the ground at its right side (`pivot`), then
+// slides back over its spot (`shift`).
+const LYING = {
+    root: [0, Math.PI / 2, 0], pivot: [0, -1.85, 0.36], shift: [0, 0, -2.05],
+    legL: [1.0, 0.05, 0], legR: [0.8, 0.1, 0], armR: [1.45, 0.2, 0], armL: [0.6, -0.1, 0], head: [-0.22, 0, 0], torso: [-0.15, 0, 0],
 };
 const human = {
     [POSE.THROW]: {
@@ -175,6 +183,15 @@ const human = {
             { ...CROUCHED, torso: [-0.63, 0, 0] },
             CROUCHED,
             { ...CROUCHED, head: [0.45, 0, 0.15] },
+        ],
+    },
+    // Asleep, breathing slowly.
+    [POSE.SLEEP]: {
+        seconds: 5, cycle: true, keys: [
+            LYING,
+            { ...LYING, torso: [-0.19, 0, 0] },
+            LYING,
+            { ...LYING, torso: [-0.11, 0, 0], head: [-0.26, 0, 0.05] },
         ],
     },
     // Children at play: hop, arms up.

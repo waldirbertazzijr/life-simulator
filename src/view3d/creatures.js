@@ -30,7 +30,7 @@ import * as THREE from 'three';
 import { COLORS } from '../render.js';
 import { STATE } from '../population.js';
 import { herbivoreShape, carnivoreShape, personShape, RIGS } from './shapes.js';
-import { GAIT, KINDS, POSE, POSES, Motion, VERTEX_PARS, VERTEX_MAIN, VERTEX_COLOR, firstRow, poseTable } from './animate.js';
+import { GAIT, KINDS, POSE, POSES, Motion, VERTEX_PARS, VERTEX_MAIN, VERTEX_COLOR, firstRow, poseTable, SLEEPING } from './animate.js';
 import { loadModel, loadPerson, outfitOf, OUTFITS } from './models.js';
 import { BODIES, Looks, clothOf } from './looks.js';
 import { wrapDelta } from './util.js';
@@ -239,6 +239,7 @@ export class Creatures {
         this.looks = looks;
         this.scene = scene;
         this.motion = new Motion(); // everyone's stride and pose, by id
+        this.night = false; // (the scene's: the person you play, resting at night, sleeps)
         this.tribeColors = new Map(); // tribe id → { tribe, cloth } (linear RGB)
         this.color = new THREE.Color();
         this.hair = new Float64Array(3); // (scratch)
@@ -395,7 +396,9 @@ export class Creatures {
             const az0 = Math.ceil((minZ - dz) / H);
             const az1 = Math.floor((maxZ - dz) / H);
             let st = state[i];
-            if (player !== null && id[i] === player.id) st = player.resting ? STATE.AT_CAMP : st === STATE.AT_CAMP ? STATE.WALKING : st;
+            if (player !== null && id[i] === player.id) {
+                st = player.resting ? (st === SLEEPING || this.night ? SLEEPING : STATE.AT_CAMP) : st === STATE.AT_CAMP || st === SLEEPING ? STATE.WALKING : st;
+            }
             // (Everyone's look is kept while they live, seen or not: a
             // child's hair is the parent's as it was.)
             const look = people ? this.looks.of(id[i], parent ? parent[i] : 0) : null;
@@ -412,7 +415,7 @@ export class Creatures {
             if (people) {
                 if (bodies) b = this.wear(look.body, outfit);
                 colors = this.tribeColor(world, tribe[i]);
-                this.looks.hairAt(look, age[i], this.hair);
+                this.looks.hairAt(look, age[i], maturity, this.hair);
             }
             const herd = herds[b];
             const far = fars[b];
@@ -516,7 +519,7 @@ export class Creatures {
                 look = this.looks.of(d.id[j]);
                 if (this.modelled.human) b = this.wear(look.body, outfitOf());
                 colors = this.tribeColor(world, d.tribe[j]);
-                this.looks.hairAt(look, look.age ?? 0, this.hair); // (as grey as it was)
+                this.looks.hairAt(look, look.age ?? 0, world.p.human.maturity, this.hair); // (as grey as it was)
             }
             for (let ax = ax0; ax <= ax1; ax++) {
                 for (let az = az0; az <= az1; az++) {

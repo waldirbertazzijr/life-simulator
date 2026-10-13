@@ -7,7 +7,11 @@ import assert from 'node:assert/strict';
 import {
     Looks, natural, BODIES, HAIR_STYLES, HAIR_COLOURS, SKIN_TONES, STORE_KEY, greyAt, clothOf, linear,
 } from '../src/view3d/looks.js';
-import { YEAR } from '../src/play/names.js';
+import { yearOf } from '../src/play/names.js';
+
+// People's maturity (steps), and so their years (human-style: names.js).
+const M = 1800;
+const YEAR = yearOf(M);
 import { Editor } from '../src/play/editor.js';
 import { act } from '../src/play/actions.js';
 
@@ -34,7 +38,7 @@ function worldOf(people, seed = 7) {
     }
     const tribes = new Map([[1, { id: 1, name: 'Yonunu', color: '#f2c14e' }]]);
     return {
-        seed, humans, tribeById: tribes,
+        seed, humans, tribeById: tribes, p: { human: { maturity: M } },
         find(id) {
             const i = humans.id.indexOf(id);
             return i >= 0 ? { kind: 'human', pop: humans, i } : null;
@@ -91,14 +95,14 @@ test("a child's hair takes after its parent's, as the parent looks", () => {
 });
 
 test('grey creeps in with age: none young, most of it for elders', () => {
-    assert.equal(greyAt(10 * YEAR), 0);
-    assert.ok(greyAt(50 * YEAR) > 0.1 && greyAt(50 * YEAR) < 0.8);
-    assert.ok(greyAt(70 * YEAR) > 0.8);
+    assert.equal(greyAt(10 * YEAR, M), 0);
+    assert.ok(greyAt(50 * YEAR, M) > 0.1 && greyAt(50 * YEAR, M) < 0.8);
+    assert.ok(greyAt(70 * YEAR, M) > 0.8);
     const looks = new Looks(memory());
     looks.attach(worldOf([{ id: 3 }]));
     const look = looks.of(3);
-    const young = looks.hairAt(look, 10 * YEAR, [0, 0, 0]);
-    const old = looks.hairAt(look, 70 * YEAR, [0, 0, 0]);
+    const young = looks.hairAt(look, 10 * YEAR, M, [0, 0, 0]);
+    const old = looks.hairAt(look, 70 * YEAR, M, [0, 0, 0]);
     assert.deepEqual(young, look.hairRgb.map((c) => c));
     const grey = linear('#bdb8b0');
     assert.ok(old.every((c, k) => Math.abs(c - grey[k]) < Math.abs(look.hairRgb[k] - grey[k]) + 1e-9), 'nearer grey');

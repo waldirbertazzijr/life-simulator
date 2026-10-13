@@ -147,7 +147,7 @@ export class Editor {
         return {
             body: look.body,
             style: look.style,
-            hair: this.looks.hairAt(look, f ? f.pop.age[f.i] : 0, [0, 0, 0]),
+            hair: f ? this.looks.hairAt(look, f.pop.age[f.i], w.p.human.maturity, [0, 0, 0]) : this.looks.hairAt(look, 0, 1, [0, 0, 0]),
             skin: look.skinRgb,
             cloth: clothOf(hex),
             tribe: linear(hex),

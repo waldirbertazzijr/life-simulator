@@ -1,5 +1,6 @@
 // What the HUD shows each frame, as one plain object (hud.js draws it, in
-// update): who you are and your bars, the compass's marks, what you carry
+// update): who you are and your bars, the compass's marks (with the sun or
+// the moon) and the date under it, what you carry
 // (the pouch) and hold, your tribe's store, the prompt, the work under way,
 // the call in the slot, and the ring on the locked target. Filled in place
 // every frame, after the camera has moved, so the ring sits on what is
@@ -14,7 +15,10 @@ import { personName, ageText } from './names.js';
 import { equipment } from './gear.js';
 import { CENTER } from './aim.js';
 import { DOING, sayE } from './context.js';
+import { sleepWork } from './sleep.js';
 import { wrapDelta } from '../view3d/util.js';
+import { when, dateLabel } from '../calendar.js';
+import { clockOf, moonOf } from '../view3d/almanac.js';
 
 // Fill `s` (the HUD's state) for this frame, and return it.
 export function fillHud(m, s) {
@@ -28,13 +32,17 @@ export function fillHud(m, s) {
     const paused = m.env.getPaused();
     const id = m.dying ? m.dying.dead.id : m.self;
     s.name = personName(id);
-    s.age = m.known ? ageText(m.known.age) : '';
+    s.age = m.known ? ageText(m.known.age, P.maturity) : '';
     s.life = f ? f.pop.energy[f.i] / P.maxEnergy : 0;
     s.spirit = (p ? p.spirit : spiritMax) / spiritMax;
     s.stamina = b.stamina / STAMINA.max;
     s.tribe = tribe;
     s.yaw = b.yaw;
     s.camp = tribe ? Math.atan2(wrapDelta(tribe.camp.y - b.y, w.height), wrapDelta(tribe.camp.x - b.x, w.width)) : null;
+    // The date, and the sun or the moon on the compass (skyMarks).
+    const time = clockOf(w);
+    s.date = dateLabel(w.p.calendar, time);
+    s.sky = skyMarks(when(w.p.calendar, time), w.p.calendar);
     // The pouch (pouch.js): the kind in the down slot, its count and how full.
     const pouch = m.hands.contents();
     s.pouch = m.pouch.view(pouch);
@@ -52,7 +60,7 @@ export function fillHud(m, s) {
     s.gear = equipment(w, p);
     s.materials = s.gear.on && tribe ? { wood: tribe.wood ?? 0, flint: tribe.flint ?? 0, hide: tribe.hide ?? 0 } : null;
     s.item = crossName(s.gear, s.pouch);
-    s.work = m.dying ? null : workOf(w, p, s.gear, pouch);
+    s.work = m.dying ? null : m.asleep ? sleepWork(w) : workOf(w, p, s.gear, pouch);
     if (m.kit.menu) m.kit.showCraft();
     s.ring = null;
     s.target = null;
@@ -101,10 +109,23 @@ function cutOf(world, id) {
     return 0;
 }
 
+// The sun, or by night the moon, as the compass shows it (hud.js): its
+// bearing as a world angle (atan2(dy, dx), like the camp's: the sky's
+// bearings run from the east through the north, which is −y), how high it
+// is (radians), the moon's phase, and the sun's bearing (the moon is lit on
+// its side); null when neither is up. `w` is the calendar's when() (`c`
+// the calendar: the moon as the page draws it, almanac.js moonOf).
+export function skyMarks(w, c) {
+    if (w.sun.alt > -0.01) return { body: 'sun', angle: -w.sun.az, alt: w.sun.alt, phase: 0, sun: -w.sun.az };
+    const moon = moonOf(w, c);
+    if (moon.alt > 0) return { body: 'moon', angle: -moon.az, alt: moon.alt, phase: moon.phase, sun: -w.sun.az };
+    return null;
+}
+
 // The prompt: what E would do (or is doing: context.js), and R while you
 // carry food. A list of [key, what], or null.
 export function promptOf(m, f) {
-    if (m.resting) return [['E', 'Rise']];
+    if (m.resting) return [['E', m.asleep ? 'Wake' : 'Rise']];
     const out = [];
     const doing = m.hands.doing;
     if (doing) out.push(['E', DOING[doing.kind] ?? 'Butchering']);

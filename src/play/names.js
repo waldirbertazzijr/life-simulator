@@ -13,8 +13,16 @@ const ONSETS = ['b', 'd', 'g', 'h', 'k', 'l', 'm', 'n', 'p', 'r', 's', 't', 'v',
 const VOWELS = ['a', 'e', 'i', 'o', 'u', 'a', 'i', 'o'];
 const CODAS = ['', '', '', 'n', 'r', 'l', 's', 'k'];
 
-// Steps in a year: maturity (900 steps × the pace of life) comes at 6, the
-// longest life (9000 × 1.2 × the pace) ends at 72. For display only.
+// Ages on screen are human-style years, stretched over the lifetime: one
+// comes of age at COMING_OF_AGE, so a "year" is a species' maturity (steps,
+// world.p[kind].maturity) over that, for people and animals alike. For
+// display only (stage 4, wp-1-interface.md).
+export const COMING_OF_AGE = 16;
+export const yearOf = (maturity) => maturity / COMING_OF_AGE;
+
+// The admin console's year (admin.js: `spawn person`, `immortal`), as it was
+// before the calendar; the page no longer shows ages by it. (When life.pace
+// goes, admin.js can take yearOf(world.p.human.maturity) instead.)
 export const YEAR = 150 * params.life.pace;
 
 // A 32-bit integer hash (lowbias32): neighbouring ids give unrelated names.
@@ -48,11 +56,11 @@ export function personName(id) {
     return name;
 }
 
-// Whole years lived.
-export const years = (steps) => Math.floor(steps / YEAR);
+// Whole years lived, at `steps` old, by the species' `maturity`.
+export const years = (steps, maturity) => Math.floor(steps / yearOf(maturity));
 
-export function ageText(steps) {
-    const y = years(steps);
+export function ageText(steps, maturity) {
+    const y = years(steps, maturity);
     return y < 1 ? 'under a year' : y === 1 ? '1 year' : `${y} years`;
 }
 

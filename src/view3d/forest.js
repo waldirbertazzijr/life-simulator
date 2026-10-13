@@ -7,67 +7,110 @@
 // not line up in rows. A place holds a tree with a chance that follows the
 // ground's tree cover (terrain-mesh.js: the forest biome, blurred over its
 // edges): most places in the heart of a forest, fewer toward its edge, now
-// and then one just outside it, and a lone tree here and there in wetland.
-// Never in water, on cliffs, on steep ground, or where nothing grows (rock,
-// snow). The same world always gets the same trees.
+// and then one just outside it, a lone tree here and there in wetland, and
+// a lone fruit tree now and then in a meadow. Never in water, on cliffs, on
+// steep ground, or where nothing grows (rock, snow). The same world always
+// gets the same trees.
 //
-// Which: conifers on high (colder) ground, round broadleaf trees lower down,
-// mixed in between; toward the tree line the conifers grow smaller.
+// Which: four kinds (almanac.js TREE_KINDS). Pines on high (colder) ground,
+// smaller toward the tree line; lower down broadleaf trees, birches more
+// toward the pines, oaks lower; fruit trees at the forests' edges and alone
+// in meadows. Pines stay green; the others follow the year (almanac.js
+// FOLIAGE): oaks and birches turn red and gold in autumn, the birches stand
+// bare in winter and the oaks keep a few dry leaves, fruit trees blossom
+// white and pink in spring before their leaves come. In winter snow lies on
+// the faces that look up (with the ground's snow line: haze.js snowAt).
 //
-// How they are drawn: one instanced mesh per kind, so all the trees are two
+// How they are drawn: one instanced mesh per kind, so all the trees are four
 // draw calls. Each tree's place (world x, ground height, world y) and its
-// seed and size are four floats in a small float texture, written once. The
-// world wraps, and from high up the view takes in more than one copy of it,
-// so each tree is drawn once per copy of the world the view can reach
-// (cx × cz of them): instance number i is tree i mod N of copy i div N. The
-// vertex shader works out where that copy stands relative to the floating
-// origin (util.js) and, if it is outside the visible box or the camera's
-// view, collapses it to a point, which draws nothing. So the only JavaScript
-// per frame is a handful of uniforms; the culling happens on the GPU.
+// seed and size are four floats in a small float texture, written once, the
+// trees sorted by the square CHUNK of ground they stand in. The world wraps,
+// and from high up the view takes in more than one copy of it. Each frame
+// the chunks of every copy the view can reach are tested against the
+// visible box and the camera's view (a few hundred boxes), and those in view
+// become runs of whole chunks (as few as MAX_RUNS allows): only their trees
+// are drawn, instance i being found in its run on the graphics card. There
+// the vertex shader places each tree beside the floating origin (util.js)
+// and, if it is still outside the box or the view, collapses it to a point,
+// which draws nothing.
+//
+// The leaves are coloured on the graphics card too: a leaf vertex carries only
+// its shade, and the shader gives it this tree's colour for the season (each
+// tree turning a little before or after its neighbours), and draws its crown
+// in toward the middle of each clump as the leaves thin, down to bare
+// branches.
 //
 // Up close, trees get out of the way. One the camera is about to pass
 // through, or one standing between the follow camera and the creature it
 // follows, dissolves (a screen-door dither that drops a growing share of its
 // pixels) instead of filling the screen with leaves.
 import * as THREE from 'three';
-import { biomeLook } from './biomes.js';
 import { hash, meshHeight, smoothstep } from './util.js';
+import { TREE_KINDS } from './almanac.js';
+import { SNOW_LINE, SNOW_COLOR, SNOW_GLSL } from './haze.js';
 
 const SPACING = 6.5;      // between the places where a tree may stand (world units)
 const DENSE = 0.85;       // share of the places with a tree in the heart of a forest
 const STEEP = 0.75;       // no trees on slopes steeper than this (rise over run)
+const ORCHARD = 0.004;    // share of the open meadow's places with a lone fruit tree
+const EDGE_FRUIT = 0.22;  // share of the broadleaf trees at a forest's edge that bear fruit
 const TEX_W = 256;        // width of the trees' data texture
 const MAX_COPIES = 5;     // copies of the world along each axis, at most (the ground has 5 × 5)
+const CHUNK = 128;        // the trees are kept in square chunks about this wide (world units)...
+const MAX_RUNS = 64;      // ...and drawn as at most this many runs of whole chunks
+const MARGIN = 25;        // a chunk's trees reach this far past it (crowns, and the map's growth)
+const TALLEST = 40;       // and this high above their ground
 const SIZE0 = 0.3;        // a tree's size is SIZE0 + SIZE1 · (0..1) in the data texture
 const SIZE1 = 1.7;
 const MIN_PX = 6;         // in the map view a crown grows to be about this wide on screen...
 const MAX_GROW = 1.8;     // ...but to no more than this times its size
 const TRUNK = [86, 68, 52];
+const OAK_BARK = [78, 64, 52];
+const BIRCH_BARK = [206, 200, 188];
+const BIRCH_MARK = [70, 64, 58];
 
-// The two kinds. `crown`: radius of the crown at its widest; `top`: height;
-// `mid`, `reach`: a ball around the tree (for culling). All at size 1.
+// Per kind: `crown`, the crown's radius at its widest; `top`, its height;
+// `mid`, `reach`: a ball around the tree (for culling); `cling`, how much
+// snow its upper faces hold. All at size 1.
 const KINDS = {
-    conifer: { leaves: [44, 70, 54], crown: 2.8, top: 10.6, mid: 5.2, reach: 6.2 },
-    broadleaf: { leaves: [78, 102, 58], crown: 3.4, top: 9.2, mid: 5.0, reach: 5.6 },
+    pine: { crown: 2.8, top: 10.6, mid: 5.2, reach: 6.2, cling: 0.9 },
+    birch: { crown: 2.2, top: 10.6, mid: 5.6, reach: 6.0, cling: 0.7 },
+    oak: { crown: 3.9, top: 9.8, mid: 5.2, reach: 6.4, cling: 0.75 },
+    fruit: { crown: 2.8, top: 6.4, mid: 3.4, reach: 4.4, cling: 0.7 },
 };
 
 const linear = (rgb) => new THREE.Color().setRGB(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255, THREE.SRGBColorSpace);
+const GREY = new THREE.Color(1, 1, 1); // a leaf's own colour: only its shade (the shader colours it)
 
-// A tree is built as one indexed geometry with a colour per corner. Faces
-// share corners; the material's flat shading gives every face its own normal
-// anyway (from screen-space derivatives), so the facets still show, and a
-// tree is only some 40 corners for the GPU to move.
+// A tree is built as one indexed geometry with a colour per corner, and per
+// corner its part: the middle of its clump of leaves (x, y, z) and whether it
+// is a leaf (w). Faces share corners; the material's flat shading gives every
+// face its own normal anyway (from screen-space derivatives), so the facets
+// still show, and a tree is a few dozen corners for the GPU to move.
 class Builder {
     constructor() {
         this.pos = [];
         this.col = [];
+        this.part = [];
         this.idx = [];
+        this.hub = [0, 0, 0, 0]; // what the next corners belong to
     }
 
     vertex(x, y, z, color, shade) {
         this.pos.push(x, y, z);
         this.col.push(color.r * shade, color.g * shade, color.b * shade);
+        this.part.push(...this.hub);
         return this.pos.length / 3 - 1;
+    }
+
+    wood() {
+        this.hub = [0, 0, 0, 0];
+        return this;
+    }
+
+    leaves(x, y, z) {
+        this.hub = [x, y, z, 1];
+        return this;
     }
 
     ring(n, y, r, turn, color, shade) {
@@ -82,6 +125,7 @@ class Builder {
     // A cone with its base: darker at the skirt, lighter at the tip, as if
     // the tier above shaded it.
     cone(n, y0, h, r, turn, color) {
+        this.leaves(0, y0 + h * 0.3, 0);
         const ring = this.ring(n, y0, r, turn, color, 0.7);
         const apex = this.vertex(0, y0 + h, 0, color, 1.12);
         const base = this.vertex(0, y0 + 0.4, 0, color, 0.6);
@@ -93,18 +137,54 @@ class Builder {
     }
 
     // A trunk: a tapering prism without ends (the crown hides its top, the
-    // ground its foot).
-    trunk(n, y0, y1, r0, r1, color) {
-        const lo = this.ring(n, y0, r0, 0, color, 0.75);
-        const hi = this.ring(n, y1, r1, 0, color, 1);
-        for (let i = 0; i < n; i++) {
-            const j = (i + 1) % n;
+    // ground its foot), in sections whose rings may differ in colour (a
+    // birch's dark marks): `rings` [[y, radius, colour, shade], ...].
+    trunk(n, rings) {
+        this.wood();
+        const first = rings.map(([y, r, color, shade]) => this.ring(n, y, r, 0, color, shade));
+        for (let k = 0; k + 1 < first.length; k++) {
+            const lo = first[k];
+            const hi = first[k + 1];
+            for (let i = 0; i < n; i++) {
+                const j = (i + 1) % n;
+                this.idx.push(lo + i, hi + i, lo + j, lo + j, hi + i, hi + j);
+            }
+        }
+    }
+
+    // A branch: a thin three-sided prism from a to b, tapering.
+    branch(a, b, r0, r1, color) {
+        this.wood();
+        const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        const len = Math.hypot(...d);
+        const u = d.map((v) => v / len);
+        // Two directions across it.
+        const side = Math.abs(u[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+        let p = [u[1] * side[2] - u[2] * side[1], u[2] * side[0] - u[0] * side[2], u[0] * side[1] - u[1] * side[0]];
+        const pl = Math.hypot(...p);
+        p = p.map((v) => v / pl);
+        const q = [u[1] * p[2] - u[2] * p[1], u[2] * p[0] - u[0] * p[2], u[0] * p[1] - u[1] * p[0]];
+        const ring = (c, r, shade) => {
+            const first = this.pos.length / 3;
+            for (let i = 0; i < 3; i++) {
+                const t = (i / 3) * Math.PI * 2;
+                const ct = Math.cos(t) * r;
+                const st = Math.sin(t) * r;
+                this.vertex(c[0] + p[0] * ct + q[0] * st, c[1] + p[1] * ct + q[1] * st, c[2] + p[2] * ct + q[2] * st, color, shade);
+            }
+            return first;
+        };
+        const lo = ring(a, r0, 0.8);
+        const hi = ring(b, r1, 1);
+        for (let i = 0; i < 3; i++) {
+            const j = (i + 1) % 3;
             this.idx.push(lo + i, hi + i, lo + j, lo + j, hi + i, hi + j);
         }
     }
 
     // A lumpy ball of leaves: an icosahedron, squashed, darker underneath.
-    blob(cx, cy, cz, sx, sy, sz, color) {
+    blob(cx, cy, cz, sx, sy, sz, color = GREY) {
+        this.leaves(cx, cy, cz);
         const p = (1 + Math.sqrt(5)) / 2;
         const corners = [
             [-1, p, 0], [1, p, 0], [-1, -p, 0], [1, -p, 0], [0, -1, p], [0, 1, p],
@@ -138,6 +218,7 @@ class Builder {
         const g = new THREE.InstancedBufferGeometry();
         g.setAttribute('position', new THREE.Float32BufferAttribute(this.pos, 3));
         g.setAttribute('color', new THREE.Float32BufferAttribute(this.col, 3));
+        g.setAttribute('part', new THREE.Float32BufferAttribute(this.part, 4));
         g.setIndex(this.idx);
         g.computeVertexNormals(); // unused (flat shading), but keeps three.js's attributes complete
         g.instanceCount = 0;
@@ -145,58 +226,104 @@ class Builder {
     }
 }
 
-// A fir: three stacked cones, each turned a little, on a short trunk.
-function coniferGeometry() {
-    const b = new Builder();
-    const leaves = linear(KINDS.conifer.leaves);
-    b.trunk(5, -0.8, 2.6, 0.42, 0.3, linear(TRUNK));
-    b.cone(7, 1.6, 5.0, 2.8, 0, leaves);
-    b.cone(7, 4.1, 4.3, 2.1, 0.45, leaves);
-    b.cone(6, 6.5, 4.1, 1.35, 0.9, leaves);
-    return b.geometry();
-}
-
-// A broadleaf tree: a taller trunk and a round, lumpy crown of three blobs.
-function broadleafGeometry() {
-    const b = new Builder();
-    const leaves = linear(KINDS.broadleaf.leaves);
-    b.trunk(5, -0.8, 4.4, 0.5, 0.34, linear(TRUNK));
-    b.blob(0, 6.0, 0, 3.0, 2.5, 3.0, leaves);
-    b.blob(1.1, 7.2, -0.5, 2.0, 1.8, 2.0, leaves);
-    b.blob(-1.2, 6.8, 0.8, 1.8, 1.6, 1.8, leaves);
-    return b.geometry();
-}
+const SHAPES = {
+    // A pine: three stacked cones, each turned a little, on a short trunk.
+    pine() {
+        const b = new Builder();
+        const bark = linear(TRUNK);
+        b.trunk(5, [[-0.8, 0.42, bark, 0.75], [2.6, 0.3, bark, 1]]);
+        b.cone(7, 1.6, 5.0, 2.8, 0, GREY);
+        b.cone(7, 4.1, 4.3, 2.1, 0.45, GREY);
+        b.cone(6, 6.5, 4.1, 1.35, 0.9, GREY);
+        return b.geometry();
+    },
+    // A birch: a tall, slender, pale trunk with dark marks, branches reaching
+    // up, and a narrow, airy crown.
+    birch() {
+        const b = new Builder();
+        const bark = linear(BIRCH_BARK);
+        const mark = linear(BIRCH_MARK);
+        b.trunk(5, [[-0.8, 0.34, bark, 0.8], [1.4, 0.3, mark, 1], [2.4, 0.27, bark, 1], [4.6, 0.22, mark, 1], [5.4, 0.2, bark, 1], [7.4, 0.13, bark, 1]]);
+        b.branch([0, 4.2, 0], [1.3, 6.9, 0.4], 0.12, 0.05, bark);
+        b.branch([0, 5.0, 0], [-1.1, 7.6, -0.6], 0.11, 0.05, bark);
+        b.branch([0, 3.6, 0], [-0.4, 5.9, 1.2], 0.1, 0.04, bark);
+        b.blob(0, 7.4, 0, 1.9, 2.7, 1.9);
+        b.blob(0.8, 8.8, -0.3, 1.3, 1.8, 1.3);
+        b.blob(-0.8, 6.4, 0.6, 1.4, 1.6, 1.4);
+        return b.geometry();
+    },
+    // An oak: a thick, dark trunk, heavy branches spreading, a broad crown of
+    // four clumps.
+    oak() {
+        const b = new Builder();
+        const bark = linear(OAK_BARK);
+        b.trunk(6, [[-0.8, 0.66, bark, 0.72], [3.6, 0.44, bark, 1]]);
+        b.branch([0, 3.1, 0], [2.3, 5.6, 1.0], 0.3, 0.1, bark);
+        b.branch([0, 3.3, 0], [-2.2, 5.8, -1.1], 0.3, 0.1, bark);
+        b.branch([0, 3.5, 0], [0.6, 6.2, -2.0], 0.26, 0.09, bark);
+        b.branch([0, 3.4, 0], [-0.7, 6.4, 1.9], 0.26, 0.09, bark);
+        b.blob(0, 6.3, 0, 3.4, 2.4, 3.4);
+        b.blob(1.8, 7.1, -0.9, 2.2, 1.9, 2.2);
+        b.blob(-1.9, 6.9, 1.0, 2.1, 1.8, 2.1);
+        b.blob(0.2, 8.1, 0.4, 2.0, 1.6, 2.0);
+        return b.geometry();
+    },
+    // A fruit tree: low, with a short trunk and a round crown.
+    fruit() {
+        const b = new Builder();
+        const bark = linear(TRUNK);
+        b.trunk(5, [[-0.8, 0.38, bark, 0.75], [2.3, 0.26, bark, 1]]);
+        b.branch([0, 2.0, 0], [1.4, 3.8, 0.5], 0.14, 0.05, bark);
+        b.branch([0, 2.1, 0], [-1.2, 4.0, -0.7], 0.14, 0.05, bark);
+        b.branch([0, 2.2, 0], [-0.3, 4.2, 1.3], 0.12, 0.05, bark);
+        b.blob(0, 4.3, 0, 2.4, 1.8, 2.4);
+        b.blob(0.9, 5.0, -0.4, 1.6, 1.3, 1.6);
+        b.blob(-0.9, 4.8, 0.6, 1.5, 1.2, 1.5);
+        return b.geometry();
+    },
+};
 
 const VERTEX_PARS = /* glsl */ `
+attribute vec4 part;   // the middle of this corner's clump of leaves, and 1 for a leaf (0: wood)
 uniform highp sampler2D uTrees; // per tree: world x, ground height, world y, seed (0..1023) + size (fraction)
-uniform int uCount;    // trees of this kind
-uniform int uCopiesX;  // copies of the world drawn along x (the instance count says how many along z)
-uniform vec2 uWorld;   // the world's width and height
-uniform vec2 uOrigin;  // world (x, y) of the floating origin
+uniform vec4 uRuns[ ${MAX_RUNS} ]; // the runs of trees drawn: the first, how many, and where that copy of the world stands
+uniform float uEnds[ ${MAX_RUNS} ]; // instances up to the end of each run
+uniform int uRunCount;
 uniform vec4 uBox;     // the ground the camera can see: minX, maxX, minZ, maxZ, from the origin
 uniform vec4 uPlanes[ 6 ]; // the camera's view, as six planes
 uniform vec3 uCam;     // the camera
 uniform float uFocus;  // distance from the camera to what it looks at
 uniform float uCut;    // 0..1: how much to clear the line of sight to it
 uniform float uGrow;   // map view: growth per unit of distance from the camera (0 elsewhere)
+uniform vec3 uFromA;   // the season's leaves (almanac.js foliage): the key before, colours A and B...
+uniform vec3 uFromB;
+uniform vec3 uToA;     // ...the key after
+uniform vec3 uToB;
+uniform vec3 uLeaf;    // the leaves' amount at each key (x, y), and how far between them (z)
 varying float vFade;   // 1 solid .. 0 gone
+varying float vSnow;   // snow on its upper faces
 `;
 
 // The vertex shader for one kind of tree (its sizes are written in).
 const vertexMain = (K) => /* glsl */ `
 vec3 transformed = vec3( position );
 {
-    int copy = gl_InstanceID / uCount;
-    int tree = gl_InstanceID - copy * uCount;
+    // Which run this instance is in (the first whose end is past it), and so
+    // which tree, in which copy of the world.
+    float id = float( gl_InstanceID );
+    int lo = 0;
+    int hi = uRunCount - 1;
+    for ( int s = 0; s < ${Math.ceil(Math.log2(MAX_RUNS))}; s++ ) {
+        if ( lo < hi ) {
+            int m = ( lo + hi ) / 2;
+            if ( id < uEnds[ m ] ) hi = m;
+            else lo = m + 1;
+        }
+    }
+    vec4 run = uRuns[ lo ];
+    int tree = int( run.x + id - ( lo > 0 ? uEnds[ lo - 1 ] : 0.0 ) + 0.5 );
     vec4 d = texelFetch( uTrees, ivec2( tree % ${TEX_W}, tree / ${TEX_W} ), 0 );
-    int cz = copy / uCopiesX;
-    int cx = copy - cz * uCopiesX;
-    // This copy of the tree: the first one past the box's low corner, then
-    // whole worlds further on.
-    vec3 at = vec3(
-        uBox.x + mod( d.x - uOrigin.x - uBox.x, uWorld.x ) + float( cx ) * uWorld.x,
-        d.y,
-        uBox.z + mod( d.z - uOrigin.y - uBox.z, uWorld.y ) + float( cz ) * uWorld.y );
+    vec3 at = vec3( d.x + run.z, d.y, d.z + run.w );
     float seed = floor( d.w ) / 1024.0;
     float size = ${SIZE0.toFixed(2)} + ${SIZE1.toFixed(2)} * fract( d.w );
     // From high above (the map), trees grow with distance, as the creatures
@@ -204,7 +331,7 @@ vec3 transformed = vec3( position );
     size *= clamp( distance( at, uCam ) * uGrow, 1.0, ${MAX_GROW.toFixed(2)} );
     vec3 mid = at + vec3( 0.0, ${K.mid.toFixed(2)} * size, 0.0 );
     float reach = ${K.reach.toFixed(2)} * size;
-    bool shown = at.x <= uBox.y && at.z <= uBox.w;
+    bool shown = at.x >= uBox.x && at.x <= uBox.y && at.z >= uBox.z && at.z <= uBox.w;
     for ( int p = 0; p < 6; p++ ) shown = shown && dot( uPlanes[ p ].xyz, mid ) + uPlanes[ p ].w > -reach;
 
     // Out of the camera's way. Near: the camera is below the tree's top and
@@ -229,6 +356,17 @@ vec3 transformed = vec3( position );
     }
     if ( vFade < 0.02 ) shown = false;
 
+    // Its leaves this season: it turns a little before or after the others
+    // (r), and leans to colour A or B (pick).
+    float r = fract( seed * 53.71 );
+    float pick = fract( seed * 17.13 );
+    float turn = smoothstep( 0.0, 1.0, clamp( ( uLeaf.z - 0.45 * r ) / 0.55, 0.0, 1.0 ) );
+    float amount = mix( uLeaf.x, uLeaf.y, turn );
+    vec3 leaf = mix( mix( uFromA, uFromB, pick ), mix( uToA, uToB, pick ), turn );
+    // A thinning crown draws in toward the middle of each clump, to nothing.
+    transformed = mix( transformed, mix( part.xyz, transformed, sqrt( amount ) ), part.w );
+    vColor *= mix( vec3( 1.0 ), leaf, part.w );
+
     float a = seed * 6.2831853;
     float c = cos( a );
     float s = sin( a );
@@ -239,13 +377,16 @@ vec3 transformed = vec3( position );
     // Each tree a little lighter or darker, warmer or cooler.
     float warm = fract( seed * 37.7 ) - 0.5;
     vColor *= ( 0.86 + 0.28 * fract( seed * 91.3 ) ) * vec3( 1.0 + 0.16 * warm, 1.0, 1.0 - 0.16 * warm );
+    vSnow = snowAt( at.y + 2.0 * size, 0.0 ) * ${K.cling.toFixed(2)};
 }
 `;
 
 // Screen-door transparency: a fading tree keeps only the share vFade of its
-// pixels, picked by a fine noise pattern (interleaved gradient noise).
+// pixels, picked by a fine noise pattern (interleaved gradient noise). Snow
+// whitens the faces that look up.
 const FRAGMENT_PARS = /* glsl */ `
 varying float vFade;
+varying float vSnow;
 `;
 const FRAGMENT_MAIN = /* glsl */ `
 if ( vFade < 0.999 ) {
@@ -253,34 +394,45 @@ if ( vFade < 0.999 ) {
     if ( n >= vFade ) discard;
 }
 `;
+const FRAGMENT_SNOW = /* glsl */ `
+diffuseColor.rgb = mix( diffuseColor.rgb, uSnowColor, vSnow * smoothstep( 0.12, 0.5, upward( normal ) ) );
+`;
 
 export class Forest {
     constructor(scene) {
         this.scene = scene;
-        // Shared by both kinds (the same objects, so one update serves both).
+        // Shared by all kinds (the same objects, so one update serves them all).
         this.uniforms = {
-            uCopiesX: { value: 1 },
-            uWorld: { value: new THREE.Vector2(1, 1) },
-            uOrigin: { value: new THREE.Vector2() },
             uBox: { value: new THREE.Vector4() },
             uPlanes: { value: Array.from({ length: 6 }, () => new THREE.Vector4()) },
             uCam: { value: new THREE.Vector3() },
             uFocus: { value: 1 },
             uCut: { value: 0 },
             uGrow: { value: 0 },
+            uSnowLine: SNOW_LINE,
+            uSnowColor: SNOW_COLOR,
         };
-        this.kinds = ['conifer', 'broadleaf'].map((name) => {
-            const geometry = name === 'conifer' ? coniferGeometry() : broadleafGeometry();
-            const own = { uTrees: { value: null }, uCount: { value: 1 } };
+        this.kinds = TREE_KINDS.map((name) => {
+            const geometry = SHAPES[name]();
+            const own = {
+                uTrees: { value: null },
+                uRuns: { value: Array.from({ length: MAX_RUNS }, () => new THREE.Vector4()) },
+                uEnds: { value: new Float32Array(MAX_RUNS) },
+                uRunCount: { value: 0 },
+                uFromA: { value: new THREE.Color() }, uFromB: { value: new THREE.Color() },
+                uToA: { value: new THREE.Color() }, uToB: { value: new THREE.Color() },
+                uLeaf: { value: new THREE.Vector3(1, 1, 0) },
+            };
             const material = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
             material.onBeforeCompile = (shader) => {
                 Object.assign(shader.uniforms, this.uniforms, own);
                 shader.vertexShader = shader.vertexShader
-                    .replace('#include <common>', `#include <common>\n${VERTEX_PARS}`)
+                    .replace('#include <common>', `#include <common>\n${VERTEX_PARS}\n${SNOW_GLSL}`)
                     .replace('#include <begin_vertex>', vertexMain(KINDS[name]));
                 shader.fragmentShader = shader.fragmentShader
-                    .replace('#include <common>', `#include <common>\n${FRAGMENT_PARS}`)
-                    .replace('#include <clipping_planes_fragment>', `${FRAGMENT_MAIN}\n#include <clipping_planes_fragment>`);
+                    .replace('#include <common>', `#include <common>\n${FRAGMENT_PARS}\n${SNOW_GLSL}`)
+                    .replace('#include <clipping_planes_fragment>', `${FRAGMENT_MAIN}\n#include <clipping_planes_fragment>`)
+                    .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${FRAGMENT_SNOW}`);
             };
             material.customProgramCacheKey = () => `trees-${name}`;
             const mesh = new THREE.Mesh(geometry, material);
@@ -289,10 +441,12 @@ export class Forest {
             mesh.frustumCulled = false;
             mesh.visible = false;
             scene.add(mesh);
-            return { name, geometry, material, mesh, own, count: 0, texture: null };
+            return { name, geometry, material, mesh, own, count: 0, texture: null, starts: null };
         });
         this.count = 0;
-        this.stats = { trees: 0, conifer: 0, broadleaf: 0, buildMs: 0 };
+        this.chunks = null; // the chunk grid: { nx, nz, w, h, low, high (per chunk, the trees' ground) }
+        this.seen = [];     // this frame's chunks in view: [chunk, copy x offset, copy z offset] ...
+        this.stats = { trees: 0, buildMs: 0 };
     }
 
     // A new world: place its trees. Needs biomes (the ground's tree cover).
@@ -306,7 +460,7 @@ export class Forest {
             k.mesh.visible = false;
         }
         this.count = 0;
-        this.stats = { trees: 0, conifer: 0, broadleaf: 0, buildMs: 0 };
+        this.stats = { trees: 0, buildMs: 0 };
         if (!terrain || !terrain.biomeGrid || !ground.cover) return;
 
         const W = world.width;
@@ -315,6 +469,7 @@ export class Forest {
         const { biomeGrid, biomes, seaLevel: sea } = terrain;
         const cover = ground.cover;
         const barren = biomes.map((b) => b.fertility === 0); // water, rock, snow: nothing grows
+        const meadow = biomes.map((b) => b.name === 'meadow');
         let peak = sea + 1;
         for (const h of terrain.height) if (h > peak) peak = h;
         // The tree cover at any point, bilinear between the patch centres.
@@ -340,43 +495,73 @@ export class Forest {
         const sx = W / nx;
         const sz = H / nz;
         const out = [0, 0];
-        const found = { conifer: [], broadleaf: [] };
+        const found = Object.fromEntries(TREE_KINDS.map((k) => [k, []]));
         for (let j = 0; j < nz; j++) {
             for (let i = 0; i < nx; i++) {
                 const h1 = hash(i + j * nx + 0x51ed270b);
                 const h2 = hash(h1 ^ 0x2c1b3c6d);
+                const h3 = hash(h2 ^ 0x1b873593);
                 const x = (i + 0.1 + 0.8 * ((h1 & 255) / 255)) * sx;
                 const y = (j + 0.1 + 0.8 * (((h1 >>> 8) & 255) / 255)) * sz;
                 const c = coverAt(x, y);
-                // Dense in the forest, thinning fast at its edge, a few strays.
-                const p = Math.max(DENSE * smoothstep(0.25, 0.75, c), 0.25 * c);
-                if (((h1 >>> 16) & 1023) / 1023 >= p) continue;
                 const pi = Math.min(cols - 1, Math.floor(x / cellW));
                 const pj = Math.min(rows - 1, Math.floor(y / cellH));
-                if (barren[biomeGrid[pi + pj * cols]] || terrain.blocked(x, y)) continue;
+                const b = biomeGrid[pi + pj * cols];
+                // Dense in the forest, thinning fast at its edge, a few strays;
+                // and in the open meadow, now and then a lone fruit tree.
+                const p = Math.max(DENSE * smoothstep(0.25, 0.75, c), 0.25 * c);
+                const roll = ((h1 >>> 16) & 1023) / 1023;
+                const orchard = meadow[b] && c < 0.05 && roll < ORCHARD;
+                if (roll >= p && !orchard) continue;
+                if (barren[b] || terrain.blocked(x, y)) continue;
                 meshHeight(terrain, x, y, out);
                 if (out[1] > STEEP || out[0] < sea + 0.5) continue;
                 const up = (out[0] - sea) / (peak - sea); // 0 at the shore, 1 at the highest top
-                const conifer = ((h2 & 1023) / 1023) < smoothstep(0.1, 0.3, up);
+                const u2 = (h2 & 1023) / 1023;
+                const u3 = (h3 & 1023) / 1023;
+                let kind;
+                if (orchard) kind = 'fruit';
+                else if (u2 < smoothstep(0.1, 0.3, up)) kind = 'pine';
+                else if (c < 0.5 && u3 < EDGE_FRUIT * (1 - smoothstep(0.15, 0.3, up))) kind = 'fruit';
+                else kind = ((h3 >>> 10) & 1023) / 1023 < 0.25 + 0.55 * smoothstep(0.06, 0.24, up) ? 'birch' : 'oak';
                 // Smaller toward the tree line, and at the forest's edge.
                 let size = 0.8 + 0.45 * (((h2 >>> 10) & 255) / 255);
-                if (conifer) size *= 1 - 0.35 * smoothstep(0.38, 0.55, up);
-                size *= 0.75 + 0.25 * smoothstep(0.2, 0.8, c);
+                if (kind === 'pine') size *= 1 - 0.35 * smoothstep(0.38, 0.55, up);
+                if (!orchard) size *= 0.75 + 0.25 * smoothstep(0.2, 0.8, c);
                 const seed = (h2 >>> 22) & 1023;
                 // Sink it a little, so its trunk never floats on a slope.
                 const packed = seed + Math.min(0.999, Math.max(0, (size - SIZE0) / SIZE1));
-                found[conifer ? 'conifer' : 'broadleaf'].push(x, out[0] - 0.15, y, packed);
+                found[kind].push(x, out[0] - 0.15, y, packed);
             }
         }
 
+        // The chunk grid (it divides the world exactly), and how low and high
+        // the trees' ground is in each chunk.
+        const cnx = Math.max(1, Math.round(W / CHUNK));
+        const cnz = Math.max(1, Math.round(H / CHUNK));
+        const chunks = { nx: cnx, nz: cnz, w: W / cnx, h: H / cnz, low: new Float32Array(cnx * cnz).fill(Infinity), high: new Float32Array(cnx * cnz).fill(-Infinity) };
+        const chunkOf = (x, y) => Math.min(cnx - 1, Math.floor(x / chunks.w)) + Math.min(cnz - 1, Math.floor(y / chunks.h)) * cnx;
         for (const k of this.kinds) {
             const data = found[k.name];
             const n = data.length / 4;
             k.count = n;
+            this.stats[k.name] = n;
+            // Sorted by chunk (a counting sort): each chunk's trees in a row,
+            // from starts[c] to starts[c + 1].
+            const starts = new Uint32Array(cnx * cnz + 1);
+            for (let t = 0; t < n; t++) starts[chunkOf(data[t * 4], data[t * 4 + 2]) + 1]++;
+            for (let c = 0; c < cnx * cnz; c++) starts[c + 1] += starts[c];
+            k.starts = starts;
             if (!n) continue;
             const texH = Math.ceil(n / TEX_W);
             const pixels = new Float32Array(TEX_W * texH * 4);
-            pixels.set(data);
+            const next = starts.slice(0, -1);
+            for (let t = 0; t < n; t++) {
+                const c = chunkOf(data[t * 4], data[t * 4 + 2]);
+                pixels.set(data.slice(t * 4, t * 4 + 4), next[c]++ * 4);
+                if (data[t * 4 + 1] < chunks.low[c]) chunks.low[c] = data[t * 4 + 1];
+                if (data[t * 4 + 1] > chunks.high[c]) chunks.high[c] = data[t * 4 + 1];
+            }
             const tex = new THREE.DataTexture(pixels, TEX_W, texH, THREE.RGBAFormat, THREE.FloatType);
             tex.minFilter = THREE.NearestFilter;
             tex.magFilter = THREE.NearestFilter;
@@ -384,34 +569,121 @@ export class Forest {
             tex.needsUpdate = true;
             k.texture = tex;
             k.own.uTrees.value = tex;
-            k.own.uCount.value = n;
             k.mesh.visible = true;
             this.count += n;
         }
-        this.uniforms.uWorld.value.set(W, H);
-        this.stats = {
-            trees: this.count,
-            conifer: this.kinds[0].count,
-            broadleaf: this.kinds[1].count,
-            buildMs: +(performance.now() - t0).toFixed(1),
-        };
+        this.chunks = chunks;
+        this.stats.trees = this.count;
+        this.stats.buildMs = +(performance.now() - t0).toFixed(1);
     }
 
-    // Every frame: where the camera is and what it can see. No tree is
-    // touched here; `focusY` is the height of the point the camera looks at.
-    update(view, focusY) {
+    // Every frame: where the camera is and what it can see, and the season's
+    // leaves (almanac.js seasonLook). No tree is touched here; `focusY` is the
+    // height of the point the camera looks at.
+    update(view, focusY, look) {
         if (!this.count) return;
         const u = this.uniforms;
-        u.uOrigin.value.set(view.fx, view.fz);
         u.uBox.value.set(view.minX, view.maxX, view.minZ, view.maxZ);
         for (let p = 0; p < 6; p++) u.uPlanes.value[p].fromArray(view.planes, p * 4);
         u.uCam.value.set(view.camX, view.camY, view.camZ);
         u.uFocus.value = Math.hypot(view.camX, view.camY - focusY, view.camZ);
         u.uCut.value = 1 - view.mapness;
-        u.uGrow.value = (view.unitPx * MIN_PX * view.mapness) / (2 * KINDS.conifer.crown);
-        const cx = Math.min(MAX_COPIES, Math.floor((view.maxX - view.minX) / view.W) + 1);
-        const cz = Math.min(MAX_COPIES, Math.floor((view.maxZ - view.minZ) / view.H) + 1);
-        u.uCopiesX.value = cx;
-        for (const k of this.kinds) k.geometry.instanceCount = k.count * cx * cz;
+        u.uGrow.value = (view.unitPx * MIN_PX * view.mapness) / (2 * KINDS.pine.crown);
+        this.see(view);
+        for (const k of this.kinds) {
+            this.runs(k);
+            const { from, to, u: along } = look.leaves[k.name];
+            const o = k.own;
+            setColor(o.uFromA.value, from[0]);
+            setColor(o.uFromB.value, from[1]);
+            setColor(o.uToA.value, to[0]);
+            setColor(o.uToB.value, to[1]);
+            o.uLeaf.value.set(from[2], to[2], along);
+        }
+    }
+
+    // The chunks in view this frame, in every copy of the world the view
+    // reaches: [chunk, copy's x, copy's z (render coordinates of its corner)]
+    // in this.seen, copy by copy, each copy's chunks in order.
+    see(view) {
+        const { W, H, fx, fz, minX, maxX, minZ, maxZ, planes } = view;
+        const { nx, nz, w, h, low, high } = this.chunks;
+        const seen = this.seen;
+        seen.length = 0;
+        const kx0 = Math.floor((minX + fx - MARGIN) / W);
+        const kx1 = Math.min(kx0 + MAX_COPIES - 1, Math.floor((maxX + fx + MARGIN) / W));
+        const kz0 = Math.floor((minZ + fz - MARGIN) / H);
+        const kz1 = Math.min(kz0 + MAX_COPIES - 1, Math.floor((maxZ + fz + MARGIN) / H));
+        for (let kz = kz0; kz <= kz1; kz++) {
+            for (let kx = kx0; kx <= kx1; kx++) {
+                const ox = kx * W - fx;
+                const oz = kz * H - fz;
+                for (let c = 0; c < nx * nz; c++) {
+                    if (low[c] > high[c]) continue; // (no trees)
+                    const x0 = ox + (c % nx) * w - MARGIN;
+                    const z0 = oz + Math.floor(c / nx) * h - MARGIN;
+                    const x1 = x0 + w + 2 * MARGIN;
+                    const z1 = z0 + h + 2 * MARGIN;
+                    if (x1 < minX || x0 > maxX || z1 < minZ || z0 > maxZ) continue;
+                    if (outside(planes, x0, low[c] - 1, z0, x1, high[c] + TALLEST, z1)) continue;
+                    seen.push(c, ox, oz);
+                }
+            }
+        }
+    }
+
+    // One kind's runs of trees for this frame (from this.seen): neighbouring
+    // chunks of a copy are one run; with too many runs, the closest are
+    // joined (drawing the trees between them too, which the shader drops).
+    runs(k) {
+        const { starts } = k;
+        const seen = this.seen;
+        const runs = [];
+        for (let s = 0; s < seen.length; s += 3) {
+            const c = seen[s];
+            const a = starts[c];
+            const b = starts[c + 1];
+            if (b === a) continue;
+            const last = runs[runs.length - 1];
+            if (last && last[2] === seen[s + 1] && last[3] === seen[s + 2] && last[1] === a) last[1] = b;
+            else runs.push([a, b, seen[s + 1], seen[s + 2]]);
+        }
+        while (runs.length > MAX_RUNS) {
+            let best = -1;
+            for (let r = 0; r + 1 < runs.length; r++) {
+                if (runs[r][2] !== runs[r + 1][2] || runs[r][3] !== runs[r + 1][3]) continue;
+                if (best < 0 || runs[r + 1][0] - runs[r][1] < runs[best + 1][0] - runs[best][1]) best = r;
+            }
+            if (best < 0) {
+                runs.length = MAX_RUNS; // (only when the view takes in more copies than can be told apart)
+                break;
+            }
+            runs[best][1] = runs[best + 1][1];
+            runs.splice(best + 1, 1);
+        }
+        const o = k.own;
+        let total = 0;
+        runs.forEach(([a, b, ox, oz], r) => {
+            o.uRuns.value[r].set(a, b - a, ox, oz);
+            total += b - a;
+            o.uEnds.value[r] = total;
+        });
+        o.uRunCount.value = runs.length;
+        k.geometry.instanceCount = total;
+        k.mesh.visible = total > 0;
     }
 }
+
+// Is the box (x0, y0, z0)–(x1, y1, z1) wholly outside one of the view's six
+// planes ([nx, ny, nz, d] each)?
+function outside(planes, x0, y0, z0, x1, y1, z1) {
+    for (let p = 0; p < 24; p += 4) {
+        const nx = planes[p];
+        const ny = planes[p + 1];
+        const nz = planes[p + 2];
+        if (nx * (nx > 0 ? x1 : x0) + ny * (ny > 0 ? y1 : y0) + nz * (nz > 0 ? z1 : z0) + planes[p + 3] < 0) return true;
+    }
+    return false;
+}
+
+const setColor = (c, rgb) => c.setRGB(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255, THREE.SRGBColorSpace);

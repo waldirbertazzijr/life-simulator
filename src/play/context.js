@@ -5,7 +5,8 @@
 // One rule, in this order: butcher a kill of yours within reach; pick up an
 // item lying at your feet; at the rack (by the camp's centre), store what
 // you carry (food, wood, flint), or with empty hands take food for the road;
-// pick up an item a little farther off; in camp, rest; outside it, in forest
+// pick up an item a little farther off; in camp, rest (at night, sleep until
+// dawn: sleep.js); outside it, in forest
 // chop wood and on rock or tundra knap flint (while the load has room: the
 // simulation's own test of the ground, items.js handWork, on the Mirror's
 // land); elsewhere, on grass worth it, gather.
@@ -16,6 +17,7 @@ import { TASK, handWork } from '../items.js';
 import { itemsOn, nearestLying, pickupText, rarityName } from './gear.js';
 import { HANDS, ITEMS } from './aim.js';
 import { wrapDelta } from '../view3d/util.js';
+import { nightNow } from './sleep.js';
 
 // Chopping and knapping are gathering to the simulation (act 'gather': it
 // decides by the ground underfoot, as contextAt does), and what each
@@ -60,7 +62,7 @@ export function contextAt(world, at) {
             if (amount >= 1) return { kind: 'take', amount };
         }
         if (pick) return pick;
-        if (d2 < P.campRadius * P.campRadius) return { kind: 'rest' };
+        if (d2 < P.campRadius * P.campRadius) return { kind: 'rest', night: nightNow(w) };
     }
     if (pick) return pick;
     const work = WORK[handWork(w, at.x, at.y, t)];
@@ -83,7 +85,7 @@ const SAY = {
     butcher: 'Butcher',
     store: storeText,
     take: (what) => `Take ${what.amount} food`,
-    rest: 'Rest at camp',
+    rest: (what) => (what.night ? 'Sleep until dawn' : 'Rest at camp'),
     pickup: (what) => pickupText(what.item),
     chop: 'Chop wood',
     knap: 'Knap flint',

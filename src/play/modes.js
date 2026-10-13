@@ -18,8 +18,9 @@
 //        can only become its people, and when your line and your tribe are
 //        gone the game is over and its story is told.
 //
-// In a body the world runs at 1× (16× while you rest at camp), the panel
-// hides and the HUD shows. M rises to the map: your person stays yours but
+// In a body the world runs at 1× (16× while you rest at camp; at night,
+// asleep there, 64× until dawn: sleep.js), the panel hides and the HUD
+// shows. M rises to the map: your person stays yours but
 // goes on autopilot (act 'auto'), so the AI walks it as anyone, at any
 // speed, and it is drawn where the simulation has it; M again (or Return)
 // steps back in, where the simulation then has it (`snap`). Only quitting
@@ -43,7 +44,7 @@
 // changed), the bodies' poses (pose, hold, release: the 3D view's), and
 // what is under the crosshair (crosshair, aimed).
 import { Body } from './body.js';
-import { personName, relation, YEAR, years, deathPhrase, deathText } from './names.js';
+import { personName, relation, yearOf, years, deathPhrase, deathText } from './names.js';
 import { LOOK_RATE, PITCH, START_PITCH, keepLock } from './aim.js';
 import { act } from './actions.js';
 import { Hands } from './hands.js';
@@ -51,12 +52,12 @@ import { Kit } from './kit.js';
 import { Lead } from './lead.js';
 import { Pouch } from './pouch.js';
 import { fillHud } from './hud-state.js';
+import { nightNow, restSpeed, SLEEP_SPEED } from './sleep.js';
 import { clamp, wrapDelta, angleDelta } from '../view3d/util.js';
 
 export { LOCK, lockTarget } from './aim.js';
 
 export const DEATH_SECONDS = 3.5;
-const REST_SPEED = 16;
 const MAP_CLOSE = 260;     // rising to the map: at most this far above your person
 // A tribe-mate dying this close to you is told (mourn).
 const MOURN = 80;
@@ -116,6 +117,7 @@ export class Modes {
         this.view = 'shoulder';  // the body's camera: 'shoulder' or 'first' (V)
         this.mapSpeed = env.getSpeed();
         this.resting = false;
+        this.asleep = false;     // resting at night: sleeping until dawn (sleep.js)
         this.restAcked = false;  // the simulation has said we sit (so its "not resting" counts)
         this.acked = false;      // the simulation has said it controls `self`
         this.seenId = 0;         // the person the latest `player` was about
@@ -312,6 +314,7 @@ export class Modes {
         this.tribe = 0;
         this.game = 'god';
         this.resting = false;
+        this.asleep = false;
         this.dying = null;
         this.over = false;
         this.lock = 0;
@@ -353,16 +356,31 @@ export class Modes {
         return dx * dx + dy * dy < w.p.human.campRadius ** 2;
     }
 
+    // Sit down to rest, or at night lie down to sleep until dawn (sleep.js).
     rest() {
         this.resting = true;
         this.restAcked = false;
+        this.asleep = nightNow(this.world);
         this.world.act({ seq: this.body.nextSeq(), action: 'rest', on: true });
-        this.env.setSpeed(REST_SPEED);
+        this.env.setSpeed(restSpeed(this.asleep));
+    }
+
+    // Each frame while resting: night falls on a rester (asleep now), or the
+    // dawn comes to a sleeper (up, and back to 1×).
+    keepResting() {
+        if (!this.resting) return;
+        const night = nightNow(this.world);
+        if (this.asleep && !night) this.standUp();
+        else if (night && !this.asleep) {
+            this.asleep = true;
+            this.env.setSpeed(SLEEP_SPEED);
+        }
     }
 
     standUp() {
         if (!this.resting) return;
         this.resting = false;
+        this.asleep = false;
         this.world.act({ seq: this.body.nextSeq(), action: 'rest', on: false });
         if (this.inBody) this.env.setSpeed(1);
     }
@@ -488,6 +506,7 @@ export class Modes {
         }
         if (this.inBody && !this.dying) {
             this.clock += dt;
+            this.keepResting();
             this.hands.keep();
             if (this.mine()) this.pouch.keep(this.self, this.hands.contents()); // (what was just picked up shows)
         }
@@ -568,7 +587,7 @@ export class Modes {
         this.lock = 0;
         this.world.pose = null;
         this.input.clear();
-        const age = this.known ? `, aged ${years(this.known.age)}` : '';
+        const age = this.known ? `, aged ${years(this.known.age, this.world.p.human.maturity)}` : '';
         this.hud.banner('died', e?.cause ? `${deathText(e.cause, e.by, this.world)}${age}` : '');
     }
 
@@ -681,7 +700,7 @@ export class Modes {
         return {
             people: rs.length,
             generations: rs.length ? Math.max(...gens) - Math.min(...gens) + 1 : 0,
-            years: Math.floor(sum('age') / YEAR),
+            years: Math.floor(sum('age') / yearOf(this.world.p.human.maturity)),
             kills: sum('kills'),
             children: sum('children'),
             line: rs.map((r) => personName(r.id)),

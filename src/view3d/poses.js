@@ -74,7 +74,7 @@ function rows(only) {
     const P = POSE;
     const all = [
         { kind: 'human', gap: 8, columns: ['walk', 'run', P.THROW, P.JAB, P.SWING, P.SHOOT, P.ROLL] },
-        { kind: 'human', gap: 8, columns: [P.FALL, P.CROUCH, P.EAT, P.SIT, 'child walk', 'child hop'] },
+        { kind: 'human', gap: 8, columns: [P.FALL, P.CROUCH, P.EAT, P.SIT, P.SLEEP, 'child walk', 'child hop'] },
         { kind: 'human', gap: 8, columns: [P.GATHER, P.BUTCHER, P.CHOP, P.KNAP, P.CRAFT] },
         { kind: 'herbivore', gap: 11, columns: ['walk', 'run', P.GRAZE, P.FALL] },
         { kind: 'carnivore', gap: 11, columns: ['walk', 'run', P.EAT, P.POUNCE, P.CROUCH, P.FALL] },

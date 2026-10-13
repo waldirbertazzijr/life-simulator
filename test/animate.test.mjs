@@ -13,7 +13,7 @@ register(`data:text/javascript,${encodeURIComponent(
     `export async function resolve(s, c, next) { return s === 'three' ? { url: ${JSON.stringify(THREE_URL)}, shortCircuit: true } : next(s, c); }`,
 )}`);
 
-const { POSE, POSES, KINDS, Motion, statePose, poseApplies, samplePose, strideOf } = await import('../src/view3d/animate.js');
+const { POSE, POSES, KINDS, Motion, statePose, poseApplies, samplePose, strideOf, SLEEPING } = await import('../src/view3d/animate.js');
 
 const W = 1000;
 const H = 600;
@@ -49,7 +49,7 @@ const cycleDelta = (a, b) => ((b - a) % 1 + 1) % 1;
 test('pose codes are the agreed numbers', () => {
     assert.deepEqual({ ...POSE }, {
         NONE: 0, THROW: 1, JAB: 2, SWING: 3, GATHER: 4, BUTCHER: 5, EAT: 6, CHOP: 7, KNAP: 8,
-        CRAFT: 9, SIT: 10, ROLL: 11, FALL: 12, CROUCH: 13, POUNCE: 14, GRAZE: 15, HOP: 16, SHOOT: 17,
+        CRAFT: 9, SIT: 10, ROLL: 11, FALL: 12, CROUCH: 13, POUNCE: 14, GRAZE: 15, HOP: 16, SHOOT: 17, SLEEP: 18,
     });
 });
 
@@ -576,6 +576,42 @@ test('the person you control sits only to rest', () => {
         seen.add(settle());
     }
     assert.deepEqual([...seen].sort(), [POSE.NONE, POSE.SIT], 'anyone else at camp sits now and then, and stands between');
+});
+
+test('people asleep lie down on their side; the person you play sleeps resting at night', () => {
+    assert.equal(SLEEPING, 26, 'the agreed state');
+    assert.equal(statePose('human', SLEEPING, false), POSE.SLEEP);
+    assert.equal(statePose('human', SLEEPING, true), POSE.SLEEP);
+    // Lying: the whole body rolled a quarter turn onto its side, low.
+    const roll = samplePose('human', POSE.SLEEP, 0, 'root');
+    assert.ok(Math.abs(roll[1] - Math.PI / 2) < 1e-9);
+    const c = new Creatures(new THREE.Scene());
+    const humans = empty();
+    for (const k of Object.keys(humans)) if (k !== 'n') humans[k] = new Float64Array(1);
+    humans.n = 1;
+    humans.x[0] = 100;
+    humans.y[0] = 100;
+    humans.id[0] = 5;
+    humans.age[0] = 5000;
+    humans.state[0] = STATE.AT_CAMP;
+    const w = { ...deadWorld(), humans, player: { id: 5, resting: true } };
+    const m = c.motion;
+    m.tick(0, 0);
+    const settle = () => {
+        for (let f = 0; f < 40; f++) {
+            m.tick(m.shown + 0.25, m.last + 1000 / 60);
+            c.update(w, view(), () => 0, 0);
+        }
+        return c.herds.human[0].poses[0];
+    };
+    assert.equal(settle(), POSE.SIT, 'resting by day: seated');
+    c.night = true;
+    assert.equal(settle(), POSE.SLEEP, 'at night: asleep');
+    // Anyone the simulation says is asleep.
+    w.player = null;
+    humans.state[0] = SLEEPING;
+    c.night = false;
+    assert.equal(settle(), POSE.SLEEP);
 });
 
 test('nothing is drawn inside personal space', () => {

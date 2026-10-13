@@ -258,6 +258,8 @@
 
         .hud-compass { position: absolute; top: 22px; left: 50%; width: min(440px, 46vw); height: 26px; transform: translateX(-50%); }
         #hud-compass { display: block; width: 100%; height: 100%; }
+        /* The date, quietly under the compass (hud-state.js). */
+        #hud-date { position: absolute; top: 50px; left: 50%; transform: translateX(-50%); font-size: 14px; font-style: italic; color: var(--hud-muted); white-space: nowrap; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7); letter-spacing: 0.02em; }
 
         .hud-cross { position: absolute; left: 34px; bottom: 26px; width: 168px; text-align: center; }
         .hud-cross .skill { font-size: 15px; font-style: italic; color: var(--hud-muted); margin-bottom: 6px; white-space: nowrap; }
@@ -612,6 +614,7 @@
             </div>
         </div>
         <div class="hud-compass fade-band"><canvas id="hud-compass"></canvas></div>
+        <div id="hud-date"></div>
         <div class="hud-cross">
             <div class="skill" id="hud-skill">no skill</div>
             <div class="slots">

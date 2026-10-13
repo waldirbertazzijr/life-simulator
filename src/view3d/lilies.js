@@ -179,6 +179,7 @@ uniform vec2 uWorld;   // the world's width and height
 uniform vec3 uCam;     // the camera, from the origin
 uniform float uUnitPx; // world units per pixel, one unit from the camera
 uniform float uTime;   // seconds
+uniform float uSeason; // 0..1: how far the plants are up this time of year
 vec3 nearOrigin( vec3 p ) {
     return vec3(
         mod( p.x - uOrigin.x + 0.5 * uWorld.x, uWorld.x ) - 0.5 * uWorld.x,
@@ -186,7 +187,7 @@ vec3 nearOrigin( vec3 p ) {
         mod( p.z - uOrigin.y + 0.5 * uWorld.y, uWorld.y ) - 0.5 * uWorld.y );
 }
 float onScreen( vec3 at, float r ) {
-    return smoothstep( 0.7, 1.5, r / max( distance( at, uCam ) * uUnitPx, 1e-6 ) );
+    return smoothstep( 0.7, 1.5, r / max( distance( at, uCam ) * uUnitPx, 1e-6 ) ) * uSeason;
 }
 `;
 
@@ -278,6 +279,7 @@ export class Lilies {
             uCam: { value: new THREE.Vector3() },
             uUnitPx: { value: 0.001 },
             uTime: { value: 0 },
+            uSeason: { value: 1 },
         };
         const flowerUniforms = { ...this.uniforms, uWhite: { value: WHITE }, uPink: { value: PINK } };
         this.pads = this.part(scene, padGeometry(), material('lily-pads', PAD_PARS, PAD_MAIN, this.uniforms));
@@ -339,10 +341,15 @@ export class Lilies {
         part.mesh.visible = count > 0;
     }
 
-    // Every frame: where the camera is. No lily is touched here.
-    update(view) {
-        if (!this.pads.mesh.visible) return;
+    // Every frame: where the camera is, and the season (almanac.js: the
+    // lilies die back under the winter's ice and come up again in late
+    // spring). No lily is touched here.
+    update(view, look) {
+        if (!this.pads.geometry.instanceCount) return;
         const u = this.uniforms;
+        u.uSeason.value = look.lilies;
+        this.pads.mesh.visible = look.lilies > 0.01;
+        this.flowers.mesh.visible = look.lilies > 0.01 && this.flowers.geometry.instanceCount > 0;
         u.uOrigin.value.set(view.fx, view.fz);
         u.uCam.value.set(view.camX, view.camY, view.camZ);
         u.uUnitPx.value = view.unitPx;

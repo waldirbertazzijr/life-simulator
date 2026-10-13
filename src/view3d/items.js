@@ -1,6 +1,7 @@
 // Items in the world, drawn (package 3): what each person holds, where it
 // is held, and what lies on the ground. Legendary ones glint; torches burn
-// in a soft glow (and with `?torchlight`, the two nearest light the ground).
+// in a soft glow, and light a warm pool about them (haze.js: the nearest few;
+// with `?torchlight`, two real lights instead).
 //
 // Where an item is held:
 // - a spear or a club in the right hand; a bow in the left;
@@ -31,6 +32,7 @@ import { GAIT, POSE, POSES, KEYS } from './animate.js';
 import { offScreen, CHILD } from './creatures.js';
 import { TAU, wrapDelta, hash } from './util.js';
 import { kindName } from '../play/gear.js';
+import { HAZE, TORCHES } from './haze.js';
 
 export const ITEM_SHAPES = ['spear', 'bow', 'club', 'knife', 'basket', 'torch'];
 const FAR = 220;          // items farther than this from the camera are not drawn
@@ -39,8 +41,11 @@ const IDLE_MS = 3000;      // ms a mesh may stay empty before it is hidden (show
 // Torches that really light their surroundings (the nearest): none unless
 // `?torchlight`. A point light in the scene makes every lit surface work it
 // out, torch or not: about 3 ms a frame on the page's thread in the
-// headless checks for two. Without them, each flame wears a soft glow.
+// headless checks for two. Without them, the nearest few light a warm pool
+// worked out in the shaders themselves (haze.js), and each wears a soft glow.
 const LIGHTS = typeof location !== 'undefined' && new URLSearchParams(location.search).has('torchlight') ? 2 : 0;
+// The warm pool about a torch at night (haze.js), its strength at the middle.
+const TORCH_GLOW = 14;
 const TINT = {            // the rarity's tint on an item's working part
     normal: [1, 1, 1],
     rare: [0.55, 0.78, 1.45],
@@ -461,8 +466,9 @@ export class Items {
 
     // Write every item in view. world: the Mirror (byBearer, items,
     // humans); motion: the creatures' (their strides and poses this frame);
-    // hideId: a body not drawn (first person); clock: seconds at 1×.
-    update(world, view, ground, motion, hideId, clock) {
+    // hideId: a body not drawn (first person); clock: seconds at 1×; dark:
+    // 0 by day .. 1 at night (how much torches light).
+    update(world, view, ground, motion, hideId, clock, dark = 0) {
         this.clock = clock;
         this.view = view;
         this.torches.length = 0;
@@ -475,7 +481,7 @@ export class Items {
         if (world.items instanceof Map && world.items.size) this.lying(world, view, ground);
         for (const pool of Object.values(this.pools)) pool.commit();
         this.sparkles.commit();
-        this.light();
+        this.light(dark);
     }
 
     // Is a body at render (x, z), ground gy, near enough to show what it
@@ -670,16 +676,18 @@ export class Items {
         this.sparkle(x, y + 0.2 * tall, z, 0.11 * s, 0.3 * tall, -t * 0.1, FLAME_CORE);
         this.sparkle(x, y + 0.35, z, 0.75 + 0.08 * s, 0.85 + 0.08 * s, 0, GLOW);
         this.stats.flames++;
-        if (!LIGHTS) return;
         const v = this.view;
         const d2 = (x - v.camX) ** 2 + (y - v.camY) ** 2 + (z - v.camZ) ** 2;
         this.torches.push([x, y + 2.4, z, d2]); // (a little above: the bearer is not glaring)
     }
 
-    // The nearest torches light the ground about them, a little unsteadily.
-    light() {
+    // The nearest torches light the ground about them, a little unsteadily:
+    // the few nearest the camera through haze.js (a warm pool, worked out
+    // per pixel: it matters at night, `dark`), or with `?torchlight` two
+    // real lights.
+    light(dark) {
         const t = this.torches;
-        if (t.length > LIGHTS) t.sort((a, b) => a[3] - b[3]);
+        if (t.length > Math.max(LIGHTS, TORCHES)) t.sort((a, b) => a[3] - b[3]);
         for (let k = 0; k < LIGHTS; k++) {
             const l = this.lights[k];
             if (k < t.length) {
@@ -687,6 +695,15 @@ export class Items {
                 l.intensity = 3 * (0.9 + 0.1 * Math.sin(this.clock * 11 + k * 2.1));
             } else l.intensity = 0;
         }
+        const n = LIGHTS ? 0 : Math.min(TORCHES, t.length);
+        const out = HAZE.torches;
+        for (let k = 0; k < n; k++) {
+            out[k * 4] = t[k][0];
+            out[k * 4 + 1] = t[k][1] - 1.2;
+            out[k * 4 + 2] = t[k][2];
+            out[k * 4 + 3] = TORCH_GLOW * (0.15 + 0.85 * dark) * (0.88 + 0.08 * Math.sin(this.clock * 11 + k * 2.1) + 0.04 * Math.sin(this.clock * 23 + k));
+        }
+        HAZE.torchInfo.x = n;
     }
 }
 

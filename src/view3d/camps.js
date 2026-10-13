@@ -19,6 +19,7 @@ import { drawFlag } from '../flag.js';
 import { rackShape, meatShape, RACK_RIDGE, RACK_HALF, part, merge } from './shapes.js';
 import { wrapDelta, TAU, hash } from './util.js';
 import { showWhile } from './items.js';
+import { skyLit } from './haze.js';
 
 // Near the ground the pole stands a little taller than a person (people are
 // about 4.8 tall); in the map view the flag grows with distance, so it stays
@@ -231,8 +232,9 @@ export class Camps {
             const map = new THREE.CanvasTexture(canvas);
             map.colorSpace = THREE.SRGBColorSpace;
             map.anisotropy = this.anisotropy;
-            // Unlit, so the flag shows its true colours from any side.
-            const material = new THREE.MeshBasicMaterial({ map, side: THREE.DoubleSide });
+            // Unlit, so the flag shows its true colours from any side (dimmed
+            // as the sky darkens: haze.js).
+            const material = skyLit(new THREE.MeshBasicMaterial({ map, side: THREE.DoubleSide }));
             t = {
                 material,
                 disc: groundDisc(campRadius, ground, tribe.camp.x, tribe.camp.y),

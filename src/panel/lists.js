@@ -136,7 +136,7 @@ export function fillPicker($, world) {
         drawFlag(row.querySelector('canvas').getContext('2d'), t.flag, 0, 0, 36, 24);
         row.querySelector('.t').textContent = t.name;
         const kills = found ? found.pop.kills[found.i] : 0;
-        row.querySelector('.as').textContent = `as ${personName(id)}${found ? `, ${ageText(found.pop.age[found.i])}` : ''}`
+        row.querySelector('.as').textContent = `as ${personName(id)}${found ? `, ${ageText(found.pop.age[found.i], world.p.human.maturity)}` : ''}`
             + `${kills ? `, ${kills} ${kills === 1 ? 'kill' : 'kills'}` : ''}`;
         row.querySelector('.n').textContent = members.get(t.id) ?? 0;
         row.querySelector('.aggr span').style.width = `${t.aggression * 100}%`;

@@ -18,7 +18,7 @@
 //
 // Pure: no three.js and no DOM (node tests it).
 import { hash, smoothstep, hexToRgb } from './util.js';
-import { YEAR } from '../play/names.js';
+import { yearOf } from '../play/names.js';
 
 // A vertex's colour role (models.js gives each piece one): its own colour,
 // the skin's, the clothes', or hair (DYE.hair + its style).
@@ -89,8 +89,9 @@ export function clothOf(hex) {
     return rgb([h, CLOTH.sat[0] + CLOTH.sat[1] * s, CLOTH.light[0] + CLOTH.light[1] * l]).map(toLinear);
 }
 
-// How grey a person's hair is at `age` (steps): 0..GREYEST.
-export const greyAt = (age) => GREYEST * smoothstep(GREYING[0] * YEAR, GREYING[1] * YEAR, age);
+// How grey a person's hair is at `age` (steps), by people's `maturity`
+// (human-style years: names.js): 0..GREYEST.
+export const greyAt = (age, maturity) => GREYEST * smoothstep(GREYING[0] * yearOf(maturity), GREYING[1] * yearOf(maturity), age);
 
 // ---- Looks made from the id ----
 
@@ -194,11 +195,12 @@ export class Looks {
         look.greyRgb = linear(GREY);
     }
 
-    // The hair's colour at `age` (steps), grey creeping in: into out (linear).
-    // (The age is kept, for the hair of the dead.)
-    hairAt(look, age, out) {
+    // The hair's colour at `age` (steps; people's `maturity` makes the years),
+    // grey creeping in: into out (linear). (The age is kept, for the hair of
+    // the dead.)
+    hairAt(look, age, maturity, out) {
         look.age = age;
-        const t = greyAt(age);
+        const t = greyAt(age, maturity);
         for (let k = 0; k < 3; k++) out[k] = look.hairRgb[k] + (look.greyRgb[k] - look.hairRgb[k]) * t;
         return out;
     }

@@ -86,6 +86,43 @@ export function meshHeight(T, x, y, out) {
     out[1] = Math.sqrt(gx * gx + gy * gy);
 }
 
+// A soft noise that tiles (it wraps at its edges, like the world): size ×
+// size texels, RGBA bytes, each channel its own noise, R and G of large
+// blotches, B and A finer. For textures (snow's ragged edge, ice's).
+export function tileNoise(size = 64) {
+    const out = new Uint8Array(size * size * 4);
+    const layer = (cells, salt) => {
+        const at = (i, j) => hash(((i % cells) + cells) % cells + (((j % cells) + cells) % cells) * 977 + salt) / 4294967296;
+        return (x, y) => {
+            const fx = (x / size) * cells;
+            const fy = (y / size) * cells;
+            const i = Math.floor(fx);
+            const j = Math.floor(fy);
+            const u = smoothstep(0, 1, fx - i);
+            const v = smoothstep(0, 1, fy - j);
+            const a = at(i, j) + (at(i + 1, j) - at(i, j)) * u;
+            const b = at(i, j + 1) + (at(i + 1, j + 1) - at(i, j + 1)) * u;
+            return a + (b - a) * v;
+        };
+    };
+    const octaves = [[[4, 0x1b], [8, 0x2c], [16, 0x3d]], [[4, 0x4e], [8, 0x5f], [16, 0x60]], [[16, 0x71], [32, 0x82]], [[32, 0x93], [64, 0xa4]]];
+    const fns = octaves.map((o) => o.map(([cells, salt]) => layer(cells, salt)));
+    for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+            for (let c = 0; c < 4; c++) {
+                let v = 0;
+                let w = 0;
+                fns[c].forEach((f, k) => {
+                    v += f(x, y) / 2 ** k;
+                    w += 1 / 2 ** k;
+                });
+                out[(y * size + x) * 4 + c] = Math.round((v / w) * 255);
+            }
+        }
+    }
+    return out;
+}
+
 // A 3×3 box blur of `channels` interleaved values per cell over a wrapping
 // cols × rows grid, in place, counting only cells where `skip` is 0 (a cell
 // with skip set keeps its value and lends none to its neighbours).

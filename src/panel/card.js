@@ -5,6 +5,7 @@
 import { drawFlag } from '../flag.js';
 import { STATE, STATE_LABEL } from '../world.js';
 import { personName, ageText, years } from '../play/names.js';
+import { SLEEPING, SLEEPING_LABEL } from '../view3d/animate.js';
 
 // States shown in the alarm colour.
 const ALARM = new Set([STATE.FLEEING, STATE.CHASING, STATE.FIGHTING, STATE.RAIDING]);
@@ -60,14 +61,14 @@ export function fillCard($, world, id, target, actions) {
         const { pop, i } = target;
         const state = pop.state[i];
         $('f-gen').textContent = `generation ${pop.generation[i]}`;
-        $('f-state').textContent = STATE_LABEL[state];
+        $('f-state').textContent = STATE_LABEL[state] ?? (state === SLEEPING ? SLEEPING_LABEL : '');
         $('f-state').className = ALARM.has(state) ? 'alarm' : '';
         $('f-carry').textContent = Math.round(pop.carry[i]);
         const e = pop.energy[i];
         $('f-energy').textContent = Math.round(e);
         $('f-energy-bar').style.width = `${Math.min(100, (e / P.maxEnergy) * 100)}%`;
         const life = pop.age[i] / pop.lifespan[i];
-        $('f-age').textContent = person ? ageText(pop.age[i]) : `${Math.round(life * 100)}%`;
+        $('f-age').textContent = ageText(pop.age[i], P.maturity);
         $('f-age-bar').style.width = `${Math.min(100, life * 100)}%`;
         const avg = world.meanGenes(pop);
         $('f-speed').textContent = pop.speedGene[i].toFixed(2);
@@ -92,7 +93,7 @@ export function fillCard($, world, id, target, actions) {
     const how = howItEnded(fate);
     const kids = `${fate.children} ${fate.children === 1 ? 'child' : 'children'}`;
     const kills = kind !== 'herbivore' ? `, ${fate.kills} ${fate.kills === 1 ? 'kill' : 'kills'}` : '';
-    const when = person ? `aged ${years(fate.age)}` : `at age ${Math.round(fate.age)}`;
+    const when = `aged ${years(fate.age, P.maturity)}`;
     $('f-fate-text').textContent = `${how} ${when}. Left ${kids}${kills}.`;
     $('f-children').textContent = fate.children;
     $('f-kills').textContent = fate.kills;

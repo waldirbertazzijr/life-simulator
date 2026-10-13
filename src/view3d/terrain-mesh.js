@@ -19,10 +19,19 @@
 // the bare ground and how far full grass moves it, so the refresh stays one
 // multiply-add per channel. Snowfields ride in the texture's alpha channel
 // (see SNOW_FRAGMENT).
+//
+// The seasons (almanac.js): full grass takes the season's colour (fresh in
+// spring, golden in autumn: one more multiply-add per channel, by how much
+// grass shows in each patch); in winter snow settles on the faces that look
+// up, from the snow line down (a ragged edge from a tiling noise), and the
+// lakes freeze in from their shores (the water sheet reads each patch's depth
+// from a small texture).
 import * as THREE from 'three';
 import { COLORS } from '../render.js';
 import { biomeLook, SNOW, CANOPY } from './biomes.js';
-import { smoothstep, blurGrid } from './util.js';
+import { smoothstep, blurGrid, tileNoise } from './util.js';
+import { SNOW_LINE, SNOW_COLOR, SNOW_GLSL } from './haze.js';
+import { SNOW_FADE } from './almanac.js';
 
 const ROCK = COLORS.rock;        // muted warm grey, as on the 2D map
 const SHORE = [44, 56, 52];      // lake bed near the shore...
@@ -52,6 +61,32 @@ const SNOW_FRAGMENT = /* glsl */ `
     float snow = 1.0 - smoothstep( 0.5 - edge, 0.5 + edge, sampledDiffuseColor.a );
     diffuseColor.rgb *= mix( sampledDiffuseColor.rgb, uSnow, snow );
 #endif
+`;
+
+// The season's snow on the ground: from the snow line down (snowAt, with
+// noise for a ragged edge), settled on the faces that look up; the steep
+// ones only dusted.
+const SEASON_SNOW = /* glsl */ `
+{
+    vec2 nuv = vGroundUv * uNoiseScale;
+    float jitter = ( texture2D( uNoise, nuv ).r - 0.5 ) * 0.9 + ( texture2D( uNoise, nuv * 4.0 ).b - 0.5 ) * 0.35;
+    float face = 0.3 + 0.7 * smoothstep( 0.6, 0.86, upward( normal ) );
+    diffuseColor.rgb = mix( diffuseColor.rgb, uSnowColor, smoothstep( 0.2, 0.55, snowAt( vGroundY, jitter ) ) * face );
+}
+`;
+
+// Ice on the lakes, from the shore out to the depth the winter has reached
+// (uIce, 0..1 of 25 units): snowy near the shore, clear grey-blue further out.
+const ICE_FRAGMENT = /* glsl */ `
+{
+    vec2 uv = vWaterXZ / uWorld;
+    float depth = texture2D( uDepth, uv ).r;
+    float n = texture2D( uNoise, uv * uNoiseScale ).g - 0.5;
+    float ice = uIce > 0.001 ? smoothstep( uIce + 0.012, uIce - 0.012, depth + n * 0.07 ) : 0.0;
+    vec3 iceColor = mix( uSnowColor, vec3( 0.2, 0.28, 0.34 ), smoothstep( 0.0, 0.4 * uIce + 0.01, depth + n * 0.04 ) * 0.85 );
+    diffuseColor.rgb = mix( diffuseColor.rgb, iceColor, ice );
+    diffuseColor.a = mix( diffuseColor.a, 0.97, ice );
+}
 `;
 
 // Grass amount (0..255) → colour, as in the 2D view.
@@ -123,24 +158,52 @@ export class Ground {
         this.anisotropy = Math.min(8, gl.capabilities.getMaxAnisotropy());
         this.material = new THREE.MeshLambertMaterial({ flatShading: true });
         const snow = new THREE.Color().setRGB(SNOW[0] / 255, SNOW[1] / 255, SNOW[2] / 255, THREE.SRGBColorSpace);
+        const noise = new THREE.DataTexture(tileNoise(64), 64, 64, THREE.RGBAFormat, THREE.UnsignedByteType);
+        noise.wrapS = THREE.RepeatWrapping;
+        noise.wrapT = THREE.RepeatWrapping;
+        noise.magFilter = THREE.LinearFilter;
+        noise.minFilter = THREE.LinearMipmapLinearFilter;
+        noise.generateMipmaps = true;
+        noise.needsUpdate = true;
+        // The noise tiles the world a whole number of times (so it wraps with it).
+        this.season = { uNoise: { value: noise }, uNoiseScale: { value: new THREE.Vector2(1, 1) }, uSnowLine: SNOW_LINE, uSnowColor: SNOW_COLOR };
         this.material.onBeforeCompile = (shader) => {
             shader.uniforms.uSnow = { value: snow };
+            Object.assign(shader.uniforms, this.season);
+            shader.vertexShader = shader.vertexShader
+                .replace('#include <common>', '#include <common>\nvarying vec2 vGroundUv;\nvarying float vGroundY;')
+                .replace('#include <begin_vertex>', '#include <begin_vertex>\nvGroundUv = uv;\nvGroundY = position.y;');
             shader.fragmentShader = shader.fragmentShader
-                .replace('#include <common>', '#include <common>\nuniform vec3 uSnow;')
-                .replace('#include <map_fragment>', SNOW_FRAGMENT);
+                .replace('#include <common>', `#include <common>\nuniform vec3 uSnow;\nuniform sampler2D uNoise;\nuniform vec2 uNoiseScale;\nvarying vec2 vGroundUv;\nvarying float vGroundY;\n${SNOW_GLSL}`)
+                .replace('#include <map_fragment>', SNOW_FRAGMENT)
+                .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${SEASON_SNOW}`);
         };
         this.material.customProgramCacheKey = () => 'ground';
         this.tiles = [];
         this.geometry = null;
         this.texture = null;
         this.palette = grassPalette();
-        this.water = new THREE.Mesh(
-            new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
-            new THREE.MeshLambertMaterial({ color: WATER, transparent: true, opacity: 0.82, depthWrite: false }),
-        );
+        // The water: a sheet at sea level, freezing at the edges in winter.
+        this.ice = {
+            uDepth: { value: null }, uIce: { value: 0 }, uWorld: { value: new THREE.Vector2(1, 1) },
+            uOrigin: { value: new THREE.Vector2() }, uNoise: this.season.uNoise, uNoiseScale: this.season.uNoiseScale, uSnowColor: SNOW_COLOR,
+        };
+        const water = new THREE.MeshLambertMaterial({ color: WATER, transparent: true, opacity: 0.82, depthWrite: false });
+        water.onBeforeCompile = (shader) => {
+            Object.assign(shader.uniforms, this.ice);
+            shader.vertexShader = shader.vertexShader
+                .replace('#include <common>', '#include <common>\nuniform vec2 uOrigin;\nvarying vec2 vWaterXZ;')
+                .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWaterXZ = ( modelMatrix * vec4( position, 1.0 ) ).xz + uOrigin;');
+            shader.fragmentShader = shader.fragmentShader
+                .replace('#include <common>', '#include <common>\nuniform sampler2D uDepth;\nuniform sampler2D uNoise;\nuniform vec2 uNoiseScale;\nuniform vec2 uWorld;\nuniform float uIce;\nuniform vec3 uSnowColor;\nvarying vec2 vWaterXZ;')
+                .replace('#include <color_fragment>', `#include <color_fragment>\n${ICE_FRAGMENT}`);
+        };
+        water.customProgramCacheKey = () => 'water';
+        this.water = new THREE.Mesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), water);
         this.water.visible = false;
         this.water.frustumCulled = false;
         scene.add(this.water);
+        this.lush = [...COLORS.lush]; // full grass's colour now (the season's)
     }
 
     attach(world, terrain) {
@@ -172,8 +235,30 @@ export class Ground {
         this.bakeBiomes(terrain);
         this.water.visible = !!terrain;
         this.seaLevel = terrain ? terrain.seaLevel : 0;
+        this.bakeSeasons(world, terrain);
         this.frame = 0;
         this.refresh(world);
+    }
+
+    // For the seasons, once per world: the snow line's scale (the sea to the
+    // highest peak), the noise's tiling, and each patch's depth for the ice.
+    bakeSeasons(world, terrain) {
+        let top = this.seaLevel + 1;
+        if (terrain) for (const h of terrain.height) if (h > top) top = h;
+        SNOW_LINE.value.set(1.2, this.seaLevel, top, SNOW_FADE);
+        this.season.uNoiseScale.value.set(Math.max(1, Math.round(world.width / 64)), Math.max(1, Math.round(world.height / 64)));
+        this.ice.uWorld.value.set(world.width, world.height);
+        const { cols, rows, depth } = this;
+        const bytes = new Uint8Array(cols * rows);
+        for (let k = 0; k < bytes.length; k++) bytes[k] = depth[k] > 0 ? Math.min(255, Math.round((depth[k] / 25) * 255)) : 0;
+        this.ice.uDepth.value?.dispose();
+        const tex = new THREE.DataTexture(bytes, cols, rows, THREE.RedFormat, THREE.UnsignedByteType);
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        tex.magFilter = THREE.LinearFilter;
+        tex.minFilter = THREE.LinearFilter;
+        tex.needsUpdate = true;
+        this.ice.uDepth.value = tex;
     }
 
     // Per grass patch, once: how much rock shows (steep or high ground) and
@@ -247,6 +332,7 @@ export class Ground {
         const base = new Float32Array(n * 3);
         const diff = new Float32Array(n * 3);
         const cover = new Float32Array(n);
+        const shows = new Float32Array(n);
         const lush = COLORS.lush;
         for (let k = 0; k < n; k++) {
             const q = k * 3;
@@ -259,6 +345,7 @@ export class Ground {
             const s = rock[k];
             cover[k] = look[k * 5 + 3];
             const show = (1 - CANOPY * cover[k]) * (1 - s);
+            shows[k] = show;
             for (let c = 0; c < 3; c++) {
                 const bare = look[k * 5 + c];
                 base[q + c] = bare + (ROCK[c] - bare) * s;
@@ -271,6 +358,7 @@ export class Ground {
         this.base = base;
         this.diff = diff;
         this.cover = cover;
+        this.shows = shows;
     }
 
     // Each patch is grazed on its own, so the raw field is speckled. A 3×3 box
@@ -298,16 +386,23 @@ export class Ground {
         const g = this.soften(world.grass.g);
         const { pixels: px, palette: lut, rock, depth } = this;
         if (this.base !== null) {
-            // Biomes: bare ground plus grass, one multiply-add per channel.
+            // Biomes: bare ground plus grass, one multiply-add per channel,
+            // and one more for the season's colour of the grass (sx, sy, sz:
+            // how far it is from summer's, where the grass shows).
             // (Water has no grass to add; the alpha, snow, was set once.)
-            const { base, diff } = this;
+            const { base, diff, shows } = this;
+            const L = COLORS.lush;
+            const sx = this.lush[0] - L[0];
+            const sy = this.lush[1] - L[1];
+            const sz = this.lush[2] - L[2];
             for (let k = 0, n = g.length; k < n; k++) {
                 const t = GREEN[Math.min(255, (g[k] * 255) | 0)];
                 const q = k * 3;
                 const o = k * 4;
-                px[o] = base[q] + diff[q] * t;
-                px[o + 1] = base[q + 1] + diff[q + 1] * t;
-                px[o + 2] = base[q + 2] + diff[q + 2] * t;
+                const st = shows[k] * t;
+                px[o] = base[q] + diff[q] * t + sx * st;
+                px[o + 1] = base[q + 1] + diff[q + 1] * t + sy * st;
+                px[o + 2] = base[q + 2] + diff[q + 2] * t + sz * st;
             }
             this.texture.needsUpdate = true;
             return;
@@ -340,7 +435,12 @@ export class Ground {
         this.texture.needsUpdate = true;
     }
 
-    update(world) {
+    // Each frame: the season (almanac.js seasonLook): the grass's colour, the
+    // snow line, the ice; the texture is refreshed every few frames.
+    update(world, look) {
+        this.lush = look.lush;
+        SNOW_LINE.value.x = look.line;
+        this.ice.uIce.value = look.ice;
         if (++this.frame % REFRESH === 0) this.refresh(world);
     }
 
@@ -375,6 +475,7 @@ export class Ground {
         if (this.water.visible) {
             this.water.position.set((view.minX + view.maxX) / 2, this.seaLevel, (view.minZ + view.maxZ) / 2);
             this.water.scale.set(view.maxX - view.minX, 1, view.maxZ - view.minZ);
+            this.ice.uOrigin.value.set(fx, fz);
         }
     }
 }

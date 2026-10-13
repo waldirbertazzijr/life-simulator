@@ -16,6 +16,8 @@ import { Sparkline } from './panel/sparkline.js';
 import { fillCard } from './panel/card.js';
 import { TribeList, LegendList, fillPicker } from './panel/lists.js';
 import { wireCredits } from './panel/credits.js';
+import { dateLabel } from './calendar.js';
+import { clockOf } from './view3d/almanac.js';
 
 const PEOPLE_COLOR = '#7fb3ff';
 
@@ -284,9 +286,12 @@ export class Panel {
         $('g-c-speed').textContent = fmt(gc.speed, world.carnivores.n);
         $('g-c-sense').textContent = fmt(gc.sense, world.carnivores.n);
 
+        // The date (the calendar as the page shows it: view3d/almanac.js), and
+        // the step count on hover.
         const t = world.time;
         const time = t < 1000 ? `${t}` : t < 1e6 ? `${(t / 1000).toFixed(1)}k` : `${(t / 1e6).toFixed(2)}M`;
-        let status = `step ${time}${world.watch ? '' : ' · click anyone to follow them'}`;
+        $('status').title = `step ${time}`;
+        let status = `${dateLabel(world.p.calendar, clockOf(world))}${world.watch ? '' : ' · click anyone to follow them'}`;
         if (!world.herbivores.n || !world.carnivores.n) {
             status = `${world.herbivores.n ? 'carnivores' : 'herbivores'} went extinct · press R`;
         }

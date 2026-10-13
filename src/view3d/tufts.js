@@ -30,9 +30,16 @@
 //   wetland shores some tufts are reeds: taller, darker, with straw heads.
 //   That too is decided once per world; a tuft's colours are picked on the
 //   graphics card from a small table, by a number packed into its seed.
+// - The seasons (almanac.js): the palettes turn golden in autumn and dry in
+//   winter, and tufts sink under the snow (haze.js snowAt). In spring,
+//   flowers open among the meadow's grass (and a few on the steppe): a second
+//   instanced mesh, filled in the same pass over the disc; each flower opens
+//   when the season's bloom passes its own threshold, so they come and go a
+//   few at a time.
 import * as THREE from 'three';
 import { TUFT_PALETTES, REEDS, biomeLook } from './biomes.js';
 import { wrap, wrapDelta, hash, meshHeight, smoothstep } from './util.js';
+import { SNOW_LINE, SNOW_COLOR, SNOW_GLSL } from './haze.js';
 
 const GRID = 5;           // places for a tuft in each grass patch: a GRID × GRID grid
 const SLOTS = GRID * GRID;
@@ -46,6 +53,15 @@ const UNDER_TREES = 0.75; // share of the slots left empty under a full forest c
 const REED_H = 2.3;       // reeds are this much taller than a tuft
 const REED_SHARE = 0.5;   // share of the wetland slots by the water that are reeds
 const PALETTES = TUFT_PALETTES.length;
+const FLOWERS = { meadow: 14, steppe: 5 }; // of 256: the share of a biome's slots with a flower
+const FLOWER_H = 1.5;     // a flower's height (world units)
+// Petals (sRGB): white, yellow, violet, pink, blue; the stem; the heart.
+const PETALS = [[236, 232, 220], [234, 198, 70], [148, 110, 190], [222, 138, 168], [118, 150, 214]];
+const STEM = [70, 104, 52];
+const HEART = [240, 200, 80];
+// The grass turning: tips and roots toward gold (autumn), toward straw (winter).
+const GOLD = { tip: [206, 176, 92], root: [120, 104, 52] };
+const DRY = { tip: [158, 146, 106], root: [92, 86, 62] };
 
 // Where slot s of a patch has its tuft, as a fraction (0..1) of the patch
 // across and down: somewhere in its own cell of the GRID × GRID grid, chosen
@@ -114,6 +130,8 @@ vec3 transformed = vec3( position );
     float sd = fract( seed );
     float fade = 1.0 - smoothstep( uDisc.x, uDisc.y, distance( tuft.xz, uCenter ) );
     fade *= ( 1.0 - smoothstep( uFar.x, uFar.y, distance( tuft.xyz, uCam ) ) ) * uShow;
+    // Under the snow, but for a few blades.
+    fade *= 1.0 - 0.9 * smoothstep( 0.2, 0.7, snowAt( tuft.y, ( fract( sd * 7.7 ) - 0.5 ) * 0.8 ) );
     float a = sd * 6.2831853;
     float c = cos( a );
     float s = sin( a );
@@ -137,7 +155,82 @@ vec3 transformed = vec3( position );
 `;
 
 // A palette's colours as three.js colours (linear, as the shader wants them).
-const linear = (rgb) => new THREE.Color().setRGB(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255, THREE.SRGBColorSpace);
+const linear = (rgb, c = new THREE.Color()) => c.setRGB(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255, THREE.SRGBColorSpace);
+const mix3 = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+
+// One flower at the origin, FLOWER_H tall: a thin stem with two leaves, and a
+// head of five petals around a heart, opening a little upward. Its `color`
+// is (shade, part, 0): part 0 the stem, 1 a petal, 2 the heart; the shader
+// gives each its colour. Normals point up, as the tufts' do.
+function flowerGeometry() {
+    const pos = [];
+    const col = [];
+    const tri = (a, b, c, part, shade = 1) => {
+        pos.push(...a, ...b, ...c);
+        for (let k = 0; k < 3; k++) col.push(shade, part, 0);
+    };
+    const h = 1;
+    tri([-0.05, 0, 0], [0.05, 0, 0], [0, h, 0], 0, 0.9);
+    tri([0, 0, -0.05], [0, 0, 0.05], [0, h, 0], 0, 0.8);
+    tri([0, 0.25, 0], [0.32, 0.42, 0.06], [0.02, 0.36, 0], 0, 1.05); // leaves
+    tri([0, 0.32, 0], [-0.28, 0.5, -0.08], [-0.02, 0.42, 0], 0, 1);
+    const n = 5;
+    for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2;
+        const b = a + Math.PI / n;
+        const c = a - Math.PI / n;
+        const r = 0.36;
+        tri([0, h, 0], [Math.cos(c) * r * 0.5, h + 0.06, Math.sin(c) * r * 0.5], [Math.cos(a) * r, h + 0.2, Math.sin(a) * r], 1, 0.92 + 0.08 * (i % 2));
+        tri([0, h, 0], [Math.cos(a) * r, h + 0.2, Math.sin(a) * r], [Math.cos(b) * r * 0.5, h + 0.06, Math.sin(b) * r * 0.5], 1, 1.04);
+    }
+    tri([-0.06, h + 0.08, -0.04], [0.07, h + 0.08, -0.03], [0, h + 0.1, 0.07], 2, 1);
+    const g = new THREE.InstancedBufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(new Array(pos.length / 3).fill([0, 1, 0]).flat(), 3));
+    return g;
+}
+
+// A flower's vertex shader: placed and faded as a tuft, opened by the bloom.
+const FLOWER_PARS = /* glsl */ `
+attribute vec4 tuft;   // where it stands (from the disc's centre) and how tall
+attribute float seed;  // whole part: its petals' colour; fraction: its own number
+uniform vec3 uPetal[ ${PETALS.length} ];
+uniform vec3 uStem;
+uniform vec3 uHeart;
+uniform vec2 uCenter;
+uniform vec2 uDisc;
+uniform vec3 uCam;
+uniform vec2 uFar;
+uniform float uShow;
+uniform vec2 uOrigin;
+uniform vec2 uWaveK;
+uniform vec2 uWind;
+uniform float uBloom;  // 0..1: the season's flowers
+`;
+const FLOWER_MAIN = /* glsl */ `
+vec3 transformed = vec3( position );
+{
+    float sd = fract( seed );
+    float fade = 1.0 - smoothstep( uDisc.x, uDisc.y, distance( tuft.xz, uCenter ) );
+    fade *= ( 1.0 - smoothstep( uFar.x, uFar.y, distance( tuft.xyz, uCam ) ) ) * uShow;
+    // Each opens when the bloom passes its own threshold, and closes again after.
+    float thr = 0.05 + 0.85 * fract( sd * 7.31 );
+    fade *= smoothstep( thr, thr + 0.08, uBloom );
+    float a = sd * 6.2831853;
+    float c = cos( a );
+    float s = sin( a );
+    transformed.xz = vec2( c * transformed.x - s * transformed.z, s * transformed.x + c * transformed.z );
+    transformed *= tuft.w * fade;
+    vec2 here = tuft.xz + uOrigin;
+    float gust = 0.55 + 0.45 * sin( dot( uWaveK, here ) - uWind.x );
+    transformed.xz += normalize( uWaveK ) * transformed.y * transformed.y * ( 0.1 * gust + 0.03 * sin( uWind.y + sd * 6.2831853 ) );
+    transformed += tuft.xyz;
+    int part = int( color.g + 0.5 );
+    vec3 tint = part == 0 ? uStem : part == 1 ? uPetal[ int( seed ) ] : uHeart;
+    vColor = tint * color.r * ( 0.9 + 0.2 * fract( sd * 31.17 ) );
+}
+`;
 
 export class Tufts {
     constructor(scene) {
@@ -152,12 +245,14 @@ export class Tufts {
             uWind: { value: new THREE.Vector2() },
             uRoot: { value: TUFT_PALETTES.map((p) => linear(p.root)) },
             uTip: { value: TUFT_PALETTES.map((p) => linear(p.tip)) },
+            uSnowLine: SNOW_LINE,
+            uSnowColor: SNOW_COLOR,
         };
         this.material = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
         this.material.onBeforeCompile = (shader) => {
             Object.assign(shader.uniforms, this.uniforms);
             shader.vertexShader = shader.vertexShader
-                .replace('#include <common>', `#include <common>\n${VERTEX_PARS}`)
+                .replace('#include <common>', `#include <common>\n${VERTEX_PARS}\n${SNOW_GLSL}`)
                 .replace('#include <begin_vertex>', VERTEX_MAIN);
             // Seen from behind, a double-sided triangle normally turns its
             // normal around; a blade should be lit the same from both sides.
@@ -187,6 +282,40 @@ export class Tufts {
         this.mesh.visible = false;
         scene.add(this.mesh);
 
+        // The flowers: the tufts' disc and wind, their own colours and bloom.
+        const u = this.uniforms;
+        this.flowerU = {
+            uCenter: u.uCenter, uDisc: u.uDisc, uCam: u.uCam, uFar: u.uFar, uShow: u.uShow, uOrigin: u.uOrigin, uWaveK: u.uWaveK, uWind: u.uWind,
+            uPetal: { value: PETALS.map((p) => linear(p)) }, uStem: { value: linear(STEM) }, uHeart: { value: linear(HEART) },
+            uBloom: { value: 0 },
+        };
+        const flowers = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+        flowers.onBeforeCompile = (shader) => {
+            Object.assign(shader.uniforms, this.flowerU);
+            shader.vertexShader = shader.vertexShader
+                .replace('#include <common>', `#include <common>\n${FLOWER_PARS}`)
+                .replace('#include <begin_vertex>', FLOWER_MAIN);
+            shader.fragmentShader = shader.fragmentShader.replace(
+                '#include <normal_fragment_begin>',
+                THREE.ShaderChunk.normal_fragment_begin.replace('normal *= faceDirection;', ''),
+            );
+        };
+        flowers.customProgramCacheKey = () => 'flowers';
+        this.flowerCap = Math.ceil(cap * 0.08);
+        this.flowerData = new Float32Array(this.flowerCap * 4);
+        this.flowerSeeds = new Float32Array(this.flowerCap);
+        this.flowerGeometry = flowerGeometry();
+        this.flowerAttr = new THREE.InstancedBufferAttribute(this.flowerData, 4).setUsage(THREE.DynamicDrawUsage);
+        this.flowerSeedAttr = new THREE.InstancedBufferAttribute(this.flowerSeeds, 1).setUsage(THREE.DynamicDrawUsage);
+        this.flowerGeometry.setAttribute('tuft', this.flowerAttr);
+        this.flowerGeometry.setAttribute('seed', this.flowerSeedAttr);
+        this.flowerGeometry.instanceCount = 0;
+        this.flowers = new THREE.Mesh(this.flowerGeometry, flowers);
+        this.flowers.frustumCulled = false;
+        this.flowers.visible = false;
+        scene.add(this.flowers);
+        this.bloom = 0;
+
         this.out = [0, 0];
         this.center = { x: 0, z: 0, r: 0 }; // the disc as last filled (world x, y and radius)
         // JavaScript cost: ms for the last refill and smoothed; ms per frame
@@ -207,6 +336,8 @@ export class Tufts {
         this.center.r = 0;
         this.geometry.instanceCount = 0;
         this.mesh.visible = false;
+        this.flowerGeometry.instanceCount = 0;
+        this.flowers.visible = false;
         this.Y = null;
         this.palette = null;
         if (terrain) {
@@ -290,12 +421,26 @@ export class Tufts {
         this.palette = palette;
     }
 
+    // The season (almanac.js seasonLook): the palettes turn, the flowers open.
+    season(look) {
+        const u = this.uniforms;
+        TUFT_PALETTES.forEach((p, k) => {
+            const tip = mix3(mix3(p.tip, GOLD.tip, 0.7 * look.gold), DRY.tip, 0.6 * look.dry);
+            const root = mix3(mix3(p.root, GOLD.root, 0.5 * look.gold), DRY.root, 0.5 * look.dry);
+            linear(tip, u.uTip.value[k]);
+            linear(root, u.uRoot.value[k]);
+        });
+        this.bloom = look.bloom;
+        this.flowerU.uBloom.value = look.bloom;
+    }
+
     // Every frame: choose the disc for this view, refill it if needed, and
     // move it into place under the floating origin.
-    update(world, view, camera, ground) {
+    update(world, view, camera, ground, look) {
         const t0 = performance.now();
         const { W, H } = this;
         const st = this.stats;
+        this.season(look);
         // How far away a tuft is still MIN_PX tall, and how high the camera is
         // above the ground: together, how big a disc is worth filling.
         const far = TUFT_H / (MIN_PX * view.unitPx);
@@ -309,7 +454,9 @@ export class Tufts {
         const show = smoothstep(4, 7, TUFT_H / (above * view.unitPx));
         if (R < 20 || show <= 0) {
             this.mesh.visible = false;
+            this.flowers.visible = false;
             this.geometry.instanceCount = 0;
+            this.flowerGeometry.instanceCount = 0;
             this.center.r = 0;
             st.count = 0;
             this.measure(t0, false);
@@ -343,11 +490,13 @@ export class Tufts {
 
         const n = this.geometry.instanceCount;
         this.mesh.visible = n > 0;
+        this.flowers.visible = this.flowerGeometry.instanceCount > 0 && this.bloom > 0.05;
         st.count = n;
         // The filled disc's centre, relative to the floating origin.
         const mx = wrapDelta(c.x - view.fx, W);
         const mz = wrapDelta(c.z - view.fz, H);
         this.mesh.position.set(mx, 0, mz);
+        this.flowers.position.set(mx, 0, mz);
         const u = this.uniforms;
         u.uCenter.value.set(wrapDelta(cx - c.x, W), wrapDelta(cz - c.z, H));
         u.uDisc.value.set(0.65 * R, 0.88 * R);
@@ -379,6 +528,9 @@ export class Tufts {
         const Y = this.Y;
         const P = this.palette;
         const { data, seeds, capacity } = this;
+        const { flowerData, flowerSeeds, flowerCap } = this;
+        const blooming = this.bloom > 0;
+        let nf = 0;
         const R2 = R * R;
         const reach = R + Math.hypot(cellW, cellH) / 2;
         const j0 = Math.floor((cz - reach) / cellH);
@@ -447,6 +599,17 @@ export class Tufts {
                     data[o + 2] = z;
                     data[o + 3] = TUFT_H * size * (0.55 + 0.45 * here) * grow * (2 - grow);
                     seeds[n] = p + (h2 & 0xffff) / 65536;
+                    // A flower beside it, in season, in a meadow or on the steppe.
+                    const fl = (h2 >>> 16) & 255;
+                    if (blooming && nf < flowerCap && fl < (p === 0 ? FLOWERS.meadow : p === 3 ? FLOWERS.steppe : 0)) {
+                        const f = nf * 4;
+                        flowerData[f] = x + 0.35;
+                        flowerData[f + 1] = y;
+                        flowerData[f + 2] = z - 0.25;
+                        flowerData[f + 3] = FLOWER_H * (0.75 + 0.5 * ((h2 >>> 8) & 255) / 255) * grow;
+                        flowerSeeds[nf] = (fl % PETALS.length) + ((h1 >>> 4) & 0xfff) / 4096;
+                        nf++;
+                    }
                     if (++n >= capacity) break;
                 }
             }
@@ -466,5 +629,15 @@ export class Tufts {
             this.seedAttr.addUpdateRange(0, n);
             this.seedAttr.needsUpdate = true;
         }
+        this.flowerGeometry.instanceCount = nf;
+        if (nf) {
+            this.flowerAttr.clearUpdateRanges();
+            this.flowerAttr.addUpdateRange(0, nf * 4);
+            this.flowerAttr.needsUpdate = true;
+            this.flowerSeedAttr.clearUpdateRanges();
+            this.flowerSeedAttr.addUpdateRange(0, nf);
+            this.flowerSeedAttr.needsUpdate = true;
+        }
+        this.stats.flowers = nf;
     }
 }

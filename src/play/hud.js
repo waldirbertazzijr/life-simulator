@@ -118,7 +118,7 @@ export class Hud {
             const el = this.root.querySelector(`.vbar.${k}`);
             this.bars[k] = { bar: new TrailBar(), fill: el.querySelector('.fill'), trail: el.querySelector('.trail') };
         }
-        this.shown = { name: null, age: null, flag: null, store: null, prompt: null, reload: null, charge: null, call: null, gear: null, item: null, mats: null, pouch: null, work: null };
+        this.shown = { name: null, age: null, date: null, flag: null, store: null, prompt: null, reload: null, charge: null, call: null, gear: null, item: null, mats: null, pouch: null, work: null };
         this.toolSlot = $('hud-tool');
         this.pouchSlot = $('hud-pouch');
         this.workEl = $('hud-work');
@@ -147,6 +147,7 @@ export class Hud {
         const shown = this.shown;
         if (s.name !== shown.name) $('hud-name').textContent = shown.name = s.name;
         if (s.age !== shown.age) $('hud-age').textContent = shown.age = s.age;
+        if (s.date !== shown.date) $('hud-date').textContent = shown.date = s.date ?? '';
         if (s.tribe?.flag !== shown.flag) {
             shown.flag = s.tribe?.flag ?? null;
             const c = this.flagCanvas;
@@ -357,7 +358,10 @@ export class Hud {
     }
 
     // N, E, S and W, ticks every 15°, a mark straight ahead, your camp's flag
-    // and the locked target, for the half of the horizon you face.
+    // and the locked target, for the half of the horizon you face; and the
+    // sun, or at night the moon in its phase, where it stands (held at the
+    // strip's end, dimmed, while it is behind you): the time of day at a
+    // glance.
     drawCompass(s) {
         const c = this.compass;
         const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -394,6 +398,7 @@ export class Hud {
             }
         }
         ctx.globalAlpha = 1;
+        if (s.sky) this.skyMark(ctx, s.sky, facing, w, mid);
         // Straight ahead.
         ctx.fillStyle = 'rgba(238, 232, 218, 0.8)';
         ctx.fillRect(Math.round(w / 2) - 0.5, 0, 1, 3);
@@ -423,6 +428,53 @@ export class Hud {
                 ctx.stroke();
             }
         }
+    }
+
+    // The sun (a disc with short rays) or the moon (lit on the side toward
+    // the sun, as it is in the sky) on the compass: hud-state.js skyMarks.
+    skyMark(ctx, sky, facing, w, mid) {
+        const b = bearing(sky.angle);
+        let x = stripX(b, facing, w);
+        const behind = x === null;
+        if (behind) {
+            const d = ((((b - facing) % 360) + 540) % 360) - 180;
+            x = d > 0 ? w * 0.9 : w * 0.1;
+        }
+        ctx.save();
+        ctx.globalAlpha = behind ? 0.45 : 1;
+        const y = mid - 1;
+        if (sky.body === 'sun') {
+            ctx.fillStyle = 'rgba(243, 212, 140, 0.95)';
+            ctx.strokeStyle = 'rgba(243, 212, 140, 0.85)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(x, y, 3.2, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            for (let k = 0; k < 8; k++) {
+                const a = (k / 8) * Math.PI * 2;
+                ctx.moveTo(x + Math.cos(a) * 5, y + Math.sin(a) * 5);
+                ctx.lineTo(x + Math.cos(a) * 7, y + Math.sin(a) * 7);
+            }
+            ctx.stroke();
+        } else {
+            const r = 4.5;
+            // The dark face, faint; then the lit part, toward the sun (half
+            // a turn round the sky from the moon's phase).
+            ctx.fillStyle = 'rgba(238, 232, 218, 0.16)';
+            ctx.beginPath();
+            ctx.arc(x, y, r, 0, Math.PI * 2);
+            ctx.fill();
+            const e = Math.PI * 2 * Math.min(sky.phase, 1 - sky.phase); // the sun's angle from the moon: 0 new .. π full
+            const s = ((((bearing(sky.sun) - b) % 360) + 540) % 360) - 180 > 0 ? 1 : -1; // the sun's side on the strip
+            const crescent = Math.cos(e) > 0;
+            ctx.fillStyle = 'rgba(236, 232, 218, 0.95)';
+            ctx.beginPath();
+            ctx.arc(x, y, r, -Math.PI / 2, Math.PI / 2, s < 0);
+            ctx.ellipse(x, y, r * Math.abs(Math.cos(e)), r, 0, Math.PI / 2, -Math.PI / 2, s > 0 ? crescent : !crescent);
+            ctx.fill();
+        }
+        ctx.restore();
     }
 
     // Your tribe's standing order on the compass: a pole with a pennant in
