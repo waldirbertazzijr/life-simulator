@@ -10,7 +10,11 @@
 //   cycle-weapon cycle-tool cycle-pouch cycle-call      (the arrow keys)
 //   attack {heavy, power}   left click; held past TAP_MS, heavy: power is how
 //                           long it was held, up to CHARGE_MS (0..1)
-//   tool, art               right click, Shift + right click
+//   tool, skill             right click, Shift + right click (with the
+//                           pointer locked or not)
+//
+// A menu open on top (the craft menu) sets `capture(code, repeat)`: keys it
+// takes (returning true) go to it alone, and clicks on the view do nothing.
 //
 // Held past TAP_MS, Space sprints (`sprinting`), and the left button
 // charges (`charging`, `charge`). Keys go by physical key (event.code), so
@@ -92,6 +96,7 @@ export class Input {
         this.lookX = 0;        // mouse movement (px) not yet taken
         this.lookY = 0;
         this.onAction = () => {};
+        this.capture = null;   // (code, repeat) => taken?, while a menu is open
 
         target.addEventListener('keydown', (e) => this.keydown(e));
         target.addEventListener('keyup', (e) => this.keyup(e));
@@ -146,6 +151,10 @@ export class Input {
             }
             return;
         }
+        if (this.capture && this.capture(e.code, e.repeat)) {
+            e.preventDefault();
+            return;
+        }
         const move = MOVE[e.code];
         if (move) {
             e.preventDefault();
@@ -177,10 +186,13 @@ export class Input {
     }
 
     pointerdown(e) {
-        if (this.mode !== 'body') return;
+        if (this.mode !== 'body' || this.capture) return;
+        if (e.button === 2) {
+            this.onAction(e.shiftKey ? 'skill' : 'tool');
+            return;
+        }
         if (this.locked) {
             if (e.button === 0) this.click.down(this.now());
-            else if (e.button === 2) this.onAction(e.shiftKey ? 'art' : 'tool');
             return;
         }
         if (e.button !== 0) return;

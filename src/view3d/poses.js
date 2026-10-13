@@ -14,6 +14,12 @@ import { COLORS } from '../render.js';
 import { SHAPES, CHILD, Herd, herdMaterial } from './creatures.js';
 import { Effects } from './effects.js';
 import { POSE, POSE_NAMES, POSES } from './animate.js';
+import { Items, ITEM_SHAPES } from './items.js';
+import { Thrown } from './thrown.js';
+import { Sparks } from './sparks.js';
+
+const BEAT = 1.2;  // seconds between the items lineup's shots and skills...
+const SLOW = 4;    // ...which play this many times slower than life, to be seen
 
 const SKY = '#b3c9da';
 const GRASS = '#5d7448';
@@ -22,12 +28,35 @@ const PAUSE = 0.8;     // seconds between the plays of a sequence...
 const LIE = 1.6;       // ...and how long the fallen lie before falling again
 const FACING = 0.45;   // everyone turned a little toward the camera
 
+// `?poses=items` (package 3): people holding each kind of item, standing,
+// walking, in the poses that move it, and at work (the weapon put down);
+// and every kind lying on the ground in front. Rare ones in the middle row,
+// legendary ones (glinting) at the back.
+// (`?poses=items1`: only that row, closer.)
+function itemRows(which) {
+    const P = POSE;
+    // ([code, progress]: that pose stopped at that point.)
+    const all = [
+        { kind: 'human', gap: 8, holds: ['spear', 'knife'], rarity: 0, columns: ['stand', 'walk', [P.THROW, 1 / 3], [P.THROW, 0.55], [P.JAB, 0.6], P.BUTCHER, P.SIT] },
+        { kind: 'human', gap: 8, holds: ['bow', 'torch'], rarity: 1, columns: ['stand', 'walk', [P.SHOOT, 1 / 3], [P.SHOOT, 0.6], P.GATHER, P.KNAP] },
+        { kind: 'human', gap: 8, holds: ['club', 'basket'], rarity: 2, columns: ['stand', 'walk', [P.SWING, 1 / 3], [P.SWING, 0.6], P.CHOP, P.CRAFT] },
+    ];
+    const list = which >= 0 && which < all.length ? [all[which]] : all;
+    let z = 0;
+    for (const row of list) {
+        row.z = z;
+        z -= 13;
+    }
+    return list;
+}
+
 // The rows, front to back: what each column shows ('walk', 'run' or a pose).
 // People take three: moving and fighting, standing and resting, working.
 function rows(only) {
+    if (only?.startsWith('items')) return itemRows(only.length > 5 ? Number(only.slice(5)) : -1);
     const P = POSE;
     const all = [
-        { kind: 'human', gap: 8, columns: ['walk', 'run', P.THROW, P.JAB, P.SWING, P.ROLL] },
+        { kind: 'human', gap: 8, columns: ['walk', 'run', P.THROW, P.JAB, P.SWING, P.SHOOT, P.ROLL] },
         { kind: 'human', gap: 8, columns: [P.FALL, P.CROUCH, P.EAT, P.SIT, 'child walk', 'child hop'] },
         { kind: 'human', gap: 8, columns: [P.GATHER, P.BUTCHER, P.CHOP, P.KNAP, P.CRAFT] },
         { kind: 'herbivore', gap: 11, columns: ['walk', 'run', P.GRAZE, P.FALL] },
@@ -91,7 +120,9 @@ export class Lineup {
             row.x0 = (-(row.columns.length - 1) * row.gap) / 2;
             width = Math.max(width, row.columns.length * row.gap);
             row.columns.forEach((col, c) => {
-                const text = typeof col === 'number' ? POSE_NAMES[col].toLowerCase() : col;
+                const text = row.holds && col === 'stand' ? row.holds.join(' + ')
+                    : Array.isArray(col) ? `${POSE_NAMES[col[0]].toLowerCase()} ${Math.round(col[1] * 100)}%`
+                    : typeof col === 'number' ? POSE_NAMES[col].toLowerCase() : col;
                 const sprite = label(text, row.gap * 0.85);
                 sprite.position.set(row.x0 + c * row.gap, 0.6, row.z + 4.5);
                 this.scene.add(sprite);
@@ -110,6 +141,85 @@ export class Lineup {
         };
         this.falls = new Map(); // column → the play it last sprayed at
         this.t0 = performance.now();
+        if (only?.startsWith('items')) this.holding();
+    }
+
+    // The items lineup's flights and marks: each beat, from the figures
+    // holding the bow, the spear and the club (their third column), along
+    // the way they face.
+    flights(real) {
+        const t = real / SLOW;
+        const beat = Math.floor(t / BEAT);
+        if (beat !== this.beat) {
+            this.beat = beat;
+            const events = [];
+            const dx = Math.cos(FACING);
+            const dy = Math.sin(FACING);
+            for (const row of this.rows) {
+                const x = row.x0 + 2 * row.gap;
+                const y = row.z;
+                const kind = row.holds[0];
+                if (kind === 'bow') {
+                    // An arrow; then a volley (in the world, three real arrows: as three here).
+                    for (const turn of beat % 2 === 0 ? [0] : [-0.17, 0, 0.17]) {
+                        const a = FACING + turn;
+                        events.push({ type: 'throw', id: 0, x, y, tx: x + Math.cos(a) * 30, ty: y + Math.sin(a) * 30, hit: false, weapon: 'bow' });
+                    }
+                } else events.push({ type: 'skill', id: 0, kind, x, y, dx, dy });
+            }
+            this.thrown.clock = t;
+            this.thrown.handle(events, null, -1);
+            this.sparks.handle(events, () => 0, t);
+        }
+        this.thrown.update({ p: { play: {} }, spears: null }, this.view, () => 0, t);
+        this.sparks.update(this.view, t);
+    }
+
+    // The items lineup: a small world of the figures, what they hold and
+    // what lies in front, and a motion that tells items.js each one's pose.
+    holding() {
+        this.items = new Items(this.scene);
+        // On a beat: the archer looses an arrow, then a volley; the
+        // spearman's piercing streak; the clubman's slam.
+        this.thrown = new Thrown(this.scene);
+        this.thrown.attach();
+        this.sparks = new Sparks(this.scene);
+        this.sparks.attach();
+        this.beat = -1;
+        const humans = { n: 0, id: [], x: [], y: [], heading: [], age: [] };
+        const byBearer = new Map();
+        const items = new Map();
+        let id = 0;
+        const item = (kind, rarity, bearer, x = 0, y = 0) => {
+            const it = { id: ++id + 1000, kind, rarity, legend: rarity === 2 ? { name: 'Grey Fang', history: [] } : null, bearer, x, y, wear: 1 };
+            items.set(it.id, it);
+            return it;
+        };
+        for (const row of this.rows) {
+            row.ids = row.columns.map((_, c) => {
+                const pid = ++id;
+                humans.id.push(pid);
+                humans.x.push(row.x0 + c * row.gap);
+                humans.y.push(row.z);
+                humans.heading.push(FACING);
+                humans.age.push(1e4);
+                humans.n++;
+                byBearer.set(pid, { weapon: item(row.holds[0], row.rarity, pid), tool: item(row.holds[1], row.rarity, pid) });
+                return pid;
+            });
+        }
+        ITEM_SHAPES.forEach((kind, k) => item(kind, k === 2 ? 2 : k === 4 ? 1 : 0, 0, -12 + k * 4.8, 5.5));
+        this.world = { humans, byBearer, items, p: { human: { maturity: 0 } } };
+        this.figures = new Map(); // id → its stride and pose this frame
+        const figures = this.figures;
+        this.motion = {
+            posed(pid) {
+                const f = figures.get(pid);
+                if (!f) return false;
+                Object.assign(this, f);
+                return true;
+            },
+        };
     }
 
     // Frame the whole lineup from in front and above, in the part of the
@@ -171,7 +281,12 @@ export class Lineup {
                 let amount = 0;
                 let code = POSE.NONE;
                 let progress = 0;
-                if (col === 'walk' || col === 'child walk' || col === 'run') {
+                if (col === 'stand') {
+                    // (At rest.)
+                } else if (Array.isArray(col)) {
+                    code = col[0];
+                    progress = col[1];
+                } else if (col === 'walk' || col === 'child walk' || col === 'run') {
                     // On the spot, at the stride its speed would take.
                     const run = col === 'run';
                     amount = run ? 2 : 1;
@@ -201,9 +316,14 @@ export class Lineup {
                 herd.poses[k * 3] = code;
                 herd.poses[k * 3 + 1] = progress;
                 herd.poses[k * 3 + 2] = code === POSE.NONE ? 0 : 1;
+                if (row.ids) this.figures.set(row.ids[c], { phase, amount, code, progress, weight: code === POSE.NONE ? 0 : 1 });
             });
         }
         for (const kind of Object.keys(this.herds)) this.herds[kind].commit(counts[kind]);
+        if (this.items) {
+            this.items.update(this.world, this.view, () => 0, this.motion, 0, t);
+            this.flights(t);
+        }
         this.effects.tick(t, 0);
         this.effects.update(this.view);
         gl.render(this.scene, this.camera);

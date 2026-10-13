@@ -10,10 +10,15 @@
 // food, up to MEAT_CAP, so a well-fed camp's rack is full, a hungry one's
 // bare, and a raid can be seen emptying it. All racks are one instanced mesh,
 // and all the meat another.
+//
+// Beside the rack lie the store's materials (package 3): a woodpile at one
+// end, a heap of flint at the other, a stack of hides in front, each as big
+// as the store holds (pileOf), up to a cap. Three more instanced meshes.
 import * as THREE from 'three';
 import { drawFlag } from '../flag.js';
-import { rackShape, meatShape, RACK_RIDGE, RACK_HALF } from './shapes.js';
+import { rackShape, meatShape, RACK_RIDGE, RACK_HALF, part, merge } from './shapes.js';
 import { wrapDelta, TAU, hash } from './util.js';
+import { showWhile } from './items.js';
 
 // Near the ground the pole stands a little taller than a person (people are
 // about 4.8 tall); in the map view the flag grows with distance, so it stays
@@ -37,6 +42,37 @@ const WOOD = '#6f604c';
 const MEAT = '#874233';
 // The place along the ridge the k-th strip takes: from the middle outward.
 const SLOTS = [4, 5, 3, 6, 2, 7, 1, 8, 0, 9];
+
+// The materials' piles: a log for every WOOD_EACH of wood, a stone for
+// each flint, a hide for each hide, up to their caps.
+export const PILE_CAP = { logs: 15, stones: 12, hides: 8 };
+const WOOD_EACH = 2;
+const FLINT = '#7d7c78';
+const HIDE = '#8e6040';
+const LOG_ROWS = [5, 4, 3, 2, 1]; // logs in each row of the woodpile, bottom up
+
+// How big each pile is for a tribe's store ({wood, flint, hide}; absent: none).
+export function pileOf(tribe) {
+    const n = (v, each, cap) => (v > 0 ? Math.min(cap, Math.ceil(v / each)) : 0);
+    return {
+        logs: n(tribe.wood, WOOD_EACH, PILE_CAP.logs),
+        stones: n(tribe.flint, 1, PILE_CAP.stones),
+        hides: n(tribe.hide, 1, PILE_CAP.hides),
+    };
+}
+
+// A log along X; a knapped stone; a hide, flat and a little ragged.
+const logShape = () => merge([
+    part(new THREE.CylinderGeometry(0.22, 0.24, 2.6, 6), { rot: [0, 0, Math.PI / 2], at: [0, 0, 0], shade: 0.95 }),
+    part(new THREE.CylinderGeometry(0.2, 0.2, 0.02, 6), { rot: [0, 0, Math.PI / 2], at: [1.31, 0, 0], shade: 1.35 }),
+    part(new THREE.CylinderGeometry(0.2, 0.2, 0.02, 6), { rot: [0, 0, Math.PI / 2], at: [-1.31, 0, 0], shade: 1.35 }),
+]);
+const stoneShape = () => merge([part(new THREE.DodecahedronGeometry(0.28, 0), { scale: [1.2, 0.75, 1], shade: 1 })]);
+const hideShape = () => merge([
+    part(new THREE.BoxGeometry(1.7, 0.06, 1.15), { shade: 1 }),
+    part(new THREE.BoxGeometry(0.5, 0.06, 0.4), { at: [0.95, 0, 0.42], rot: [0, 0.4, 0], shade: 0.92 }),
+    part(new THREE.BoxGeometry(0.5, 0.06, 0.4), { at: [-0.95, 0, -0.42], rot: [0, 0.4, 0], shade: 0.92 }),
+]);
 
 // Which way from its pole a tribe's rack stands (the same every time).
 export const rackAngle = (id) => (hash(id) / 2 ** 32) * TAU;
@@ -138,6 +174,10 @@ export class Camps {
         const lit = (color) => new THREE.MeshLambertMaterial({ color, vertexColors: true, flatShading: true });
         this.racks = this.instanced(rackShape(), lit(WOOD), 32);
         this.meat = this.instanced(meatShape(), lit(MEAT), 32 * MEAT_CAP);
+        this.logs = this.instanced(logShape(), lit(WOOD), 64);
+        this.stones = this.instanced(stoneShape(), lit(FLINT), 64);
+        this.hides = this.instanced(hideShape(), lit(HIDE), 32);
+        this.piled = { logs: 0, stones: 0, hides: 0 }; // written this frame
     }
 
     // An instanced mesh with room for `cap`, or (given `old`) a bigger one in its place.
@@ -233,6 +273,7 @@ export class Camps {
         let n = 0;
         let racks = 0;
         let strips = 0;
+        this.piled.logs = this.piled.stones = this.piled.hides = 0;
         for (const tribe of world.tribes) {
             const t = this.entry(tribe, ground, campRadius);
             t.seen = frame;
@@ -276,6 +317,7 @@ export class Camps {
                     const z = rz + oz;
                     place(this.room('racks', racks + 1), racks++ * 16, along, 1, 1, x, ry, z);
                     if (0.5 / perUnit < MEAT_MIN_PX) continue;
+                    this.piles(tribe, t, x, z, rx - tribe.camp.x, rz - tribe.camp.y, ground);
                     const te = this.room('meat', strips + meat);
                     for (let k = 0; k < meat; k++) {
                         // Strips hang a little turned and of different lengths, the same each time.
@@ -293,14 +335,75 @@ export class Camps {
             this.pool[i].flag.visible = false;
             this.pool[i].disc.visible = false;
         }
-        for (const [mesh, count] of [[this.racks, racks], [this.meat, strips]]) {
+        const piled = this.piled;
+        for (const [mesh, count] of [[this.racks, racks], [this.meat, strips], [this.logs, piled.logs], [this.stones, piled.stones], [this.hides, piled.hides]]) {
             mesh.count = count;
+            if (mesh === this.logs || mesh === this.stones || mesh === this.hides) showWhile(mesh, count);
             if (!count) continue;
             mesh.instanceMatrix.clearUpdateRanges();
             mesh.instanceMatrix.addUpdateRange(0, count * 16);
             mesh.instanceMatrix.needsUpdate = true;
         }
         // Now and then, let go of tribes that have died out.
+        this.forgetOld(frame);
+    }
+
+    // The woodpile, the flint heap and the hides of one camp copy, about
+    // its rack at render (x, z); (sx, sz) take render back to world
+    // coordinates, for the ground's height.
+    piles(tribe, t, x, z, sx, sz, ground) {
+        const n = pileOf(tribe);
+        if (!n.logs && !n.stones && !n.hides) return;
+        const piled = this.piled;
+        const ca = Math.cos(t.rack + Math.PI / 2); // along the ridge...
+        const sa = Math.sin(t.rack + Math.PI / 2);
+        const cr = Math.cos(t.rack);               // ...and away from the pole
+        const sr = Math.sin(t.rack);
+        const height = (px, pz) => ground(px - sx, pz - sz);
+        // Beyond one end of the rack, logs across the ridge, stacked in rows.
+        if (n.logs) {
+            const wx = x + ca * (RACK_HALF + 3.4);
+            const wz = z + sa * (RACK_HALF + 3.4);
+            const g0 = height(wx, wz);
+            const te = this.room('logs', piled.logs + n.logs);
+            let k = 0;
+            for (let r = 0; r < LOG_ROWS.length && k < n.logs; r++) {
+                const m = LOG_ROWS[r];
+                for (let j = 0; j < m && k < n.logs; j++, k++) {
+                    const u = (j - (m - 1) / 2) * 0.47;
+                    const jitter = ((hash(tribe.id * 64 + k) & 255) / 255 - 0.5) * 0.16;
+                    place(te, piled.logs++ * 16, t.rack + jitter, 1, 1, wx + ca * u, g0 + 0.22 + r * 0.4, wz + sa * u);
+                }
+            }
+        }
+        // Beyond the other end, a heap of flint.
+        if (n.stones) {
+            const fx = x - ca * (RACK_HALF + 2.6);
+            const fz = z - sa * (RACK_HALF + 2.6);
+            const g0 = height(fx, fz);
+            const te = this.room('stones', piled.stones + n.stones);
+            for (let k = 0; k < n.stones; k++) {
+                const a = k * 2.4;
+                const rad = 0.34 * Math.sqrt(k);
+                const up = 0.16 + Math.max(0, 0.42 - rad * 0.38) * (k > 2 ? 1 : 0);
+                const h = hash(tribe.id * 97 + k);
+                place(te, piled.stones++ * 16, (h & 1023) / 160, 0.8 + (h >>> 10 & 7) / 20, 1, fx + Math.cos(a) * rad, g0 + up, fz + Math.sin(a) * rad);
+            }
+        }
+        // In front of the rack, hides stacked flat.
+        if (n.hides) {
+            const hx = x + cr * 3.1;
+            const hz = z + sr * 3.1;
+            const g0 = height(hx, hz);
+            const te = this.room('hides', piled.hides + n.hides);
+            for (let k = 0; k < n.hides; k++) {
+                const twist = ((hash(tribe.id * 31 + k) & 255) / 255 - 0.5) * 0.6;
+                place(te, piled.hides++ * 16, t.rack + twist, 1, 1, hx, g0 + 0.05 + k * 0.075, hz);
+            }
+        }
+    }
+
+    forgetOld(frame) {
         if (frame % 120 === 0) {
             for (const [id, t] of this.tribes) if (t.seen !== frame) this.forget(id);
         }

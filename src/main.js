@@ -21,6 +21,7 @@ import { Input } from './play/input.js';
 import { Hud } from './play/hud.js';
 import { Modes } from './play/modes.js';
 import { personName } from './play/names.js';
+import { CraftMenu } from './play/craft.js';
 import { setAside } from './orders.js';
 
 const VIEWS = ['map', 'follow', 'first'];
@@ -175,6 +176,7 @@ const panel = new Panel({
         const id = eldest(tribeId);
         if (id) follow(id);
     },
+    follow, // (a legend's bearer)
     // (Your own person's way back is the bar above the card: return.)
     becomeLabel(id) {
         return canPlay && modes.canBecome(id) ? 'become them' : null;
@@ -205,6 +207,7 @@ renderer.setBlood?.(blood);
 
 const input = new Input({ target: window, canvas, doc: document });
 const hud = new Hud(document);
+hud.menu = new CraftMenu(document);
 const modes = new Modes({
     world, input, hud,
     rig: () => renderer.rig ?? null,
@@ -391,7 +394,10 @@ window.sim = {
 //   play.call(kind)      put a call in the slot (G gives it: play.press('KeyG'))
 //   play.arm(kind), play.mapClick(x, y)    on the map: ready a call, and click
 //                        the world point (x, y) through the view
-//   play.state           who, where, stamina, snaps (moves turned down), the hands...
+//   play.cycle('weapon' | 'tool'), play.tool(), play.skill(), play.craft()
+//                        → or ←, right click, Shift + right click, C (keys
+//                        in the craft menu: play.press('ArrowDown'), ...)
+//   play.state           who, where, stamina, snaps (moves turned down), the hands, the items...
 //   play.modes
 const key = (type, code) => window.dispatchEvent(new KeyboardEvent(type, { code, key: code, bubbles: true }));
 window.play = {
@@ -429,6 +435,10 @@ window.play = {
     over: () => modes.gameOver(),
     call: (kind) => modes.calls.select(kind),
     arm: (kind) => modes.armCall(kind),
+    cycle: (slot = 'weapon') => modes.action(slot === 'tool' ? 'cycle-tool' : 'cycle-weapon'),
+    tool: () => modes.action('tool'),
+    skill: () => modes.action('skill'),
+    craft: () => modes.action('craft'),
     mapClick(x, y) {
         const at = { x: 0, y: 0 };
         if (!renderer.rig?.project(x, y, world.terrain ? world.terrain.heightAt(x, y) : 0, at)) return false;
@@ -448,6 +458,10 @@ window.play = {
             hands: p ? {
                 carry: +p.carry.toFixed(1), energy: +p.energy.toFixed(1), reload: p.reload, gathering: p.gathering, butchering: p.butchering,
                 doing: modes.doing?.kind ?? null, can: modes.interaction()?.kind ?? null,
+            } : null,
+            items: p && world.items ? {
+                weapon: p.weapon, tool: p.tool, kit: p.kit, crafting: p.crafting, skill: p.skill,
+                menu: modes.menu ? { ...modes.menu } : null, legends: world.legends?.length ?? 0,
             } : null,
         };
     },

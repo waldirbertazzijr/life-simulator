@@ -31,6 +31,13 @@
 // The hands (package 2, at the end): attacks, butchering, gathering, eating
 // and the store, and the poses they show.
 //
+// Items (package 3, after the hands): the arrows swap in a spare, right
+// click uses the tool, Shift + right click the weapon's skill (for Spirit),
+// C at camp opens the craft menu, E picks up what lies at your feet; the
+// weapon in hand decides the attack (a spear throws or jabs, a bow shoots,
+// a club swings); LEGEND FORGED when one of yours becomes a legend, a word
+// when one breaks. What you hold is the simulation's (gear.js reads it).
+//
 // `env` is how this reaches the rest of the page (main.js): the world (the
 // Mirror), the input, the HUD, the camera rig, follow, the view, the speed,
 // pause, the panel (inBody, openPicker, changed), and the bodies' poses
@@ -39,6 +46,10 @@ import { Body, STAMINA } from './body.js';
 import { personName, ageText, relation, YEAR } from './names.js';
 import { POSE } from '../view3d/animate.js';
 import { Calls, noticeFor, placed } from './calls.js';
+import {
+    itemsOn, itemById, kindName, itemName, rarityName, skillOf, weaponKind, equipment, cycleAct, craftRows,
+    nearestLying, pickupText, CRAFT_ORDER,
+} from './gear.js';
 
 const DEG = Math.PI / 180;
 const TAU = Math.PI * 2;
@@ -64,6 +75,13 @@ const EAT_EVERY = 1;
 const ACK_WAIT = 0.6;
 const HANDS = { jabRange: 5, jabArc: Math.PI / 4, heavyRange: 34, butcherReach: 4, rackReach: 8, takeMax: 40 };
 const AIMED = 12 * DEG; // a creature this near the aim is what an attack goes for
+// Items: a club's swing and a knife's cut reach this far; an item lying
+// this near (at your feet) is picked up before the rack is used, one within
+// `reach` (the simulation's) only when the rack offers nothing.
+const ITEMS = { swing: 4, cut: 3, feet: 3, reach: 6 };
+// The pose of an attack (and of a charge, held at its wind-up) by weapon.
+const ATTACK_POSE = { spear: POSE.THROW, bow: POSE.SHOOT, club: POSE.SWING };
+const TOOL_POSE = { knife: POSE.JAB, torch: POSE.SWING };
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const wrapDelta = (d, size) => (d > size / 2 ? d - size : d < -size / 2 ? d + size : d);
@@ -172,6 +190,10 @@ export class Modes {
         this.ate = -Infinity;    // when you last ate (clock)
         this.held = 0;           // the pose held on your body (POSE), or 0
         this.calls = new Calls(); // leading your tribe (calls.js)
+        // Items (see the end): the craft menu while it is open, and when a
+        // craft was asked for, until the simulation shows it under way (clock).
+        this.menu = null;        // { index, flint }
+        this.craftAsked = -1;
         this.input.onAction = (name, info) => this.action(name, info);
     }
 
@@ -324,6 +346,9 @@ export class Modes {
         this.doing = null;
         this.held = 0; // (the new world's bodies have no poses)
         this.attacked = -1;
+        this.craftAsked = -1;
+        this.menu = null;
+        this.input.capture = null;
         this.self = 0;
         this.known = null;
         this.tribe = 0;
@@ -388,6 +413,7 @@ export class Modes {
             case 'move':
                 this.standUp();
                 this.stopHands();
+                this.closeCraft();
                 break;
             case 'roll': {
                 this.standUp();
@@ -429,8 +455,24 @@ export class Modes {
             case 'call':
                 this.callHere();
                 break;
+            case 'cycle-weapon':
+                this.cycle('weapon');
+                break;
+            case 'cycle-tool':
+                this.cycle('tool');
+                break;
+            case 'tool':
+                this.useTool();
+                break;
+            case 'skill':
+                this.useSkill();
+                break;
+            case 'craft':
+                if (this.menu) this.closeCraft();
+                else this.openCraft();
+                break;
             default:
-                // craft, the other arrows, tool, art: later packages.
+                // (↓, the pouch: nothing to cycle yet.)
                 break;
         }
     }
@@ -614,6 +656,11 @@ export class Modes {
             case 'rally':
                 this.answered(e);
                 break;
+            case 'legend':
+            case 'broke':
+            case 'crafted':
+                this.itemEvent(e);
+                break;
         }
     }
 
@@ -789,7 +836,7 @@ export class Modes {
         s.camp = tribe ? Math.atan2(wrapDelta(tribe.camp.y - b.y, w.height), wrapDelta(tribe.camp.x - b.x, w.width)) : null;
         s.carry = f ? this.carried(f) : 0;
         s.store = tribe ? tribe.store : 0;
-        s.prompt = this.dying ? null : paused ? [['P', 'Resume']] : this.prompt(f);
+        s.prompt = this.dying || this.menu ? null : paused ? [['P', 'Resume']] : this.prompt(f);
         s.reload = f ? this.reloading() : 0;
         s.charge = this.input.charging === true ? this.input.charge : 0;
         s.crouch = b.crouch;
@@ -797,6 +844,11 @@ export class Modes {
         s.call = this.calls.call;
         const order = tribe?.order ?? null;
         s.order = order ? Math.atan2(wrapDelta(order.y - b.y, w.height), wrapDelta(order.x - b.x, w.width)) : null;
+        // What you hold (gear.js), and the store's materials; the craft menu
+        // follows the store while it is open.
+        s.gear = equipment(w, p);
+        s.materials = s.gear.on && tribe ? { wood: tribe.wood ?? 0, flint: tribe.flint ?? 0, hide: tribe.hide ?? 0 } : null;
+        if (this.menu) this.showCraft();
         s.ring = null;
         s.target = null;
         const t = this.lock ? w.find(this.lock) : null;
@@ -849,36 +901,44 @@ export class Modes {
         return p !== null && p.reload > 0 ? Math.min(1, p.reload / this.world.p.human.reload) : 0;
     }
 
-    // Can you attack now? (An adult, the spear back, some stamina, the world running.)
+    // Can you attack now? (An adult with a weapon, the spear back, some
+    // stamina, the world running.)
     canAttack(f) {
         return !!f && f.pop.age[f.i] >= this.world.p.human.maturity && this.reloading() === 0
-            && this.body.stamina > 0 && !this.env.getPaused();
+            && this.body.stamina > 0 && !this.env.getPaused() && this.weapon() !== '';
     }
 
-    // A light attack (info.heavy false) or a heavy one of info.power.
+    // A light attack (info.heavy false) or a heavy one of info.power. The
+    // weapon in hand decides how: a spear jabs what is within reach in
+    // front, else is thrown; a bow shoots; a club swings at what is near.
     attack(info = {}) {
         const w = this.world;
         const f = w.find(this.self);
         if (!this.canAttack(f)) return false;
         const heavy = info.heavy === true;
+        const kind = this.weapon();
         this.body.spend(heavy ? STAMINA.heavy : STAMINA.light);
         this.standUp();
         this.stopHands();
+        this.closeCraft();
         const yaw = this.body.yaw;
         const dx = Math.cos(yaw);
         const dy = Math.sin(yaw);
         const power = heavy ? clamp(Number(info.power) || 0, 0, 1) : 0;
+        const arc = w.p.play?.jabArc ?? HANDS.jabArc;
         // What it goes for (your followers too, orders.js): the locked
         // target, which the simulation leads the throw onto; else what is
         // within reach or under the aim, told but not led (no aiming for you).
-        const jab = heavy ? 0 : this.nearestAlong(dx, dy, w.p.play?.jabRange ?? HANDS.jabRange, w.p.play?.jabArc ?? HANDS.jabArc);
-        const target = this.lock || jab || this.nearestAlong(dx, dy, w.p.play?.heavyRange ?? HANDS.heavyRange, AIMED);
+        const jab = kind !== 'spear' || heavy ? 0 : this.nearestAlong(dx, dy, w.p.play?.jabRange ?? HANDS.jabRange, arc);
+        const target = this.lock || jab
+            || (kind === 'club' ? this.nearestAlong(dx, dy, ITEMS.swing, arc) : this.nearestAlong(dx, dy, w.p.play?.heavyRange ?? HANDS.heavyRange, AIMED));
         w.act({ seq: this.body.nextSeq(), action: 'attack', heavy, dx, dy, power, target, lock: this.lock !== 0 });
         this.body.heading = yaw; // (turned to throw)
         this.attacked = this.clock;
         // A charged throw carries on from its wind-up (the hold).
-        if (this.held === POSE.THROW) this.held = 0;
-        this.env.pose?.(this.self, jab ? POSE.JAB : POSE.THROW);
+        const code = jab ? POSE.JAB : ATTACK_POSE[kind] ?? POSE.THROW;
+        if (this.held === code) this.held = 0;
+        this.env.pose?.(this.self, code);
         return true;
     }
 
@@ -940,6 +1000,11 @@ export class Modes {
             }
         }
         if (best) return { kind: 'butcher', id: best.id };
+        // An item lying at your feet comes next; one a little farther off,
+        // only where the rack has nothing to offer (items, at the end).
+        const lying = itemsOn(w) ? nearestLying(w, b.x, b.y, w.p.items?.pickReach ?? ITEMS.reach) : null;
+        const pick = lying ? { kind: 'pickup', id: lying.item.id, item: lying.item } : null;
+        if (pick && lying.d <= ITEMS.feet) return pick;
         const carry = this.carried(f);
         const t = w.tribeById.get(this.tribe);
         if (t) {
@@ -949,8 +1014,10 @@ export class Modes {
                 const amount = Math.floor(Math.min(Q.takeMax ?? HANDS.takeMax, t.store, P.carryMax - carry));
                 if (amount >= 1) return { kind: 'take', amount };
             }
+            if (pick) return pick;
             if (d2 < P.campRadius * P.campRadius) return { kind: 'rest' };
         }
+        if (pick) return pick;
         const g = w.grass;
         if (g && g.g[g.index(b.x, b.y)] >= P.gatherMin && carry < P.carryMax) return { kind: 'gather' };
         return null;
@@ -971,6 +1038,7 @@ export class Modes {
         if (what.kind === 'butcher') this.startHands('butcher', what.id);
         else if (what.kind === 'gather') this.startHands('gather', 0);
         else if (what.kind === 'rest') this.rest();
+        else if (what.kind === 'pickup') this.world.act({ seq: this.body.nextSeq(), action: 'pickup', item: what.id });
         else this.world.act({ seq: this.body.nextSeq(), action: what.kind }); // store, take
     }
 
@@ -998,11 +1066,14 @@ export class Modes {
         this.doing = null;
         this.releasePose();
         this.attacked = -1;
+        this.craftAsked = -1;
+        this.closeCraft();
     }
 
     // Each frame: what the simulation says the hands are at (it stops them
     // itself: the carcass cut up, the patch gathered thin, the pouch full),
-    // and the throw drawn back while a heavy attack charges.
+    // the weapon drawn back while a heavy attack charges, and the seated
+    // work of crafting while it goes on.
     keepHands() {
         if (this.attacked >= 0) this.reloading(); // (has the simulation taken the attack up?)
         const d = this.doing;
@@ -1015,9 +1086,12 @@ export class Modes {
                 this.releasePose();
             }
         }
-        const charging = this.input.charging === true && !this.doing && this.canAttack(this.world.find(this.self));
-        if (charging && this.held !== POSE.THROW) this.holdPose(POSE.THROW);
-        else if (!charging && this.held === POSE.THROW) this.releasePose();
+        if (this.doing) return; // (its own pose is held)
+        const charge = ATTACK_POSE[this.weapon()] ?? POSE.THROW;
+        const charging = this.input.charging === true && this.canAttack(this.world.find(this.self));
+        const want = charging ? charge : this.crafting() ? POSE.CRAFT : 0;
+        if (want && this.held !== want) this.holdPose(want);
+        else if (!want && this.held) this.releasePose();
     }
 
     holdPose(code) {
@@ -1044,10 +1118,228 @@ export class Modes {
                     : what.kind === 'store' ? `Store ${what.amount} food`
                     : what.kind === 'take' ? `Take ${what.amount} food`
                     : what.kind === 'rest' ? 'Rest at camp'
-                    : 'Gather']);
+                    : what.kind === 'pickup' ? pickupText(what.item)
+                    : 'Gather', ...(what.kind === 'pickup' && what.item.rarity > 0 ? [rarityName(what.item.rarity)] : [])]);
             }
         }
         if (f && this.carried(f) >= 1) out.push(['R', 'Eat']);
         return out.length ? out : null;
+    }
+
+    // ---- Items (package 3) ----
+    //
+    // What you hold is the simulation's word (its report: weapon, tool, kit,
+    // crafting, skill; the Mirror's items): the page asks and shows. In a
+    // world without items, your weapon is the plain spear it always was.
+
+    // The kind of weapon in your hand ('' for none).
+    weapon() {
+        return weaponKind(this.world, this.mine());
+    }
+
+    // → and ←: swap the weapon (or the tool) in hand for the next spare.
+    cycle(slot) {
+        if (!itemsOn(this.world)) return false;
+        const act = cycleAct(this.mine(), slot);
+        if (!act) return false;
+        this.world.act({ seq: this.body.nextSeq(), ...act });
+        return true;
+    }
+
+    // Right click: the tool in hand. A knife cuts what is in front, a torch
+    // is brandished (predators near are driven off), a basket gathers (as E
+    // does: on, or off again).
+    useTool() {
+        const w = this.world;
+        if (!itemsOn(w)) return false;
+        const tool = itemById(w, this.mine()?.tool);
+        const kind = tool ? kindName(tool.kind) : '';
+        if (!kind) {
+            this.hud.notice?.('No tool in hand', true);
+            return false;
+        }
+        if (kind === 'basket') {
+            if (this.doing?.kind === 'gather') this.stopHands();
+            else if (!this.doing && this.interaction()?.kind === 'gather') {
+                this.standUp();
+                this.startHands('gather', 0);
+            }
+            return true;
+        }
+        this.standUp();
+        this.stopHands();
+        this.closeCraft();
+        const yaw = this.body.yaw;
+        const dx = Math.cos(yaw);
+        const dy = Math.sin(yaw);
+        const target = this.lock || (kind === 'knife' ? this.nearestAlong(dx, dy, ITEMS.cut, w.p.play?.jabArc ?? HANDS.jabArc) : 0);
+        w.act({ seq: this.body.nextSeq(), action: 'tool', dx, dy, target });
+        this.body.heading = yaw;
+        this.env.pose?.(this.self, TOOL_POSE[kind] ?? POSE.JAB);
+        return true;
+    }
+
+    // Shift + right click: the weapon's skill, for Spirit (spec §8.6). Turned
+    // down here, with a word, when there is no skill or too little Spirit.
+    useSkill() {
+        const w = this.world;
+        if (!itemsOn(w)) return false;
+        const p = this.mine();
+        const weapon = itemById(w, p?.weapon);
+        const skill = skillOf(weapon, p?.skill ?? 0);
+        const f = w.find(this.self);
+        if (!skill || !f) {
+            this.hud.notice?.('No weapon skill', true);
+            return false;
+        }
+        if (f.pop.age[f.i] < w.p.human.maturity) {
+            this.hud.notice?.('A child cannot', true);
+            return false;
+        }
+        if (!((p?.spirit ?? 0) >= skill.cost)) {
+            this.hud.notice?.(`Not enough Spirit for ${skill.name}`, true);
+            return false;
+        }
+        this.standUp();
+        this.stopHands();
+        this.closeCraft();
+        const yaw = this.body.yaw;
+        const dx = Math.cos(yaw);
+        const dy = Math.sin(yaw);
+        const kind = kindName(weapon.kind);
+        const target = this.lock || this.nearestAlong(dx, dy, kind === 'club' ? 8 : w.p.play?.heavyRange ?? HANDS.heavyRange, kind === 'club' ? Math.PI : AIMED);
+        w.act({ seq: this.body.nextSeq(), action: 'skill', dx, dy, target, lock: this.lock !== 0 });
+        this.body.heading = yaw;
+        this.env.pose?.(this.self, ATTACK_POSE[kind] ?? POSE.THROW);
+        return true;
+    }
+
+    // Is something being crafted? (The simulation says so, or a craft was
+    // just asked for and it has not answered yet.)
+    crafting() {
+        const p = this.mine();
+        if (p?.crafting) {
+            this.craftAsked = -1;
+            return true;
+        }
+        if (this.craftAsked >= 0 && this.clock - this.craftAsked <= ACK_WAIT) return true;
+        this.craftAsked = -1;
+        return false;
+    }
+
+    // C: the craft menu, at your camp only, for an adult not already at it.
+    // While it is open the pointer is free, and its keys are the menu's.
+    openCraft() {
+        const w = this.world;
+        const f = w.find(this.self);
+        if (!itemsOn(w) || !f) return false;
+        const no = f.pop.age[f.i] < w.p.human.maturity ? 'A child cannot craft'
+            : !this.atCamp() ? 'Craft at your camp'
+            : this.crafting() ? 'Already crafting'
+            : null;
+        if (no) {
+            this.hud.notice?.(no, true);
+            return false;
+        }
+        this.standUp();
+        this.stopHands();
+        const rows = craftRows(w.tribeById.get(this.tribe), w.p, false);
+        this.menu = { index: Math.max(0, rows.findIndex((r) => r.can)), flint: false };
+        this.input.capture = (code, repeat) => this.craftKey(code, repeat);
+        this.input.unlock?.();
+        this.showCraft();
+        return true;
+    }
+
+    // Shut the menu (relock: the pointer is taken again, for a key or click
+    // that counts as the user's gesture).
+    closeCraft(relock = false) {
+        if (!this.menu) return;
+        this.menu = null;
+        this.input.capture = null;
+        this.hud.craftMenu?.(null);
+        if (relock) this.input.lock?.();
+    }
+
+    showCraft() {
+        const m = this.menu;
+        const rows = craftRows(this.world.tribeById.get(this.tribe), this.world.p, m.flint);
+        this.hud.craftMenu?.({ rows, index: m.index, flint: m.flint }, this.craftActions ??= {
+            pick: (kind) => this.craftKind(kind),
+            hover: (index) => {
+                if (this.menu && this.menu.index !== index) {
+                    this.menu.index = index;
+                    this.showCraft();
+                }
+            },
+            flint: () => {
+                if (!this.menu) return;
+                this.menu.flint = !this.menu.flint;
+                this.showCraft();
+            },
+        });
+    }
+
+    // The menu's keys: ↑ ↓ choose, Enter crafts, F (or ← →) adds a flint,
+    // 1–6 craft at once, Esc or C close. Others pass (a move closes it).
+    craftKey(code, repeat) {
+        const m = this.menu;
+        if (!m) return false;
+        const n = CRAFT_ORDER.length;
+        if (code === 'ArrowUp' || code === 'ArrowDown') {
+            m.index = (m.index + (code === 'ArrowUp' ? n - 1 : 1)) % n;
+            this.showCraft();
+            return true;
+        }
+        if (repeat) return code === 'Enter' || code === 'NumpadEnter';
+        if (code === 'Enter' || code === 'NumpadEnter') {
+            this.craftKind(CRAFT_ORDER[m.index]);
+            return true;
+        }
+        if (code === 'KeyF' || code === 'ArrowLeft' || code === 'ArrowRight') {
+            m.flint = !m.flint;
+            this.showCraft();
+            return true;
+        }
+        if (code === 'Escape' || code === 'KeyC') {
+            this.closeCraft();
+            return true;
+        }
+        const digit = /^Digit([1-9])$/.exec(code);
+        if (digit && Number(digit[1]) <= n) {
+            this.craftKind(CRAFT_ORDER[Number(digit[1]) - 1]);
+            return true;
+        }
+        return false;
+    }
+
+    // Craft `kind` (with the menu's flint), if the store can pay for it.
+    craftKind(kind) {
+        const m = this.menu;
+        if (!m) return false;
+        const row = craftRows(this.world.tribeById.get(this.tribe), this.world.p, m.flint).find((r) => r.kind === kind);
+        if (!row) return false;
+        if (!row.can) {
+            this.hud.notice?.(`The store lacks ${row.text}`, true);
+            return false;
+        }
+        this.world.act({ seq: this.body.nextSeq(), action: 'craft', kind, flint: m.flint });
+        this.craftAsked = this.clock;
+        this.closeCraft(true);
+        return true;
+    }
+
+    // What happened to items of yours: LEGEND FORGED; a word when one
+    // breaks, or is made.
+    itemEvent(e) {
+        if (!this.self) return;
+        const item = itemById(this.world, e.item);
+        if (e.type === 'legend' && e.bearer === this.self) this.hud.banner('legend', e.name ?? itemName(item));
+        else if (e.type === 'broke' && e.bearer === this.self) {
+            this.hud.notice?.(`Your ${item ? itemName(item).replace(/^Plain /, '').toLowerCase() : kindName(e.kind)} broke`, true);
+        } else if (e.type === 'crafted' && e.by === this.self) {
+            const name = item ? itemName(item) : kindName(e.kind);
+            this.hud.notice?.(e.rarity >= 1 ? `Made: ${name} (rare)` : `Made: ${name.replace(/^Plain /, 'a ').toLowerCase()}`);
+        }
     }
 }

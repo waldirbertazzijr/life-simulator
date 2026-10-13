@@ -234,7 +234,7 @@ test('with the pointer locked, the mouse looks and a click attacks', () => {
     clock.t = 600;
     fire(doc, 'pointerup', { button: 0, pointerId: 1 });
     fire(canvas, 'pointerdown', { button: 2, pointerId: 1, shiftKey: true });
-    assert.deepEqual(actions, [['attack', { heavy: false, power: 0 }], ['attack', { heavy: true, power: 0.6 }], 'art']);
+    assert.deepEqual(actions, [['attack', { heavy: false, power: 0 }], ['attack', { heavy: true, power: 0.6 }], 'skill']);
     input.setMode('off');
     assert.equal(doc.pointerLockElement, null, 'leaving the body frees the pointer');
 });

@@ -9,6 +9,9 @@ import { STATE, STATE_LABEL } from './world.js';
 import { personName, ageText, years } from './play/names.js';
 import { mostExperienced, eldestOf } from './play/modes.js';
 import { callName } from './play/calls.js';
+import { legendRows } from './play/gear.js';
+
+const LEGENDS_SHOWN = 10; // rows in the Legends list at most (the newest)
 
 // States shown in the alarm colour.
 const ALARM = new Set([STATE.FLEEING, STATE.CHASING, STATE.FIGHTING, STATE.RAIDING]);
@@ -83,7 +86,7 @@ class Sparkline {
 
 export class Panel {
     // actions: { togglePause, setSpeed(n), reset(byKey), start(seed), setView(v), cycleView,
-    //            unfollow, followDescendant, followAnother, followTribe(id),
+    //            unfollow, followDescendant, followAnother, followTribe(id), follow(id),
     //            becomeLabel(id) → 'become them' | null, become(id), openPicker,
     //            play(tribeId), back(), stop(), setBlood(on) }
     constructor(actions) {
@@ -111,6 +114,11 @@ export class Panel {
         this.$('tribe-list').addEventListener('click', (e) => {
             const row = e.target.closest('[data-tribe]');
             if (row) actions.followTribe(Number(row.dataset.tribe));
+        });
+        this.legendRows = new Map(); // item id → its row
+        this.$('legend-list').addEventListener('click', (e) => {
+            const row = e.target.closest('[data-bearer]');
+            if (row && Number(row.dataset.bearer)) actions.follow(Number(row.dataset.bearer));
         });
         for (const b of document.querySelectorAll('[data-speed]')) {
             b.addEventListener('click', () => actions.setSpeed(Number(b.dataset.speed)));
@@ -425,11 +433,60 @@ export class Panel {
         this.$('tribes-empty').hidden = world.tribes.length > 0;
     }
 
+    // The legendary items, newest first (gear.js's legendRows): flag, name,
+    // kind and bearer, kills, generations. A click follows the bearer; one
+    // lying on the ground cannot be followed. Rows are kept, as the tribes'.
+    updateLegends(world) {
+        const all = legendRows(world);
+        const rows = all.slice(0, LEGENDS_SHOWN);
+        const list = this.$('legend-list');
+        const seen = new Set();
+        for (const r of rows) {
+            seen.add(r.id);
+            let row = this.legendRows.get(r.id);
+            if (!row) {
+                row = document.createElement('button');
+                row.className = 'legend-row';
+                row.innerHTML = '<canvas width="36" height="24"></canvas><span class="name"><span class="t"></span><span class="as"></span></span>'
+                    + '<span class="n kills"></span><span class="n gens"></span>';
+                row.querySelector('.t').textContent = r.name;
+                row.flagOf = 0;
+                this.legendRows.set(r.id, row);
+            }
+            const tribeId = r.tribe ? r.tribe.id : 0;
+            if (row.flagOf !== tribeId) {
+                row.flagOf = tribeId;
+                const ctx = row.querySelector('canvas').getContext('2d');
+                ctx.clearRect(0, 0, 36, 24);
+                if (r.tribe) drawFlag(ctx, r.tribe.flag, 0, 0, 36, 24);
+            }
+            row.dataset.bearer = r.bearer;
+            row.disabled = !r.bearer;
+            const as = `${r.kind} · ${r.bearer ? r.bearerName : r.where}${r.tribe ? `, ${r.tribe.name}` : ''}`;
+            if (row.querySelector('.as').textContent !== as) row.querySelector('.as').textContent = as;
+            row.title = r.bearer ? `Follow ${r.bearerName}, who bears ${r.name}` : `${r.name} lies on the ground`;
+            row.querySelector('.kills').textContent = r.kills;
+            row.querySelector('.gens').textContent = r.gens;
+            list.appendChild(row); // (newest on top)
+        }
+        for (const [id, row] of this.legendRows) {
+            if (seen.has(id)) continue;
+            row.remove();
+            this.legendRows.delete(id);
+        }
+        this.$('legends').hidden = !all.length;
+        const more = this.$('legends-more');
+        more.hidden = all.length <= LEGENDS_SHOWN;
+        if (!more.hidden) more.textContent = `and ${all.length - LEGENDS_SHOWN} more`;
+    }
+
     reset(world) {
         this.closePicker();
         this.selfShown = null;
         for (const row of this.tribeRows.values()) row.remove();
         this.tribeRows = new Map(); // a new world reuses tribe ids
+        for (const row of this.legendRows.values()) row.remove();
+        this.legendRows = new Map();
         for (const l of Object.values(this.lines)) l.clear();
         this.sample(world);
         this.update(world);
@@ -454,6 +511,7 @@ export class Panel {
         $('n-carnivores').textContent = world.carnivores.n;
         $('n-humans').textContent = world.humans.n;
         this.updateTribes(world);
+        this.updateLegends(world);
 
         const gh = world.meanGenes(world.herbivores);
         const gc = world.meanGenes(world.carnivores);

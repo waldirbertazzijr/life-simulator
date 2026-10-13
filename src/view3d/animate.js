@@ -32,6 +32,7 @@ const TAU = Math.PI * 2;
 export const POSE = Object.freeze({
     NONE: 0, THROW: 1, JAB: 2, SWING: 3, GATHER: 4, BUTCHER: 5, EAT: 6, CHOP: 7, KNAP: 8,
     CRAFT: 9, SIT: 10, ROLL: 11, FALL: 12, CROUCH: 13, POUNCE: 14, GRAZE: 15, HOP: 16,
+    SHOOT: 17, // (package 3: a bow drawn and loosed)
 });
 export const POSE_NAMES = Object.keys(POSE);
 const CODES = POSE_NAMES.length;
@@ -120,6 +121,16 @@ const human = {
             { torso: [0.15, 0, -0.25], armR: [-2.8, -0.1, 0], armL: [-2.6, -0.25, 0], legL: [0.25, 0, 0], legR: [-0.2, 0, 0] },
             { torso: [-0.35, 0, 0.3], armR: [-5.38, 0, 0], armL: [-5.45, -0.2, 0], legL: [0.35, 0, 0], legR: [-0.3, 0, 0], shift: [0.2, -0.1, 0] },
             { armR: [-TAU, 0, 0], armL: [-TAU, 0, 0] },
+        ],
+    },
+    // A bow: side-on to the target, the bow arm out (the left), the string
+    // drawn to the chest, loosed, and down. Held, it waits drawn.
+    [POSE.SHOOT]: {
+        seconds: 0.7, hold: 1 / 3, keys: [
+            {},
+            { ...STANCE, torso: [0, 0, -0.5], head: [0, 0, 0.45], armL: [1.5, 0, 0.5], armR: [1.35, -0.55, 0.85] },
+            { ...STANCE, torso: [0, 0, -0.5], head: [0, 0, 0.45], armL: [1.5, 0, 0.5], armR: [1.05, 0.25, 0.4] },
+            {},
         ],
     },
     // Kneel and reach for the ground, one hand and then the other.
@@ -431,7 +442,8 @@ vec3 transformed = vec3( position );
 
 // ---- What each one is doing ----
 
-// The pose a state shows. `still`: not walking anywhere.
+// The pose a state shows. `still`: not walking anywhere. (Chopping and
+// quarrying also cover the walk to the spot: their poses wait for it.)
 export function statePose(kind, state, still) {
     if (kind === 'herbivore') return state === STATE.GRAZING || state === STATE.EATING ? POSE.GRAZE : POSE.NONE;
     if (kind === 'carnivore') return state === STATE.EATING ? POSE.EAT : POSE.NONE;
@@ -442,10 +454,20 @@ export function statePose(kind, state, still) {
         // The controlled person's postures (if the simulation has them).
         case STATE.CREEPING: return POSE.CROUCH;
         case STATE.ROLLING: return POSE.ROLL;
+        // Anyone's kill, butchered where it fell; and the work of items.
         case STATE.BUTCHERING: return POSE.BUTCHER;
+        case STATE.CHOPPING: return still ? POSE.CHOP : POSE.NONE;
+        case STATE.QUARRYING: return still ? POSE.KNAP : POSE.NONE;
+        case STATE.CRAFTING: return still ? POSE.CRAFT : POSE.NONE;
         default: return POSE.NONE;
     }
 }
+
+// People idle at camp sit for a while, then stand a while: each in a
+// SIT_PERIOD (seconds at 1×) of its own, seated SIT_SHARE of it.
+const SIT_PERIOD = 40;
+const SIT_SHARE = 0.7;
+export const sitsNow = (clock, off) => (clock / SIT_PERIOD + off) % 1 < SIT_SHARE;
 
 // Does this state run (the fast gait)?
 export const runs = (kind, state) => state === STATE.FLEEING || state === STATE.RUNNING
@@ -506,6 +528,7 @@ export class Motion {
         this.code = 0;
         this.progress = 0;
         this.weight = 0;
+        this.seated = 0; // someone who sits whenever its state says so (the player resting)
     }
 
     grow(capacity) {
@@ -524,6 +547,9 @@ export class Motion {
         this.seen = more(Int32Array, this.seen);   // the frame it was last tracked
         this.tribe = more(Float64Array, this.tribe);
         this.sc = more(Float64Array, this.sc);     // its size (children are smaller)
+        this.pc = more(Uint8Array, this.pc);       // the pose it showed when last tracked (as code, progress, weight)...
+        this.pp = more(Float64Array, this.pp);
+        this.pw = more(Float64Array, this.pw);     // ...for whatever is drawn with the body (items.js)
         this.capacity = capacity;
     }
 
@@ -597,7 +623,9 @@ export class Motion {
         // out: a change waits for the old pose to ease out first.
         const held = this.holds.size ? this.holds.get(id) : undefined;
         const still = this.amt[s] < STILL;
-        const want = held ?? (state < STATES ? this.poseOf[state * 2 + (still ? 1 : 0)] : statePose(this.kind, state, still));
+        let want = held ?? (state < STATES ? this.poseOf[state * 2 + (still ? 1 : 0)] : statePose(this.kind, state, still));
+        // (Idle at camp, now seated, now standing; resting by choice, seated.)
+        if (want === POSE.SIT && held === undefined && id !== this.seated && !sitsNow(this.clock, this.off[s])) want = POSE.NONE;
         let cur = this.cur[s];
         let w = cur === POSE.NONE ? 0 : this.w[s];
         const step = this.dt / BLEND;
@@ -622,6 +650,7 @@ export class Motion {
                 // A sequence starts and ends at rest; a cycle played once fades in and out.
                 const ramp = Math.min(RAMP, one.length / 4);
                 this.weight = def?.cycle ? Math.min(1, one.from > 0 ? 1 : t / ramp, (one.length - t) / ramp) : 1;
+                this.keep(s);
                 return;
             }
             this.oneShots.delete(id);
@@ -630,6 +659,28 @@ export class Motion {
         this.code = cur;
         this.weight = cur === POSE.NONE ? 0 : w;
         this.progress = cur === POSE.NONE ? 0 : this.progressOf(cur, s);
+        this.keep(s);
+    }
+
+    // Remember the pose just worked out for slot s (posed()).
+    keep(s) {
+        this.pc[s] = this.code;
+        this.pp[s] = this.progress;
+        this.pw[s] = this.weight;
+    }
+
+    // How `id` was posed when last tracked: its stride and pose left in
+    // phase, amount, code, progress and weight (as track() leaves them).
+    // False if it is not tracked.
+    posed(id) {
+        const s = this.slots.get(id);
+        if (s === undefined) return false;
+        this.phase = this.ph[s];
+        this.amount = this.amt[s];
+        this.code = this.pc[s];
+        this.progress = this.pp[s];
+        this.weight = this.pw[s];
+        return true;
     }
 
     // How far through a pose that is shown for as long as it lasts: a cycle

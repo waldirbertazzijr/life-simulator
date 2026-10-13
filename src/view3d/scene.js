@@ -27,6 +27,11 @@
 // On the warm lakes float giant water lilies (lilies.js: pads and flowers,
 // two draw calls), with frogs among them (frogs.js: the frogs and their
 // ripples, two more). Both are scenery only: nothing in the world knows them.
+//
+// Items (package 3): what people hold and what lies about (items.js: one
+// mesh per kind, glints, flames, glows), the camps' piles
+// of wood, flint and hide (camps.js), arrows (thrown.js), and the marks of
+// work and skills (sparks.js: chips and sparks, a streak, a ring of dust).
 import * as THREE from 'three';
 import { CameraRig } from './camera.js';
 import { Ground } from './terrain-mesh.js';
@@ -34,7 +39,9 @@ import { Forest } from './forest.js';
 import { Tufts } from './tufts.js';
 import { Creatures } from './creatures.js';
 import { Effects } from './effects.js';
-import { Thrown } from './thrown.js';
+import { Thrown, playerBow } from './thrown.js';
+import { Items } from './items.js';
+import { Sparks } from './sparks.js';
 import { Camps } from './camps.js';
 import { Marker } from './marker.js';
 import { OrderMarkers } from './order-marker.js';
@@ -123,6 +130,8 @@ export class View3D {
         this.creatures = new Creatures(this.scene);
         this.effects = new Effects(this.scene, this.creatures.motion); // the dead, and blood
         this.thrown = new Thrown(this.scene); // spears in the air
+        this.items = new Items(this.scene);   // items held and lying (package 3)
+        this.sparks = new Sparks(this.scene); // chips, sparks, skills
         this.camps = new Camps(this.scene, this.gl);
         this.orders = new OrderMarkers(this.scene); // a tribe's standing order (orders.js)
         this.marker = new Marker(this.scene);
@@ -154,6 +163,8 @@ export class View3D {
         this.creatures.attach();
         this.effects.attach(this.heightAt);
         this.thrown.attach();
+        this.items.attach();
+        this.sparks.attach();
         this.camps.attach();
         this.orders.attach();
         this.rig.attach(world, this.terrain);
@@ -205,10 +216,14 @@ export class View3D {
         const events = world.events ?? NONE;
         this.effects.handle(events, self);
         this.effects.follow(world.carcasses ?? NONE);
-        this.thrown.handle(events, motion, self);
-        this.creatures.update(world, view, this.heightAt, inside ? target.pop.id[target.i] : 0, this.effects);
+        this.thrown.handle(events, motion, self, playerBow(world));
+        this.sparks.handle(events, this.heightAt, motion.clock);
+        const hidden = inside ? target.pop.id[target.i] : 0;
+        this.creatures.update(world, view, this.heightAt, hidden, this.effects);
+        this.items.update(world, view, this.heightAt, motion, hidden, motion.clock);
         this.effects.update(view);
         this.thrown.update(world, view, this.heightAt, motion.clock);
+        this.sparks.update(view, motion.clock);
         this.camps.update(world, view, this.heightAt);
         this.orders.update(world, view, this.heightAt);
         this.marker.update(world, view, this.heightAt, target, focus, senseRadius);

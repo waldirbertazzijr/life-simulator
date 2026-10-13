@@ -49,7 +49,7 @@ const cycleDelta = (a, b) => ((b - a) % 1 + 1) % 1;
 test('pose codes are the agreed numbers', () => {
     assert.deepEqual({ ...POSE }, {
         NONE: 0, THROW: 1, JAB: 2, SWING: 3, GATHER: 4, BUTCHER: 5, EAT: 6, CHOP: 7, KNAP: 8,
-        CRAFT: 9, SIT: 10, ROLL: 11, FALL: 12, CROUCH: 13, POUNCE: 14, GRAZE: 15, HOP: 16,
+        CRAFT: 9, SIT: 10, ROLL: 11, FALL: 12, CROUCH: 13, POUNCE: 14, GRAZE: 15, HOP: 16, SHOOT: 17,
     });
 });
 
@@ -564,9 +564,18 @@ test('the person you control sits only to rest', () => {
     assert.equal(settle(), POSE.NONE, 'standing');
     w.player.resting = true;
     assert.equal(settle(), POSE.SIT, 'resting');
+    for (let k = 0; k < 8; k++) {
+        m.clock += 6.5;
+        assert.equal(settle(), POSE.SIT, 'resting, always seated');
+    }
     w.player = null;
     w.humans.state[0] = STATE.AT_CAMP;
-    assert.equal(settle(), POSE.SIT, 'anyone else at camp sits as before');
+    const seen = new Set();
+    for (let k = 0; k < 8; k++) {
+        m.clock += 6.5;
+        seen.add(settle());
+    }
+    assert.deepEqual([...seen].sort(), [POSE.NONE, POSE.SIT], 'anyone else at camp sits now and then, and stands between');
 });
 
 test('nothing is drawn inside personal space', () => {
@@ -706,4 +715,216 @@ test("the player's kill stays until butchered, shrinking", () => {
     fx.tick(m.clock, 1000);
     const j = fx.slotOf(12);
     assert.ok(fx.dead.fade[j] > 0 && fx.dead.fade[j] < 1, `fading: ${fx.dead.fade[j]}`);
+});
+
+// ---- Items (package 3): the work poses, held and lying items, piles, arrows, marks ----
+
+const { HandPose, Items } = await import('../src/view3d/items.js');
+const { Sparks } = await import('../src/view3d/sparks.js');
+const { pileOf, PILE_CAP } = await import('../src/view3d/camps.js');
+const { sitsNow } = await import('../src/view3d/animate.js');
+
+test('the work of items has its poses; idle at camp, people sit now and then', () => {
+    const { CHOPPING, QUARRYING, CRAFTING } = STATE;
+    assert.equal(statePose('human', CHOPPING, true), POSE.CHOP);
+    assert.equal(statePose('human', QUARRYING, true), POSE.KNAP);
+    assert.equal(statePose('human', CRAFTING, true), POSE.CRAFT);
+    assert.equal(statePose('human', CHOPPING, false), POSE.NONE, 'walking to the tree');
+    assert.equal(statePose('human', STATE.BUTCHERING, false), POSE.BUTCHER, 'anyone butchering');
+    let sitting = 0;
+    for (let t = 0; t < 400; t += 0.5) sitting += sitsNow(t, 0.3) ? 1 : 0;
+    assert.ok(sitting > 500 && sitting < 620, `seated about 70% of the time: ${sitting / 8}%`);
+});
+
+// The vertex shader's turn (animate.js), word for word, for checking HandPose.
+function shaderTurn(v, r) {
+    let c = Math.cos(r[1]);
+    let s = Math.sin(r[1]);
+    v = [v[0], c * v[1] - s * v[2], s * v[1] + c * v[2]];
+    c = Math.cos(r[0]);
+    s = Math.sin(r[0]);
+    v = [c * v[0] - s * v[1], s * v[0] + c * v[1], v[2]];
+    c = Math.cos(r[2]);
+    s = Math.sin(r[2]);
+    return [c * v[0] + s * v[2], v[1], -s * v[0] + c * v[2]];
+}
+// Where the shader puts a vertex of the right arm, for a stride and a pose.
+function shaderArm(p, phase, amount, code, progress, w) {
+    const g = GAIT.human;
+    const ph = phase * TAU;
+    const walk = Math.min(1, Math.max(0, amount));
+    const run = Math.min(1, Math.max(0, amount - 1));
+    const swing = g.swing * walk * (1 + g.runSwing * run);
+    const sw = Math.sin(ph);
+    const add = (a, b) => a.map((v, k) => v + w * b[k]);
+    let own = [g.arms * walk * (1 + run) * sw, 0, 0];
+    let torso = [g.lean * run, 0, 0];
+    let root = [g.pitch * run * Math.cos(ph), 0, 0];
+    let shift = [0, -g.leg * (1 - Math.cos(swing * sw)), 0];
+    let pivot = [0, g.leg, 0];
+    if (w > 0) {
+        own = add(own, samplePose('human', code, progress, 'armR'));
+        torso = add(torso, samplePose('human', code, progress, 'torso'));
+        root = add(root, samplePose('human', code, progress, 'root'));
+        shift = add(shift, samplePose('human', code, progress, 'shift'));
+        pivot = add(pivot, samplePose('human', code, progress, 'pivot'));
+    }
+    own[1] = -own[1]; // (the right arm: outward mirrored)
+    const joint = [0, 3.45, 0.84];
+    const T = [0, g.leg, 0];
+    const sub = (a, b) => a.map((v, k) => v - b[k]);
+    const plus = (a, b) => a.map((v, k) => v + b[k]);
+    let v = plus(shaderTurn(sub(p, joint), own), joint);
+    v = plus(shaderTurn(sub(v, T), torso), T);
+    return plus(plus(shaderTurn(sub(v, pivot), root), pivot), shift);
+}
+
+test('a held item stays in the hand: the hand is where the shader draws it', () => {
+    const hand = new HandPose();
+    const out = new Float64Array(3);
+    const turn = new Float64Array(9);
+    const grip = [0.1, 1.95, 0.84];
+    const cases = [
+        [0, 0, POSE.NONE, 0, 0],             // standing
+        [0.3, 1, POSE.NONE, 0, 0],           // walking
+        [0.7, 1.8, POSE.NONE, 0, 0],         // running
+        [0, 0, POSE.THROW, 1 / 3, 1],        // drawn back to throw
+        [0.2, 0.6, POSE.JAB, 0.6, 0.7],      // a thrust, while easing in
+        [0, 0, POSE.SWING, 0.6, 1],
+        [0, 0, POSE.BUTCHER, 0.4, 1],
+        [0, 0, POSE.SHOOT, 1 / 3, 1],
+    ];
+    for (const [phase, amount, code, progress, w] of cases) {
+        hand.set(phase, amount, code, progress, w);
+        hand.place(7, ...grip, out, turn);
+        const want = shaderArm(grip, phase, amount, code, progress, w);
+        for (let k = 0; k < 3; k++) assert.ok(Math.abs(out[k] - want[k]) < 1e-9, `${code} ${progress}: ${[...out]} vs ${want}`);
+        // The turn is a rotation (orthonormal columns).
+        for (let a = 0; a < 3; a++) {
+            const len = Math.hypot(turn[a * 3], turn[a * 3 + 1], turn[a * 3 + 2]);
+            assert.ok(Math.abs(len - 1) < 1e-9);
+        }
+    }
+    // Drawn back to throw, the hand is up behind the shoulder.
+    hand.set(0, 0, POSE.THROW, 1 / 3, 1);
+    hand.place(7, ...grip, out, turn);
+    assert.ok(out[1] > 3.45 && out[0] < 0, `up and back: ${[...out]}`);
+});
+
+// A world for Items: people (id, x, y) holding {weapon, tool}, and items lying.
+function itemWorld(people, lying = []) {
+    const humans = empty();
+    for (const k of ['x', 'y', 'heading', 'id', 'age', 'tribe', 'state']) humans[k] = Float64Array.from(people.map((p) => p[k] ?? (k === 'age' ? 5000 : 0)));
+    humans.n = people.length;
+    const items = new Map();
+    const byBearer = new Map();
+    let next = 1;
+    const item = (kind, rarity = 0, more = {}) => {
+        const it = { id: next++, kind, rarity, legend: rarity === 2 ? { name: 'Grey Fang', history: [] } : null, bearer: 0, x: 0, y: 0, wear: 1, ...more };
+        items.set(it.id, it);
+        return it;
+    };
+    for (const p of people) byBearer.set(p.id, { weapon: p.weapon && item(p.weapon, p.rarity ?? 0, { bearer: p.id }), tool: p.tool && item(p.tool, 0, { bearer: p.id }) });
+    for (const l of lying) item(l.kind, l.rarity ?? 0, { x: l.x, y: l.y });
+    return { ...deadWorld(), humans, items, byBearer };
+}
+
+test('items are drawn in hands near the camera and lying on the ground; legends glint; torches burn', () => {
+    const m = motion();
+    const items = new Items(new THREE.Scene());
+    const w = itemWorld([
+        { id: 1, x: 100, y: 100, weapon: 'spear', tool: 'torch', rarity: 2 },
+        { id: 2, x: 104, y: 100, weapon: 'bow', tool: 'torch' },
+        { id: 3, x: 108, y: 100, weapon: 'club', tool: 'torch' },
+        { id: 4, x: 400, y: 100, weapon: 'spear' }, // far off
+        { id: 5, x: 102, y: 104 },                  // empty hands
+    ], [{ kind: 'basket', x: 101, y: 98 }, { kind: 'club', x: 99, y: 98, rarity: 2 }, { kind: 'knife', x: 380, y: 100 }]);
+    const v = view({ span: 400, cam: [0, 8, 25] });
+    for (const p of [1, 2, 3, 4, 5]) track(m, 'human', p, w.humans.x[p - 1], w.humans.y[p - 1], STATE.HUNTING);
+    items.update(w, v, () => 0, m, 0, 1);
+    const count = (k) => items.pools[k].mesh.count;
+    assert.deepEqual([count('spear'), count('bow'), count('club'), count('torch'), count('basket'), count('knife')], [1, 1, 2, 3, 1, 0],
+        'the near ones held, the near ones lying; the far ones not at all');
+    assert.equal(items.stats.glints, 2, "a legend's glint, held or lying");
+    assert.equal(items.stats.flames, 3, 'every torch in a hand burns');
+    assert.equal(items.sparkles.mesh.count, 2 + 3 * 3, 'glints, and flames with their cores and glows: one mesh');
+    assert.equal(items.lights.length, 0, 'no real lights unless asked for (?torchlight)');
+    // The spear is in the right hand, the bow in the left (the heading is 0: +Z is the right).
+    const at = (k) => [...items.pools[k].mesh.instanceMatrix.array.slice(12, 15)];
+    assert.ok(at('spear')[2] > 0.3, `right: ${at('spear')}`);
+    assert.ok(at('bow')[2] < -0.3, `left: ${at('bow')}`);
+    // In first person, your own hands' things are not drawn; nor without items at all.
+    items.update(w, v, () => 0, m, 1, 1.1);
+    assert.equal(count('spear'), 0);
+    items.update(deadWorld(), v, () => 0, m, 0, 1.2);
+    assert.equal(count('torch') + count('basket') + items.sparkles.mesh.count, 0);
+});
+
+test('at work, the weapon is put down beside the body', () => {
+    const m = motion();
+    const items = new Items(new THREE.Scene());
+    const w = itemWorld([{ id: 1, x: 100, y: 100, weapon: 'spear', tool: 'knife' }]);
+    const v = view({ span: 400, cam: [0, 8, 25] });
+    let out;
+    for (let f = 0; f < 60; f++) {
+        frame(m);
+        out = track(m, 'human', 1, 100, 100, STATE.BUTCHERING);
+    }
+    assert.equal(out.code, POSE.BUTCHER);
+    items.update(w, v, () => 0, m, 0, m.clock);
+    const te = items.pools.spear.mesh.instanceMatrix.array;
+    assert.ok(te[13] < 0.3, `on the ground: ${te[13]}`);
+    assert.ok(Math.abs(te[5]) < 1e-9, 'lying flat: its length level');
+    const knife = items.pools.knife.mesh.instanceMatrix.array;
+    assert.ok(knife[13] < 1.8, `the knife in the hand, low at the carcass: ${knife[13]}`);
+});
+
+test("the camps' piles follow the store, up to their caps", () => {
+    assert.deepEqual(pileOf({ store: 100 }), { logs: 0, stones: 0, hides: 0 }, 'no materials: no piles');
+    assert.deepEqual(pileOf({ wood: 1, flint: 1, hide: 1 }), { logs: 1, stones: 1, hides: 1 }, 'any at all shows');
+    assert.deepEqual(pileOf({ wood: 9, flint: 3, hide: 2 }), { logs: 5, stones: 3, hides: 2 });
+    assert.deepEqual(pileOf({ wood: 1e4, flint: 1e4, hide: 1e4 }), { logs: PILE_CAP.logs, stones: PILE_CAP.stones, hides: PILE_CAP.hides });
+});
+
+test("a bow's throw is an arrow, and its archer shoots; a club's blow a swing; the player's flights say their kind", () => {
+    const m = motion();
+    const t = thrown();
+    const v = view();
+    t.handle([{ type: 'throw', id: 5, x: 100, y: 100, tx: 120, ty: 100, hit: false, weapon: 2, time: 0 }], m);
+    assert.equal(m.oneShots.get(5).code, POSE.SHOOT);
+    t.update(spearWorld(), v, () => 0, m.clock);
+    assert.deepEqual([t.mesh.count, t.arrows.count], [0, 1], 'an arrow, not a spear');
+    t.handle([{ type: 'swing', id: 6, x: 100, y: 100, tx: 103, ty: 100, hit: true, weapon: 3, time: 1 }], m);
+    assert.equal(m.oneShots.get(6).code, POSE.SWING);
+    t.update(spearWorld(), v, () => 0, m.clock);
+    assert.deepEqual([t.mesh.count, t.arrows.count], [0, 1], 'a club flies nothing');
+    // The volley is the simulation's: its skill event draws nothing more.
+    t.handle([{ type: 'skill', id: 9, kind: 2, name: '', x: 100, y: 100, dx: 1, dy: 0, time: 1 }], m, 9);
+    t.update(spearWorld(), v, () => 0, m.clock);
+    assert.equal(t.arrows.count, 1);
+    // The player's own flights, an arrow (kind 2) and a spear (1), each as it is.
+    const P = params.play;
+    const arrowSpeed = P.throwSpeed * params.items.arrowSpeed;
+    const w = spearWorld([110, 100, arrowSpeed, 0, 0.3, 2, 100, 110, P.throwSpeed, 0, 0.3, 1], 10, 10);
+    t.update(w, v, () => 0, m.clock);
+    assert.deepEqual([t.mesh.count, t.arrows.count], [1, 2]);
+});
+
+test('chops, knaps and skills leave their marks, briefly', () => {
+    const s = new Sparks(new THREE.Scene());
+    s.attach();
+    const v = view({ span: 400, cam: [0, 8, 25] });
+    s.handle([
+        { type: 'chop', id: 1, x: 100, y: 100, time: 0 },
+        { type: 'knap', id: 2, x: 104, y: 100, time: 0 },
+        { type: 'skill', id: 3, kind: 'spear', x: 100, y: 100, dx: 1, dy: 0, time: 0 },
+        { type: 'skill', id: 3, kind: 'club', x: 100, y: 100, dx: 1, dy: 0, time: 0 },
+    ], () => 0, 0);
+    s.update(v, 0.05);
+    assert.ok(s.mesh.count >= 20, `chips, sparks and dust: ${s.mesh.count}`);
+    assert.equal(s.streaks.filter((x) => x.mesh.visible).length, 1, 'a streak');
+    assert.equal(s.rings.filter((x) => x.mesh.visible).length, 1, 'a ring of dust');
+    s.update(v, 3);
+    assert.equal(s.mesh.count, 0);
+    assert.equal(s.streaks.filter((x) => x.mesh.visible).length + s.rings.filter((x) => x.mesh.visible).length, 0, 'gone');
 });

@@ -141,6 +141,24 @@
         .bar.soc span { background: #7fb3ff; }
         #tribes .muted { color: var(--muted); font-size: 11px; }
 
+        /* Legends list: like the tribes, two lines a row. */
+        #legends { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 6px; }
+        #legends[hidden], #legends-more[hidden] { display: none; }
+        .legend-row { display: grid; grid-template-columns: 22px 1fr 34px 34px; align-items: center; gap: 6px; height: 34px; }
+        .legend-row.head { color: var(--muted); font-size: 11px; height: 18px; }
+        .legend-row.head span:nth-child(n+3) { text-align: right; }
+        button.legend-row { width: 100%; padding: 0; text-align: left; color: var(--text); font: inherit; border: 0; border-radius: 4px; }
+        button.legend-row:disabled { opacity: 1; cursor: default; }
+        button.legend-row:disabled:hover { background: none; }
+        .legend-row canvas { width: 18px; height: 12px; border-radius: 1px; }
+        .legend-row .name { min-width: 0; line-height: 1.25; }
+        .legend-row .name > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .legend-row .t { color: #ddd3b6; }
+        .legend-row .as { color: var(--muted); font-size: 11px; }
+        .legend-row .n { text-align: right; }
+        #legends .muted { color: var(--muted); font-size: 11px; }
+        @media (max-width: 600px) { #panel.following #legends { display: none; } }
+
         #panel.collapsed .body { display: none; }
         #panel.collapsed { width: auto; }
 
@@ -230,7 +248,7 @@
         #hud-compass { display: block; width: 100%; height: 100%; }
 
         .hud-cross { position: absolute; left: 34px; bottom: 26px; width: 168px; text-align: center; }
-        .hud-cross .skill { font-size: 15px; font-style: italic; color: var(--hud-muted); margin-bottom: 6px; }
+        .hud-cross .skill { font-size: 15px; font-style: italic; color: var(--hud-muted); margin-bottom: 6px; white-space: nowrap; }
         .slots { position: relative; width: 168px; height: 168px; }
         .slot {
             position: absolute; width: 54px; height: 54px; display: grid; place-items: center;
@@ -252,6 +270,66 @@
             background: conic-gradient(rgba(8, 9, 9, 0.74) calc(var(--reload, 0) * 1turn), transparent 0);
         }
         .hud-cross .item { margin-top: 7px; font-size: 18px; }
+
+        /* Items (play/gear.js): each slot's sign in its rarity's colour
+           (plain grey, rare blue, legendary gold), a hairline of wear left
+           along its foot, the spares in its corner; the skill above with its
+           Spirit, the held item's name below, and what is being crafted. */
+        :root { --plain: #c4beb1; --rare: #86aee8; --legend: #e2c16f; }
+        .slot .icon { display: grid; place-items: center; }
+        .slot .icon:empty::before { content: ""; width: 12px; height: 1px; background: var(--hud-line); }
+        .slot.normal svg { stroke: var(--plain); }
+        .slot.rare svg { stroke: var(--rare); }
+        .slot.legendary svg { stroke: var(--legend); filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.8)) drop-shadow(0 0 3px rgba(226, 193, 111, 0.45)); }
+        .slot.rare { outline: 1px solid rgba(134, 174, 232, 0.5); }
+        .slot.legendary { outline: 1px solid rgba(226, 193, 111, 0.6); background: radial-gradient(rgba(226, 193, 111, 0.1), rgba(8, 9, 9, 0.5) 70%); }
+        .slot .spares { position: absolute; right: 4px; top: 0; font-size: 13px; color: var(--hud-muted); }
+        .slot .wear { position: absolute; left: 7px; right: 7px; bottom: 4px; height: 2px; background: rgba(8, 9, 9, 0.6); }
+        .slot .wear[hidden] { display: none; }
+        .slot .wear span { display: block; height: 100%; width: calc(var(--wear, 1) * 100%); background: var(--plain); opacity: 0.85; }
+        .slot.rare .wear span { background: var(--rare); }
+        .slot.legendary .wear span { background: var(--legend); }
+        .slot .wear.low span { background: #c9604f; }
+        .hud-cross .skill .cost { color: #8eaee6; font-style: normal; font-size: 14px; margin-left: 6px; }
+        .hud-cross .skill.none { opacity: 0.7; }
+        .hud-cross .item.rare { color: var(--rare); }
+        .hud-cross .item.legendary { color: var(--legend); }
+        .hud-cross .crafting { position: absolute; left: -20px; right: -20px; top: 100%; margin-top: 2px; font-size: 15px; font-style: italic; color: var(--hud-muted); white-space: nowrap; }
+        .hud-cross .crafting[hidden] { display: none; }
+        .hud-cross .crafting .bar { display: block; height: 2px; margin: 4px 22px 0; background: rgba(8, 9, 9, 0.6); box-shadow: 0 0 0 1px var(--hud-line); }
+        .hud-cross .crafting .bar span { display: block; height: 100%; width: calc(var(--done, 0) * 100%); background: var(--hud-text); }
+        .hud-store .mats { display: flex; gap: 12px; margin-left: 6px; padding-left: 12px; border-left: 1px solid var(--hud-line); font-size: 17px; }
+        .hud-store .mats[hidden] { display: none; }
+        .hud-store .mat { display: flex; align-items: center; gap: 4px; }
+        .hud-store .mat svg { width: 17px; height: 17px; }
+        #hud-prompt .rare { color: var(--rare); }
+        #hud-prompt .legendary { color: var(--legend); }
+
+        /* The craft menu: a dark box in the middle, the HUD's face; rows the
+           store cannot pay for are dimmed. */
+        #craft {
+            position: absolute; left: 50%; top: 46%; transform: translate(-50%, -50%); width: 330px; padding: 14px 0 10px;
+            pointer-events: auto; background: rgba(10, 11, 11, 0.86); box-shadow: 0 0 0 1px var(--hud-line), 0 8px 30px rgba(0, 0, 0, 0.45);
+            backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+        }
+        #craft[hidden] { display: none; }
+        #craft .head { padding: 0 20px 8px; font-size: 21px; letter-spacing: 0.04em; }
+        #craft .muted { color: var(--hud-muted); font-style: italic; font-size: 15px; letter-spacing: 0; margin-left: 6px; }
+        #craft .rows { border-top: 1px solid var(--hud-line); border-bottom: 1px solid var(--hud-line); padding: 4px 0; }
+        #craft button { display: flex; align-items: center; gap: 12px; width: 100%; height: 38px; padding: 0 20px; border: 0; border-radius: 0; font: 18px var(--serif); color: var(--hud-text); text-align: left; background: none; }
+        #craft button:hover { background: rgba(238, 232, 218, 0.06); }
+        #craft .row.on { background: linear-gradient(90deg, transparent, rgba(238, 232, 218, 0.1) 18%, rgba(238, 232, 218, 0.1) 82%, transparent); box-shadow: inset 0 1px 0 var(--hud-line), inset 0 -1px 0 var(--hud-line); }
+        #craft .row svg { width: 26px; height: 26px; fill: none; stroke: var(--plain); stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+        #craft .row .name { flex: 1; }
+        #craft .row .cost { color: var(--hud-muted); font-size: 15px; }
+        #craft .row.lacking { color: rgba(238, 232, 218, 0.34); }
+        #craft .row.lacking .cost { color: rgba(227, 160, 140, 0.55); }
+        #craft .row.lacking svg { stroke: rgba(196, 190, 177, 0.3); }
+        #craft .flint { height: 34px; margin-top: 4px; font-size: 16px; }
+        #craft .flint .box { width: 11px; height: 11px; box-shadow: 0 0 0 1px var(--hud-muted); margin-right: 2px; }
+        #craft .flint[aria-pressed="true"] .box { background: var(--rare); box-shadow: 0 0 0 1px var(--rare); }
+        #craft .flint:disabled { opacity: 0.4; }
+        #craft .keys { padding: 6px 20px 0; color: var(--hud-muted); font-size: 13px; text-align: center; }
 
         #hud-prompt { position: absolute; left: 50%; bottom: 118px; transform: translateX(-50%); min-width: 400px; padding: 8px 70px; text-align: center; font-size: 20px; white-space: nowrap; }
         #hud-prompt[hidden] { display: none; }
@@ -295,6 +373,9 @@
         .banner.died .title { font-size: clamp(44px, 8vw, 92px); font-weight: 500; letter-spacing: 0.08em; color: #8e1c16; animation: swell 3.4s ease-out both; text-shadow: 0 0 22px rgba(0, 0, 0, 0.55), 0 2px 3px rgba(0, 0, 0, 0.7); }
         .banner.line { animation: banner 4.8s ease both; }
         .banner.line .title { font-style: italic; padding: 0 16px; }
+        .banner.legend { animation: banner 5.2s ease both; }
+        .banner.legend .title { font-size: clamp(36px, 6vw, 70px); font-weight: 500; letter-spacing: 0.1em; color: #d9b45c; text-shadow: 0 0 24px rgba(217, 180, 92, 0.35), 0 2px 3px rgba(0, 0, 0, 0.7); animation: swell 5.2s ease-out both; }
+        .banner .sub { margin-top: 4px; font-size: clamp(20px, 2.6vw, 28px); font-style: italic; color: #efe2bd; }
         .banner.ended { top: 30%; animation: rise 1.8s ease both; }
         .banner.ended .title { font-size: clamp(32px, 5.5vw, 64px); font-weight: 500; letter-spacing: 0.08em; color: #d8d0bd; }
         @keyframes banner { 0% { opacity: 0; } 25% { opacity: 1; } 72% { opacity: 1; } 100% { opacity: 0; } }
@@ -417,6 +498,13 @@
                 <div id="tribes-empty" class="muted" hidden>no tribes left</div>
             </section>
 
+            <!-- Legendary items (play/gear.js): click one to follow its bearer. -->
+            <section id="legends" hidden>
+                <div class="legend-row head"><span></span><span>legends</span><span title="Kills">kills</span><span title="Generations of one line that have borne it">gens</span></div>
+                <div id="legend-list"></div>
+                <div id="legends-more" class="muted" hidden></div>
+            </section>
+
             <footer><label title="Type a seed and press Enter for that world">seed <input id="seed" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" aria-label="Seed"></label> · <span id="status"></span></footer>
         </div>
     </aside>
@@ -434,18 +522,26 @@
         </div>
         <div class="hud-compass fade-band"><canvas id="hud-compass"></canvas></div>
         <div class="hud-cross">
-            <div class="skill">no skill</div>
+            <div class="skill" id="hud-skill">no skill</div>
             <div class="slots">
                 <div class="slot up" title="Call"></div>
-                <div class="slot left" title="Tool"></div>
-                <div class="slot right weapon" id="hud-weapon" title="Weapon"><svg viewBox="0 0 36 36" aria-hidden="true"><path d="M7 29 25.5 10.5"/><path d="M25.5 10.5 30 6l-1.2 5.8-3.3-1.3z"/><path d="M9.5 24.5l2 2"/></svg></div>
+                <div class="slot left tool" id="hud-tool" title="Tool (← to change, right click to use)"><span class="icon"></span><span class="spares"></span><span class="wear"><span></span></span></div>
+                <div class="slot right weapon" id="hud-weapon" title="Weapon (→ to change)"><span class="icon"><svg viewBox="0 0 36 36" aria-hidden="true"><path d="M7 29 25.5 10.5"/><path d="M25.5 10.5 30 6l-1.2 5.8-3.3-1.3z"/><path d="M9.5 24.5l2 2"/></svg></span><span class="spares"></span><span class="wear"><span></span></span></div>
                 <div class="slot down" title="Food pouch"><svg viewBox="0 0 36 36" aria-hidden="true"><path d="M13 11.5c-4 3.5-6 8-5 12.5 1 4.2 5.2 6 10 6s9-1.8 10-6c1-4.5-1-9-5-12.5"/><path d="M12.5 11.5h11"/><path d="M14.5 11.5 13 7.5h10l-1.5 4"/></svg><span class="count" id="hud-carry">0</span></div>
                 <div class="call" id="hud-call"></div>
             </div>
-            <div class="item">Plain spear</div>
+            <div class="item" id="hud-item">Plain spear</div>
+            <div class="crafting" id="hud-craft" hidden><span class="what"></span><span class="bar"><span></span></span></div>
+        </div>
+        <!-- The craft menu, C at camp (play/craft.js). -->
+        <div id="craft" class="fade-box" hidden>
+            <div class="head">Craft <span class="muted">from the camp's store</span></div>
+            <div class="rows" id="craft-rows"></div>
+            <button type="button" class="flint" id="craft-flint" aria-pressed="false"><span class="box"></span>+1 flint <span class="muted">(chance of rare)</span></button>
+            <div class="keys">↑↓ choose · Enter craft · F flint · Esc close</div>
         </div>
         <div id="hud-prompt" class="fade-band" hidden></div>
-        <div class="hud-store fade-band" title="Your tribe's store of food"><span class="muted">store</span><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M11.5 3.5c3 0 5 2.2 5 4.8 0 3.2-3 5.2-6 5.2-1.6 0-2.6.6-3.3 1.4"/><path d="M11.5 3.5c-3 0-5.5 2.4-5.5 5.4 0 1.5.5 2.6 1.2 3.4"/><path d="M7.2 14.9 5 17.1"/><circle cx="4.2" cy="16.2" r="1.2"/><circle cx="5.9" cy="17.9" r="1.2"/></svg><span id="hud-store">0</span></div>
+        <div class="hud-store fade-band" title="Your tribe's store of food"><span class="muted">store</span><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M11.5 3.5c3 0 5 2.2 5 4.8 0 3.2-3 5.2-6 5.2-1.6 0-2.6.6-3.3 1.4"/><path d="M11.5 3.5c-3 0-5.5 2.4-5.5 5.4 0 1.5.5 2.6 1.2 3.4"/><path d="M7.2 14.9 5 17.1"/><circle cx="4.2" cy="16.2" r="1.2"/><circle cx="5.9" cy="17.9" r="1.2"/></svg><span id="hud-store">0</span><span class="mats" id="hud-mats" hidden><span class="mat" title="Wood"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 13.5 13 4"/><path d="M7 17 16.5 7.5"/><circle cx="14.75" cy="5.75" r="2.47"/><circle cx="5.25" cy="15.25" r="2.47"/></svg><span id="hud-wood">0</span></span><span class="mat" title="Flint"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 13.5 7.5 5l6.5-1.5 3 7-4.5 6.5L6 17z"/><path d="M7.5 5l2 6 4.5-7.5M9.5 11l3 6.5"/></svg><span id="hud-flint">0</span></span><span class="mat" title="Hide"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 3.5c1.5 1 6.5 1 8 0 .5 2 2.5 3 3 4.5-1.5 1-1.5 3 0 4.5-1 1.5-2.5 2.5-3 4.5-1.5-1-6.5-1-8 0-.5-2-2-3-3-4.5 1.5-1.5 1.5-3.5 0-4.5.5-1.5 2.5-2.5 3-4.5z"/></svg><span id="hud-hide">0</span></span></span></div>
         <div class="hud-dot"></div>
         <div id="hud-ring" hidden></div>
         <div id="hud-flash"></div>

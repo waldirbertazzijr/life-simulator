@@ -197,6 +197,7 @@ export class Creatures {
         // The person the page controls (play/) sits only to rest; standing
         // still at camp, it stands.
         const player = always ? world.player ?? null : null;
+        if (always) motion.seated = player !== null && player.resting ? player.id : 0; // (always seated while resting)
         let te = herd.matrices;
         let tc = herd.colors;
         let tg = herd.gaits;
