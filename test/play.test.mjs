@@ -1570,3 +1570,26 @@ test('Shift held runs, as Space held does', () => {
     key('keyup', 'ShiftLeft');
     assert.equal(input.sprinting, false);
 });
+
+test('the real keyboard reaches the body: Space or Shift held runs', () => {
+    const { clock, input, key } = hands();
+    input.setMode('body');
+    const body = new Body();
+    const env = { terrain: null, W: 1000, H: 1000, top: 10, cruise: 0.5, crouchSpeed: 0.4, rollSpeed: 20, rollSteps: 5, paused: false, still: false, face: 'move' };
+    const speedWith = (down) => {
+        down();
+        key('keydown', 'KeyW');
+        clock.t += 1000;
+        body.update(1 / 60, input, env);
+        const v = body.speed;
+        key('keyup', 'KeyW');
+        return v;
+    };
+    const walk = speedWith(() => {});
+    const space = speedWith(() => key('keydown', 'Space'));
+    key('keyup', 'Space');
+    const shift = speedWith(() => key('keydown', 'ShiftLeft'));
+    key('keyup', 'ShiftLeft');
+    assert.ok(space > walk * 1.5, `Space held runs (${space} against ${walk})`);
+    assert.ok(shift > walk * 1.5, `Shift held runs (${shift} against ${walk})`);
+});

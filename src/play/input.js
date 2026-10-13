@@ -276,4 +276,9 @@ export class Input {
     get sprinting() {
         return this.space.held(this.now()) || this.held.has('run');
     }
+
+    // What the body reads (body.js update's ctl.sprint).
+    get sprint() {
+        return this.sprinting;
+    }
 }
