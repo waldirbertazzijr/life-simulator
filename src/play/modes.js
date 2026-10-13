@@ -50,6 +50,7 @@ import {
     itemsOn, itemById, kindName, itemName, rarityName, skillOf, weaponKind, equipment, cycleAct, craftRows,
     nearestLying, pickupText, CRAFT_ORDER,
 } from './gear.js';
+import { TASK, handWork } from '../items.js';
 
 const DEG = Math.PI / 180;
 const TAU = Math.PI * 2;
@@ -82,6 +83,23 @@ const SIGHT_PX = 28;
 // this near (at your feet) is picked up before the rack is used, one within
 // `reach` (the simulation's) only when the rack offers nothing.
 const ITEMS = { swing: 4, cut: 3, feet: 3, reach: 6 };
+// What the hands do while E is held (let go, they stop); gathering food
+// goes on until E again. Chopping and knapping are gathering to the
+// simulation (act 'gather': it decides by the ground underfoot, as the
+// page's prompt does: items.js handWork), and what each gathers.
+const HELD = new Set(['butcher', 'chop', 'knap']);
+const WORK = { [TASK.WOOD]: 'chop', [TASK.FLINT]: 'knap' };
+const GATHERS = { gather: 'food', chop: 'wood', knap: 'flint' };
+const WORK_POSE = { butcher: POSE.BUTCHER, gather: POSE.GATHER, chop: POSE.CHOP, knap: POSE.KNAP };
+const DOING = { butcher: 'Butchering', gather: 'Stop gathering', chop: 'Chopping wood', knap: 'Knapping flint' };
+
+// The prompt at the rack with something to store: 'Store 30 food, 3 wood'
+// (a material less than one is named without a number).
+function storeText({ amount, wood = 0, flint = 0 }) {
+    const parts = amount >= 1 ? [`${amount} food`] : [];
+    for (const [name, v] of [['wood', wood], ['flint', flint]]) if (v > 0) parts.push(v >= 1 ? `${Math.floor(v)} ${name}` : name);
+    return `Store ${parts.join(', ')}`;
+}
 // The pose of an attack (and of a charge, held at its wind-up) by weapon.
 const ATTACK_POSE = { spear: POSE.THROW, bow: POSE.SHOOT, club: POSE.SWING };
 const TOOL_POSE = { knife: POSE.JAB, torch: POSE.SWING };
@@ -435,7 +453,7 @@ export class Modes {
                 this.interact();
                 break;
             case 'interact-end':
-                if (this.doing?.kind === 'butcher') this.stopHands(); // (butchering lasts while E is held)
+                if (HELD.has(this.doing?.kind)) this.stopHands(); // (butchering, chopping and knapping last while E is held)
                 break;
             case 'attack':
                 this.attack(info);
@@ -455,7 +473,7 @@ export class Modes {
                 this.env.setPaused(!this.env.getPaused());
                 break;
             case 'cycle-call':
-                this.calls.cycle();
+                this.calls.cycle(this.world.p.items?.enabled === true);
                 break;
             case 'call':
                 this.callHere();
@@ -855,6 +873,7 @@ export class Modes {
         s.yaw = b.yaw;
         s.camp = tribe ? Math.atan2(wrapDelta(tribe.camp.y - b.y, w.height), wrapDelta(tribe.camp.x - b.x, w.width)) : null;
         s.carry = f ? this.carried(f) : 0;
+        s.load = this.load(); // (wood and flint, by the pouch)
         s.store = tribe ? tribe.store : 0;
         s.prompt = this.dying || this.menu ? null : paused ? [['P', 'Resume']] : this.prompt(f);
         s.reload = f ? this.reloading() : 0;
@@ -892,9 +911,10 @@ export class Modes {
     // its report says) or from a child. The lock-on aims it: the simulation
     // leads the target. E does what the place offers (interaction): butcher
     // your kill (while E is held), store what you carry or take food at the
-    // rack, rest in camp, gather on grass outside it (until E again or a
-    // move). R eats from the pouch. The body shows each (the poses: env.pose,
-    // hold, release).
+    // rack, rest in camp; outside it, chop wood in forest or knap flint on
+    // rock (while E is held, until the load is full), or gather on grass
+    // (until E again or a move). R eats from the pouch. The body shows each
+    // (the poses: env.pose, hold, release).
 
     // The simulation's report on your body, if it has it by hand; or null.
     mine() {
@@ -907,6 +927,13 @@ export class Modes {
         const p = this.mine();
         if (p !== null && Number.isFinite(p.carry)) return p.carry;
         return f ? f.pop.carry[f.i] : 0;
+    }
+
+    // The wood and flint you carry, and the most you can (all of it the
+    // simulation's word; nothing before it has said).
+    load() {
+        const p = this.mine();
+        return { wood: p?.wood ?? 0, flint: p?.flint ?? 0, max: p?.loadMax ?? this.world.p.items?.load ?? 0 };
     }
 
     // How much of the spear's reload is still to go, 0..1: all of it from the
@@ -1032,9 +1059,12 @@ export class Modes {
     }
 
     // What E would do here, in this order: butcher a kill of yours within
-    // reach; at the rack (by the camp's centre), store what you carry, or
-    // with empty hands take food for the road; in camp, rest; outside it, on
-    // grass worth it, gather. { kind, id?, amount? }, or null.
+    // reach; at the rack (by the camp's centre), store what you carry (food,
+    // wood, flint), or with empty hands take food for the road; in camp,
+    // rest; outside it, in forest chop wood and on rock or tundra knap flint
+    // (while the load has room: the simulation's own test of the ground,
+    // items.js handWork, on the Mirror's land), elsewhere, on grass worth
+    // it, gather. { kind, id?, amount?, wood?, flint? }, or null.
     interaction() {
         const w = this.world;
         const f = w.find(this.self);
@@ -1058,11 +1088,17 @@ export class Modes {
         const pick = lying ? { kind: 'pickup', id: lying.item.id, item: lying.item } : null;
         if (pick && lying.d <= ITEMS.feet) return pick;
         const carry = this.carried(f);
+        const load = this.load();
         const t = w.tribeById.get(this.tribe);
         if (t) {
             const d2 = wrapDelta(t.camp.x - b.x, w.width) ** 2 + wrapDelta(t.camp.y - b.y, w.height) ** 2;
             if (d2 <= (Q.rackReach ?? HANDS.rackReach) ** 2) {
-                if (carry >= 1) return { kind: 'store', amount: Math.floor(carry) };
+                if (carry >= 1 || load.wood > 0 || load.flint > 0) {
+                    const what = { kind: 'store', amount: Math.floor(carry) };
+                    if (load.wood > 0) what.wood = load.wood;
+                    if (load.flint > 0) what.flint = load.flint;
+                    return what;
+                }
                 const amount = Math.floor(Math.min(Q.takeMax ?? HANDS.takeMax, t.store, P.carryMax - carry));
                 if (amount >= 1) return { kind: 'take', amount };
             }
@@ -1070,6 +1106,8 @@ export class Modes {
             if (d2 < P.campRadius * P.campRadius) return { kind: 'rest' };
         }
         if (pick) return pick;
+        const work = WORK[handWork(w, b.x, b.y, t)];
+        if (work) return load.wood + load.flint < load.max - 1e-9 ? { kind: work } : null;
         const g = w.grass;
         if (g && g.g[g.index(b.x, b.y)] >= P.gatherMin && carry < P.carryMax) return { kind: 'gather' };
         return null;
@@ -1088,19 +1126,20 @@ export class Modes {
         const what = this.interaction();
         if (!what) return;
         if (what.kind === 'butcher') this.startHands('butcher', what.id);
-        else if (what.kind === 'gather') this.startHands('gather', 0);
+        else if (what.kind in GATHERS) this.startHands(what.kind, 0); // gather, chop, knap
         else if (what.kind === 'rest') this.rest();
         else if (what.kind === 'pickup') this.world.act({ seq: this.body.nextSeq(), action: 'pickup', item: what.id });
         else this.world.act({ seq: this.body.nextSeq(), action: what.kind }); // store, take
     }
 
-    // Butcher the carcass `id`, or gather: it goes on (the body kneeling to
-    // it) until it is done, stopped, or turned down (keepHands).
+    // Butcher the carcass `id`, gather, chop or knap: it goes on (the body
+    // kneeling to it, swinging at a tree, striking stone) until it is done,
+    // stopped, or turned down (keepHands).
     startHands(kind, id) {
         const msg = kind === 'butcher' ? { action: 'butcher', on: true, id } : { action: 'gather', on: true };
         this.world.act({ seq: this.body.nextSeq(), ...msg });
         this.doing = { kind, id, acked: false, since: this.clock };
-        this.holdPose(kind === 'butcher' ? POSE.BUTCHER : POSE.GATHER);
+        this.holdPose(WORK_POSE[kind]);
     }
 
     // Stop what the hands are at (E let go, E again, a move, an attack).
@@ -1108,7 +1147,7 @@ export class Modes {
         const d = this.doing;
         if (!d) return;
         this.doing = null;
-        this.world.act({ seq: this.body.nextSeq(), action: d.kind, on: false });
+        this.world.act({ seq: this.body.nextSeq(), action: d.kind === 'butcher' ? 'butcher' : 'gather', on: false });
         this.releasePose();
     }
 
@@ -1131,7 +1170,9 @@ export class Modes {
         const d = this.doing;
         if (d) {
             const p = this.mine();
-            const at = p !== null && (d.kind === 'butcher' ? p.butchering === d.id : p.gathering === true);
+            // (Gathering food: `true` from a simulation that does not say what.)
+            const at = p !== null && (d.kind === 'butcher' ? p.butchering === d.id
+                : p.gathering === GATHERS[d.kind] || (d.kind === 'gather' && p.gathering === true));
             if (at) d.acked = true;
             else if (d.acked || this.clock - d.since > ACK_WAIT) {
                 this.doing = null;
@@ -1162,15 +1203,17 @@ export class Modes {
     prompt(f) {
         if (this.resting) return [['E', 'Rise']];
         const out = [];
-        if (this.doing) out.push(['E', this.doing.kind === 'gather' ? 'Stop gathering' : 'Butchering']);
+        if (this.doing) out.push(['E', DOING[this.doing.kind] ?? 'Butchering']);
         else {
             const what = this.interaction();
             if (what) {
                 out.push(['E', what.kind === 'butcher' ? 'Butcher'
-                    : what.kind === 'store' ? `Store ${what.amount} food`
+                    : what.kind === 'store' ? storeText(what)
                     : what.kind === 'take' ? `Take ${what.amount} food`
                     : what.kind === 'rest' ? 'Rest at camp'
                     : what.kind === 'pickup' ? pickupText(what.item)
+                    : what.kind === 'chop' ? 'Chop wood'
+                    : what.kind === 'knap' ? 'Knap flint'
                     : 'Gather', ...(what.kind === 'pickup' && what.item.rarity > 0 ? [rarityName(what.item.rarity)] : [])]);
             }
         }
@@ -1211,10 +1254,11 @@ export class Modes {
             return false;
         }
         if (kind === 'basket') {
-            if (this.doing?.kind === 'gather') this.stopHands();
-            else if (!this.doing && this.interaction()?.kind === 'gather') {
+            const what = this.doing ? null : this.interaction()?.kind;
+            if (this.doing?.kind in GATHERS) this.stopHands();
+            else if (what in GATHERS) {
                 this.standUp();
-                this.startHands('gather', 0);
+                this.startHands(what, 0);
             }
             return true;
         }

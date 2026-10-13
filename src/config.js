@@ -312,6 +312,20 @@ export const params = {
         kit: 2,              // spare weapons, and spare tools, the player keeps
     },
 
+    // Wood and flint by the player's own hands (player.js, items.js
+    // handWork): E in forest chops wood, on rock or tundra knaps flint, at
+    // the errands' rates (items.wood, flint, × the ground's richness), into
+    // a load of up to items.load (× a basket's carry) carried to the rack.
+    // And the orders Gather wood and Gather flint (orders.js). With nobody
+    // controlled and no order given, none of this is ever read.
+    materials: {
+        knifeKnap: 1.5,      // a knife in hand knaps flint this much faster
+        chopEvery: 15,       // a stroke for the page (wood chips) every this many steps...
+        knapEvery: 10,       // ...and sparks from the flint
+        patch: 12,           // on a flat world: the ground this near the tribe's spot for a material gives it
+        ordered: 0.25,       // Gather wood or flint: at most one more than this share of the adults on its errands at once
+    },
+
     evolution: {
         enabled: true,
         // Children inherit each gene × e^(σ·N(0,1)) — symmetric in log space, so

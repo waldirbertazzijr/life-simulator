@@ -597,7 +597,7 @@ test('gathering takes from the patch underfoot as the AI does', () => {
     const regrown = 0.5 - P.gatherRate + w.p.grass.regrowth * (1 - (0.5 - P.gatherRate));
     assert.ok(Math.abs(w.grass.g[gi] - regrown) < 1e-12, 'taken from the patch');
     assert.equal(w.humans.state[i], STATE.GATHERING);
-    assert.equal(playerSnapshot(w).gathering, true);
+    assert.equal(playerSnapshot(w).gathering, 'food');
     for (let k = 0; k < 9; k++) w.step();
     assert.ok(Math.abs(w.humans.carry[at(w, id)] - 10 * P.gatherRate * P.plantEnergy) < 1e-9);
 
@@ -629,14 +629,14 @@ test('gathering stops on a thin patch, a move, or off', () => {
     g[w.grass.index(x + 1, y)] = 0.6;
     act(w, 'gather', { on: true });
     w.step();
-    assert.equal(playerSnapshot(w).gathering, true);
+    assert.equal(playerSnapshot(w).gathering, 'food');
     input(w, x + 1, y);
     w.step();
     assert.equal(playerSnapshot(w).gathering, false, 'a move stops it');
 
     act(w, 'gather', { on: true });
     w.step();
-    assert.equal(playerSnapshot(w).gathering, true);
+    assert.equal(playerSnapshot(w).gathering, 'food');
     act(w, 'gather', { on: false });
     w.step();
     assert.equal(playerSnapshot(w).gathering, false, 'off');

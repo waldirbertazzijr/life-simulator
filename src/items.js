@@ -8,7 +8,8 @@
 // little anywhere grass grows; flint is quarried on bare rock, and a little on
 // tundra (on a flat world, a little anywhere); hides come with kills. Each
 // tribe finds its nearest good spots when it is founded (findSpots), each with
-// a way there by land, as its camp has (tribe.paths).
+// a way there by land, as its camp has (tribe.paths). The player gathers them
+// by hand where it stands (handWork, yieldAt: player.js), at the same rates.
 //
 // Items. world.items maps an item's id to a plain object:
 //
@@ -155,12 +156,7 @@ function spotFor(world, tribe, mat) {
     const T = world.terrain;
     const H = world.p.human;
     const I = world.p.items;
-    const { camp } = tribe;
-    if (T === null) {
-        const a = tribe.id * GOLDEN + (mat === TASK.FLINT ? Math.PI : 0);
-        const d = H.campRadius * 2.5;
-        return { x: wrapPos(camp.x + Math.cos(a) * d, world.width), y: wrapPos(camp.y + Math.sin(a) * d, world.height), rich: false, paths: null };
-    }
+    if (T === null) return flatSpot(world, tribe, mat);
     const { grass } = world;
     const field = tribe.paths;
     const unit = T.wayW / 2; // a path field counts 2 a cell straight on
@@ -195,6 +191,46 @@ function spotFor(world, tribe, mat) {
     const y = (Math.floor(best / grass.cols) + 0.5) * grass.cellH;
     return { x, y, rich: bestYld === 1, paths: T.pathField(x, y) };
 }
+
+// A tribe's spot for a material on a flat world: a little outside its camp,
+// on a bearing of its own (flint's opposite wood's). A pure function of the
+// tribe's id and camp, so the page can find it too (handWork).
+export function flatSpot(world, tribe, mat) {
+    const { camp } = tribe;
+    const a = tribe.id * GOLDEN + (mat === TASK.FLINT ? Math.PI : 0);
+    const d = world.p.human.campRadius * 2.5;
+    return { x: wrapPos(camp.x + Math.cos(a) * d, world.width), y: wrapPos(camp.y + Math.sin(a) * d, world.height), rich: false, paths: null };
+}
+
+// What a pair of hands gets from the ground at (x, y) (the player's E): wood
+// in forest (where it is plentiful), flint on bare rock and, a little, on
+// tundra (without biomes: on rocky ground); TASK.NONE elsewhere, where E
+// gathers food. A flat world has no ground to tell by (wood and flint are a
+// little anywhere), so, as for its errands, at `tribe`'s own spots: within
+// materials.patch of one. Items off: always NONE. The simulation decides with
+// this (player.js), and the page shows what E will do with it, on the
+// Mirror's copy of the land (play/modes.js): both have terrain, grass, p,
+// width, height, and tribes with an id and a camp.
+export function handWork(world, x, y, tribe) {
+    if (world.p.items.enabled !== true) return TASK.NONE;
+    if (world.terrain !== null) {
+        if (richness(world, x, y, TASK.WOOD) === 1) return TASK.WOOD;
+        return richness(world, x, y, TASK.FLINT) > 0 ? TASK.FLINT : TASK.NONE;
+    }
+    if (!tribe) return TASK.NONE;
+    const R = world.p.materials.patch;
+    for (const mat of [TASK.WOOD, TASK.FLINT]) {
+        const s = flatSpot(world, tribe, mat);
+        const dx = wrapDelta(s.x - x, world.width);
+        const dy = wrapDelta(s.y - y, world.height);
+        if (dx * dx + dy * dy <= R * R) return mat;
+    }
+    return TASK.NONE;
+}
+
+// What a step of work at (x, y) gathers of a material (TASK.WOOD or FLINT):
+// items.wood or items.flint where the ground is rich, less where it is poor.
+export const yieldAt = (world, x, y, mat) => (mat === TASK.WOOD ? world.p.items.wood : world.p.items.flint) * richness(world, x, y, mat);
 
 // A new item of `kind`, made by `maker` (an id, 0: nobody in particular) in
 // `tribe` (its id). Rare items come with a trait already rolled.
@@ -703,7 +739,7 @@ function errandStep(world, i, tribe, task, campDx, campDy, campD) {
         return;
     }
     pop.work[i]++;
-    const load = pop.load[i] + (wood ? I.wood : I.flint) * richness(world, x, y, task);
+    const load = pop.load[i] + yieldAt(world, x, y, task);
     pop.load[i] = load > I.load ? I.load : load;
     if (pop.work[i] % STROKE === 1) world.events.push({ type: wood ? 'chop' : 'knap', id: pop.id[i], x, y, time: world.time });
 }
@@ -875,15 +911,23 @@ function assign(world, i, tribe) {
         tribe.crafting++;
         if (--tribe.wanted <= 0) tribe.want = 0;
     } else if (tribe.needWood && tribe.woodSpot !== null && tribe.chopping < 1 + Math.floor(adults / 8)) {
-        pop.task[i] = TASK.WOOD;
-        pop.work[i] = 0;
-        pop.load[i] = 0;
+        startErrand(world, i, tribe, TASK.WOOD);
+    } else if (tribe.needFlint && tribe.flintSpot !== null && tribe.quarrying < 1) {
+        startErrand(world, i, tribe, TASK.FLINT);
+    }
+}
+
+// Send person i of `tribe` for wood or flint (TASK.WOOD or FLINT; the tribe
+// has a spot for it): what the tribe needs (assign), or an order (orders.js).
+export function startErrand(world, i, tribe, task) {
+    const pop = world.humans;
+    pop.task[i] = task;
+    pop.work[i] = 0;
+    pop.load[i] = 0;
+    if (task === TASK.WOOD) {
         tribe.chopping++;
         world.itemStats.errands.wood++;
-    } else if (tribe.needFlint && tribe.flintSpot !== null && tribe.quarrying < 1) {
-        pop.task[i] = TASK.FLINT;
-        pop.work[i] = 0;
-        pop.load[i] = 0;
+    } else {
         tribe.quarrying++;
         world.itemStats.errands.flint++;
     }

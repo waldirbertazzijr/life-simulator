@@ -2,8 +2,10 @@
 // pennant in the tribe's colours where the order points. Hunt here's stands
 // at its marker, with a dashed ring in the tribe's colour as far out as its
 // hunters range; Gather food's and Defend camp's are about the camp, so
-// theirs stands in it, a few steps from the flag. (Only the tribe you lead
-// ever has an order.)
+// theirs stands in it, a few steps from the flag; Gather wood's and Gather
+// flint's stand at the tribe's spot for it (its forest, its stones), with a
+// small ring where its people work. (Only the tribe you lead ever has an
+// order.)
 //
 // Like the camps' flags, the pole turns to face the camera, so the pennant
 // is never seen edge-on, and in the map view it grows with distance so it
@@ -18,6 +20,8 @@ const PENNANT = 2.8;     // the pennant's length...
 const PENNANT_H = 1.6;   // ...and height
 const MIN_PX = 32;       // in the map view, the pole is at least this tall on screen
 const BESIDE = 7;        // an order about the camp stands this far from its pole (away from the rack)
+const SPOT = 8;          // Gather wood or flint: a ring this wide about the spot
+const AT_SPOT = new Set(['wood', 'flint']);
 const POLE_COLOR = '#d9dcd6';
 
 // A pole and a pennant split along its length: the tribe's first colour
@@ -111,9 +115,10 @@ export class OrderMarkers {
             const s = (dist * view.unitPx * MIN_PX * view.mapness) / POLE;
             mesh.scale.setScalar(s > 1 ? s : 1);
             mesh.visible = true;
-            if (order.kind === 'hunt') {
+            if (order.kind === 'hunt' || AT_SPOT.has(order.kind)) {
                 const width = Math.max(0.45, 1.4 * dist * view.unitPx);
-                t.ring.set(rx, rz, wx, wy, world.p.orders.huntRange, width, ground);
+                if (order.kind === 'hunt') t.ring.set(rx, rz, wx, wy, world.p.orders.huntRange, width, ground);
+                else t.ring.set(rx, rz, wx, wy, SPOT, Math.min(width, 0.25), ground); // (a hairline: you stand in it)
             } else t.ring.mesh.visible = false;
         }
         for (const [id, t] of this.tribes) {

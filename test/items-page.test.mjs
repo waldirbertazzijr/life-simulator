@@ -13,7 +13,8 @@ import {
     equipment, itemName, kindName, craftRows, cycled, cycleAct, legendRows, nearestLying, pickupText, skillOf, costText,
 } from '../src/play/gear.js';
 import { personName } from '../src/play/names.js';
-import { ITEM_KINDS } from '../src/items.js';
+import { ITEM_KINDS, TASK, flatSpot } from '../src/items.js';
+import { noticeFor } from '../src/play/calls.js';
 
 // An item as the Mirror keeps it (its kind a KIND code), and a legend (with
 // its skill's name, as items.js's forge gives it).
@@ -443,4 +444,121 @@ test('the legends list: name, kind, bearer, tribe, kills, generations', () => {
     assert.deepEqual([rows[1].bearer, rows[1].where, rows[1].tribe.name, rows[1].gens], [0, 'lying', 'Urek', 3], 'on the ground: its makers');
     assert.deepEqual([rows[2].bearer, rows[2].where], [0, 'lost'], 'its bearer not in the world');
     assert.deepEqual(legendRows({ ...w, legends: undefined }), [], 'no legends field: none');
+});
+
+// ---- Wood and flint by hand (the simulation's side: test/materials.test.mjs) ----
+
+// Where the fake world's tribe 1 (a flat world) finds wood and flint: E there
+// chops or knaps (items.js handWork, the same test the simulation makes).
+const spotOf = (w, mat) => flatSpot(w, w.tribeById.get(1), mat);
+
+test('E chops wood and knaps flint where the ground gives them, while held; the prompt says which', () => {
+    const t = inBody();
+    const { modes, world, state, frame } = t;
+    const prompt = () => {
+        modes.drawHud(1 / 60);
+        return t.hud.prompt;
+    };
+    const wood = spotOf(world, TASK.WOOD);
+    modes.body.x = wood.x;
+    modes.body.y = wood.y;
+    assert.deepEqual(modes.interaction(), { kind: 'chop' });
+    assert.deepEqual(prompt(), ['E Chop wood']);
+    modes.action('interact');
+    assert.deepEqual([t.last().action, t.last().on], ['gather', true], 'the simulation decides by the ground too');
+    assert.deepEqual(state.poses.at(-1), ['hold', 7, POSE.CHOP]);
+    world.player.gathering = 'wood';
+    world.player.wood = 1.3;
+    frame();
+    assert.equal(modes.doing?.kind, 'chop', 'the simulation is at it');
+    assert.deepEqual(prompt(), ['E Chopping wood']);
+    assert.deepEqual(t.hud.s.load, { wood: 1.3, flint: 0, max: world.p.items.load });
+    modes.action('interact-end');
+    assert.deepEqual([t.last().action, t.last().on], ['gather', false], 'let go of E: it stops');
+    assert.deepEqual(state.poses.at(-1), ['release', 7]);
+    world.player.gathering = false;
+    frame();
+
+    // The simulation stops it itself (the load full): let go of here too.
+    modes.action('interact');
+    world.player.gathering = 'wood';
+    frame();
+    world.player.gathering = false;
+    world.player.wood = world.p.items.load;
+    frame();
+    assert.equal(modes.doing, null);
+    assert.equal(modes.interaction(), null, 'full: nothing more to chop');
+
+    const flint = spotOf(world, TASK.FLINT);
+    modes.body.x = flint.x;
+    modes.body.y = flint.y;
+    world.player.wood = 2;
+    assert.deepEqual(prompt(), ['E Knap flint']);
+    modes.action('interact');
+    assert.deepEqual(state.poses.at(-1), ['hold', 7, POSE.KNAP]);
+    world.player.gathering = 'flint';
+    frame();
+    assert.deepEqual(prompt(), ['E Knapping flint']);
+    modes.action('move');
+    assert.deepEqual([t.last().action, t.last().on], ['gather', false], 'a move stops it');
+
+    // Elsewhere outside camp: food, as before (E again stops it).
+    modes.body.x = 150;
+    modes.body.y = 102;
+    assert.deepEqual(prompt(), ['E Gather']);
+    // A basket (right click) does as E does there.
+    const basket = item('basket');
+    world.items.set(basket.id, basket);
+    world.player.tool = basket.id;
+    modes.body.x = wood.x;
+    modes.body.y = wood.y;
+    world.player.wood = 0;
+    world.player.gathering = false;
+    frame(1);
+    modes.action('tool');
+    assert.deepEqual([t.last().action, t.last().on, modes.doing?.kind], ['gather', true, 'chop']);
+});
+
+test('at the rack, E stores the wood and flint you carry too', () => {
+    const t = inBody([], { wood: 3.4 });
+    const { modes, world } = t;
+    const prompt = () => {
+        modes.drawHud(1 / 60);
+        return t.hud.prompt;
+    };
+    assert.deepEqual(modes.interaction(), { kind: 'store', amount: 0, wood: 3.4 }, 'wood alone, no food');
+    assert.deepEqual(prompt(), ['E Store 3 wood']);
+    world.player.carry = 30;
+    world.player.flint = 0.5;
+    assert.deepEqual(prompt(), ['E Store 30 food, 3 wood, flint', 'R Eat']);
+    modes.action('interact');
+    assert.equal(t.last().action, 'store');
+    world.player.carry = 0;
+    world.player.wood = 0;
+    world.player.flint = 0;
+    assert.deepEqual(prompt(), ['E Take 40 food'], 'empty hands: food for the road');
+});
+
+test('the calls slot and the map learn Gather wood and Gather flint', () => {
+    const t = inBody();
+    const { modes } = t;
+    for (let k = 0; k < 5; k++) modes.action('cycle-call');
+    assert.equal(modes.calls.call.kind, 'wood');
+    modes.action('cycle-call');
+    assert.equal(modes.calls.call.kind, 'flint');
+    modes.action('call');
+    assert.deepEqual([t.last().action, t.last().kind], ['call', 'flint']);
+    modes.drawHud(1 / 60);
+    assert.equal(t.hud.s.call.name, 'Gather flint');
+    // Without items, ↑ passes them by.
+    t.world.p.items.enabled = false;
+    modes.action('cycle-call');
+    for (let k = 0; k < 4; k++) modes.action('cycle-call');
+    assert.equal(modes.calls.call.kind, 'move');
+    modes.action('cycle-call');
+    assert.equal(modes.calls.call.kind, 'rally');
+    // The answers.
+    assert.equal(noticeFor({ type: 'call', kind: 'wood', tribe: 1 }), 'Gather wood — the idle go for wood');
+    assert.equal(noticeFor({ type: 'call', kind: 'flint', tribe: 1, hungry: true }), 'Gather flint — once the camp is fed');
+    assert.equal(noticeFor({ type: 'refused', kind: 'flint', reason: 'nowhere', tribe: 1 }), 'No flint within reach of the camp');
 });

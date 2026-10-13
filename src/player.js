@@ -34,6 +34,12 @@
 //   kit       {weapons, tools}: up to items.kit spares of each (item ids),
 //             besides the weapon and the tool in hand (the person's columns)
 //   crafting  {kind, flint, until, tribe}: an item being made at camp, or null
+//   wood, flint  the load of materials it carries (gathered by hand: E in
+//             forest or on rock), until it stores it at the rack; at most
+//             items.load in all (× a basket's carry). The body's: lost when
+//             it dies, taken home by the AI when the page leaves it (and an
+//             AI errand's load is the player's when the page takes over).
+//   work      what the hands gathered at the last step (TASK: NONE is food)
 //
 // The page moves the body (src/play/body.js); here it is only checked, and
 // everything that is not a decision still happens to it as to anyone.
@@ -42,7 +48,7 @@ import { strike, aimAt } from './spears.js';
 import { giveCall } from './orders.js';
 import {
     ITEM_KINDS, KIND, SKILLS, TASK, isWeapon, weaponStats, hold, unhold, lay, putDown, wearItem, heldLike,
-    affords, spend, craft, carryOf,
+    affords, spend, craft, carryOf, handWork, yieldAt,
 } from './items.js';
 
 const wrapDelta = (d, size) => (d > size / 2 ? d - size : d < -size / 2 ? d + size : d);
@@ -69,7 +75,7 @@ export function takeControl(world, id, mode) {
     if (i < 0) return false;
     const before = world.player;
     if (before !== null && before.id !== id) leaveBody(world, before);
-    if (world.itemsOn) clearTask(world, i); // (the AI's task for the tribe, if it had one)
+    const same = before !== null && before.id === id;
     world.player = {
         id,
         mode: mode === 'play' ? 'play' : 'god',
@@ -89,15 +95,21 @@ export function takeControl(world, id, mode) {
         acts: [],    // the hands' one-off acts, carried out at the next step (useHands)
         gather: false, // gathering, until it stops
         butcher: 0,  // the carcass being butchered (its id), or 0
-        // Spares and an item being made (items.js): kept if it is the same body again.
-        kit: before !== null && before.id === id && before.kit ? before.kit : { weapons: [], tools: [] },
-        crafting: before !== null && before.id === id ? before.crafting ?? null : null,
+        // Spares, an item being made, and wood and flint carried (items.js):
+        // kept if it is the same body again.
+        kit: same && before.kit ? before.kit : { weapons: [], tools: [] },
+        crafting: same ? before.crafting ?? null : null,
+        wood: same ? before.wood ?? 0 : 0,
+        flint: same ? before.flint ?? 0 : 0,
+        work: TASK.NONE,
+        strokes: 0,
         lastStep: world.time,
         // Where it was last seen alive (all that is left to report once over).
         x: pop.x[i],
         y: pop.y[i],
         heading: pop.heading[i],
     };
+    if (world.itemsOn) clearTask(world, i); // (the AI's task for the tribe, if it had one)
     world.follow(id);
     return true;
 }
@@ -298,7 +310,7 @@ export function stepPlayer(world, i) {
     state[i] = pl.resting ? STATE.AT_CAMP
         : pl.crafting !== null ? STATE.CRAFTING
         : pl.butcher !== 0 ? STATE.BUTCHERING
-        : pl.gather ? STATE.GATHERING
+        : pl.gather ? (pl.work === TASK.WOOD ? STATE.CHOPPING : pl.work === TASK.FLINT ? STATE.QUARRYING : STATE.GATHERING)
         : rolling ? STATE.ROLLING
         : pl.crouch ? STATE.CREEPING
         : speed > (top * (1 + P.cruise)) / 2 ? STATE.RUNNING
@@ -335,6 +347,8 @@ export function afterStep(world) {
     const from = pl.id;
     const { time } = world;
     const next = heirOf(world, from, pl.tribe);
+    pl.wood = 0; // (what the dead carried is lost with them)
+    pl.flint = 0;
     if (next < 0) {
         if (pl.mode === 'play') {
             pl.over = true;
@@ -394,6 +408,9 @@ function heirOf(world, id, tribe) {
     return best;
 }
 
+// What the hands gather, by TASK (NONE: food), as snapshot.player says it.
+const GATHERED = ['food', 'food', 'wood', 'flint', 'food'];
+
 // Is individual i of `pop` the controlled person? (On autopilot too.)
 export function isControlled(world, pop, i) {
     return world.player !== null && pop === world.humans && pop.id[i] === world.player.id;
@@ -425,10 +442,17 @@ export function playerSnapshot(world) {
         heading: alive ? pop.heading[i] : pl.heading,
         seq: pl.seq,
         auto: pl.auto,
-        // The hands: steps until the spear is back (0: ready), and what they are at.
+        // The hands: steps until the spear is back (0: ready), and what they
+        // are at: gathering 'food', 'wood' or 'flint' (by the ground
+        // underfoot: items.js handWork), or not (false); butchering a carcass
+        // (its id, 0: not).
         reload: alive ? pop.timer[i] : 0,
-        gathering: pl.gather,
+        gathering: pl.gather && alive ? GATHERED[world.itemsOn ? handWork(world, pop.x[i], pop.y[i], world.tribeById.get(pop.tribe[i])) : TASK.NONE] : false,
         butchering: pl.butcher,
+        // The wood and flint it carries, and the most it can (items.load, × a basket's carry).
+        wood: pl.wood,
+        flint: pl.flint,
+        loadMax: alive && world.itemsOn ? loadMax(world, i) : 0,
         // Items (package 3): what is in hand (item ids, 0: none), the spares,
         // what is being made ({kind, until}: done at that world time), and
         // the Spirit the weapon's skill costs (0: none).
@@ -462,11 +486,16 @@ export function playerSnapshot(world) {
 //            before the spear is back (human.reload). spears.js does the rest.
 //   butcher {on, id}   cut up the carcass `id`, close by (one of the
 //            player's kills), into the pouch
-//   gather {on}        take from the grass underfoot into the pouch, as
-//            gatherers do, outside camp
+//   gather {on}        take from the ground underfoot, outside camp: with
+//            items, in forest chop wood, on rock (a little on tundra) knap
+//            flint (items.js handWork: the page's prompt uses it too), into
+//            the load (wood, flint) at an errand's rates (yieldAt), until it
+//            is full; elsewhere, food from the grass into the pouch, as
+//            gatherers do
 //   eat                eat from the pouch
 //   store, take        at the camp's rack: put everything carried into the
-//            tribe's store; with empty hands, take food for the road
+//            tribe's store (food, hides, wood, flint); with empty hands,
+//            take food for the road
 //
 // Butchering and gathering go on from step to step until they are done, the
 // page says stop, or the body moves.
@@ -501,7 +530,10 @@ function handAct(pl, msg) {
         if (pl.butcher) pl.gather = false;
     } else if (a === 'gather') {
         pl.gather = msg.on === true;
-        if (pl.gather) pl.butcher = 0;
+        if (pl.gather) {
+            pl.butcher = 0;
+            pl.strokes = 0;
+        }
     } else if (pl.acts.length < 8) {
         const power = Number(msg.power);
         pl.acts.push({
@@ -578,20 +610,32 @@ function eat(world, i) {
 }
 
 // At the rack, everything carried goes into the tribe's store (with items,
-// the hides too).
+// the hides, and the wood and flint gathered by hand, too).
 function store(world, i) {
+    const pl = world.player;
     const pop = world.humans;
     const amount = pop.carry[i];
     const hide = world.itemsOn ? pop.hides[i] : 0;
-    if (!(amount > 0 || hide > 0) || !atRack(world, i)) return;
+    const { wood, flint } = pl;
+    if (!(amount > 0 || hide > 0 || wood > 0 || flint > 0) || !atRack(world, i)) return;
     const tribe = world.tribeById.get(pop.tribe[i]);
     tribe.store += amount;
     pop.carry[i] = 0;
+    const e = { type: 'store', id: pop.id[i], amount, time: world.time };
     if (hide > 0) {
         tribe.hide += hide;
         pop.hides[i] = 0;
+        e.hide = hide;
     }
-    world.events.push(hide > 0 ? { type: 'store', id: pop.id[i], amount, hide, time: world.time } : { type: 'store', id: pop.id[i], amount, time: world.time });
+    if (wood > 0 || flint > 0) {
+        tribe.wood += wood;
+        tribe.flint += flint;
+        pl.wood = 0;
+        pl.flint = 0;
+        if (wood > 0) e.wood = wood;
+        if (flint > 0) e.flint = flint;
+    }
+    world.events.push(e);
 }
 
 // At the rack with empty hands (less than one in them), food for the road:
@@ -611,19 +655,29 @@ function take(world, i) {
     world.events.push({ type: 'take', id: pop.id[i], amount, time: world.time });
 }
 
-// A step's gathering, as gatherers do (humans.js): human.gatherRate from the
-// patch underfoot into the pouch (× plantEnergy). Not in camp; it stops
-// when the patch is too thin to bother (gatherMin) or the hands are full
-// (more with a basket).
+// A step's gathering, from the ground underfoot (items.js handWork): in
+// forest wood, on rock or tundra flint (material); elsewhere food, as
+// gatherers do (humans.js): human.gatherRate from the patch underfoot into
+// the pouch (× plantEnergy). Not in camp; it stops when the patch is too
+// thin to bother (gatherMin) or the hands are full (more with a basket).
 function gather(world, i) {
     const P = world.p.human;
     const pl = world.player;
     const pop = world.humans;
+    if (inCamp(world, pl.id)) {
+        pl.gather = false;
+        return;
+    }
+    pl.work = world.itemsOn ? handWork(world, pop.x[i], pop.y[i], world.tribeById.get(pop.tribe[i])) : TASK.NONE;
+    if (pl.work !== TASK.NONE) {
+        material(world, i, pl.work);
+        return;
+    }
     const { grass } = world;
     const g = grass.g;
     const gi = grass.index(pop.x[i], pop.y[i]);
     const most = P.carryMax * (world.itemsOn ? carryOf(world, pop, i) : 1);
-    if (inCamp(world, pl.id) || g[gi] < P.gatherMin || pop.carry[i] >= most) {
+    if (g[gi] < P.gatherMin || pop.carry[i] >= most) {
         pl.gather = false;
         return;
     }
@@ -633,6 +687,37 @@ function gather(world, i) {
     const c = pop.carry[i] + take * P.plantEnergy;
     pop.carry[i] = c > most ? most : c; // hands are full; the rest is left behind
 }
+
+// A step's chopping (mat TASK.WOOD) or knapping (FLINT), as an errand's
+// worker does it (items.js yieldAt: items.wood or flint where the ground is
+// rich, less where it is poor), into the load; a knife in hand knaps
+// materials.knifeKnap faster. It stops when the load (wood and flint together)
+// is full: items.load, more with a basket (loadMax). A stroke for the page
+// (chips, sparks) every materials.chopEvery or knapEvery steps.
+function material(world, i, mat) {
+    const H = world.p.materials;
+    const pl = world.player;
+    const pop = world.humans;
+    const room = loadMax(world, i) - pl.wood - pl.flint;
+    if (room <= 1e-9) {
+        pl.gather = false;
+        return;
+    }
+    const wood = mat === TASK.WOOD;
+    const x = pop.x[i];
+    const y = pop.y[i];
+    let gain = yieldAt(world, x, y, mat);
+    if (!wood && (pop.gear[i] & 7) === KIND.KNIFE) gain *= H.knifeKnap;
+    if (gain > room) gain = room;
+    if (wood) pl.wood += gain;
+    else pl.flint += gain;
+    if (pl.strokes++ % (wood ? H.chopEvery : H.knapEvery) === 0) {
+        world.events.push({ type: wood ? 'chop' : 'knap', id: pop.id[i], x, y, time: world.time });
+    }
+}
+
+// The most wood and flint person i can carry: items.load, more with a basket.
+const loadMax = (world, i) => world.p.items.load * carryOf(world, world.humans, i);
 
 // A step's cutting at the carcass pl.butcher: play.butcherSteps of them cut
 // it up (with a knife, twice as fast), each putting its share of the meat
@@ -937,6 +1022,7 @@ function useTool(world, i, a) {
         if (pl.gather) {
             pl.butcher = 0;
             pl.resting = false;
+            pl.strokes = 0;
         }
         return;
     }
@@ -1077,7 +1163,8 @@ function stopCrafting(world, pl) {
 }
 
 // The AI's task for the tribe, let go when the page takes the body over (a
-// craft's materials go back to the store).
+// craft's materials go back to the store; the wood or flint of an errand
+// stays in the player's load).
 function clearTask(world, i) {
     const pop = world.humans;
     if (pop.task[i] === TASK.CRAFT) {
@@ -1086,6 +1173,9 @@ function clearTask(world, i) {
             spend(world.p, tribe, pop.make[i] % 8, -1);
             if (pop.make[i] >= 8) tribe.flint += 1;
         }
+    } else if (pop.load[i] > 0 && world.player !== null) {
+        if (pop.task[i] === TASK.WOOD) world.player.wood += pop.load[i];
+        else if (pop.task[i] === TASK.FLINT) world.player.flint += pop.load[i];
     }
     pop.task[i] = TASK.NONE;
     pop.work[i] = 0;
@@ -1094,12 +1184,23 @@ function clearTask(world, i) {
 }
 
 // The page leaves a body (to another, or to nobody): what it was making is
-// let go, and its spares are put down where it stands (the AI holds one of
-// each).
+// let go, its spares are put down where it stands (the AI holds one of
+// each), and the wood or flint it carries the AI takes home, as an errand's
+// load (of the one there is more of: an errand carries one material).
 function leaveBody(world, pl) {
     stopCrafting(world, pl);
     if (!world.itemsOn || !pl.kit || !pl.id) return;
     const i = indexOf(world.humans, pl.id);
+    const pop = world.humans;
+    const task = pl.wood >= pl.flint ? TASK.WOOD : TASK.FLINT;
+    if (i >= 0 && (pl.wood > 0 || pl.flint > 0) && (pop.task[i] === TASK.NONE || pop.task[i] === task)) {
+        // (On autopilot the AI may be on an errand for the same already.)
+        pop.load[i] = (pop.task[i] === task ? pop.load[i] : 0) + (task === TASK.WOOD ? pl.wood : pl.flint);
+        pop.task[i] = task;
+        pop.work[i] = world.p.items.errand; // (done: home with it)
+    }
+    pl.wood = 0;
+    pl.flint = 0;
     for (const list of [pl.kit.weapons, pl.kit.tools]) {
         for (const id of list) {
             const item = world.items.get(id);

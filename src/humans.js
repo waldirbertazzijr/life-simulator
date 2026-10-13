@@ -21,7 +21,7 @@
 import { STATE } from './population.js';
 import { tribeIdentity } from './identity.js';
 import { stepPlayer } from './player.js';
-import { fighting, heeded, lead, follow, led } from './orders.js';
+import { fighting, heeded, lead, follow, led, errand } from './orders.js';
 import {
     KIND, TASK, arm, armOf, hitWith, efficiencyOf, carryOf, blowOf, killed, credit, wearItem, butcherable,
     stepTask, job, campItems, wildPickup, guards, raided, raiderKilled, foundItems, splitItems, tribeEnded,
@@ -594,6 +594,7 @@ export function stepHumans(world) {
                 e += take;
             }
             if (itemsOn) campItems(world, i, tribe);
+            if (order !== null && itemsOn) errand(world, i, tribe, order); // (Gather wood, flint: orders.js)
         } else {
             if (e < P.starving * P.maxEnergy && c > 0) {
                 // Far from home and starving: eat what you carry.

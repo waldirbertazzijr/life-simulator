@@ -10,13 +10,14 @@
 //           if fully aggressive; a raider meets every adult
 //   move    Move camp: the camp, its store and its way home go to a valid
 //           site, and people walk there; not again until a cooldown has passed
+//   wood    Gather wood (with items): idle adults at camp go for wood, to
+//   flint   the tribe's spot (items.js), whether the tribe needs it or not;
+//           Gather flint, for flint. The order stands at the spot.
 //
-// (Gathering wood and flint come with items, as more kinds.)
-//
-// Gather food and Defend camp are heeded with food to spare: a hungry camp,
-// one whose store could not pay for a birth, feeds itself first (setAside,
-// heeded). How a camp meets raiders and predators follows the order
-// regardless.
+// Gather food, wood and flint and Defend camp are heeded with food to spare:
+// a hungry camp, one whose store could not pay for a birth, feeds itself
+// first (setAside, heeded). How a camp meets raiders and predators follows
+// the order regardless.
 //
 // Only the person the page controls gives calls, and only to its own tribe
 // (giveCall, from player.js). Whatever an order or a rally changes in the AI
@@ -27,7 +28,7 @@
 // without a player.
 import { STATE } from './population.js';
 import { campSite, hitChance } from './humans.js';
-import { KIND, arm, armOf, hitWith, efficiencyOf, killed, credit, wearItem, campMoved } from './items.js';
+import { KIND, TASK, arm, armOf, hitWith, efficiencyOf, killed, credit, wearItem, campMoved, startErrand } from './items.js';
 
 const wrapDelta = (d, size) => (d > size / 2 ? d - size : d < -size / 2 ? d + size : d);
 // (A position already on the world is kept exactly as it was given.)
@@ -213,7 +214,7 @@ export function follow(world, r, i, tribe, e, c) {
 // ---- Standing orders -----------------------------------------------------------
 
 // The kinds of standing order; the snapshots send each as its index here (0: none).
-export const ORDER_KINDS = ['', 'hunt', 'gather', 'defend', 'move'];
+export const ORDER_KINDS = ['', 'hunt', 'gather', 'defend', 'move', 'wood', 'flint'];
 
 // The tribe's answer, when it will not.
 function refuse(world, tribe, kind, reason) {
@@ -223,8 +224,9 @@ function refuse(world, tribe, kind, reason) {
 
 // Give `tribe` (the tribe, or its id) the order {kind, x, y}: x, y is the
 // marker (Hunt here), or the new camp (Move camp); Gather food and Defend
-// camp are about the camp itself. True if the tribe took it; either way its
-// answer is in world.events ('call' or 'refused').
+// camp are about the camp itself, Gather wood and flint about the tribe's
+// spot for it (refused with no spot, or without items). True if the tribe
+// took it; either way its answer is in world.events ('call' or 'refused').
 export function issueOrder(world, tribe, { kind, x, y }) {
     if (typeof tribe === 'number') tribe = world.tribeById.get(tribe);
     if (!tribe) return false;
@@ -243,6 +245,13 @@ export function issueOrder(world, tribe, { kind, x, y }) {
         case 'defend':
             tribe.order = order(kind, tribe.camp.x, tribe.camp.y, time + O.lasts, 0, null);
             break;
+        case 'wood':
+        case 'flint': {
+            const spot = !world.itemsOn ? null : kind === 'wood' ? tribe.woodSpot : tribe.flintSpot;
+            if (!spot) return refuse(world, tribe, kind, 'nowhere');
+            tribe.order = order(kind, spot.x, spot.y, time + O.lasts, 0, null);
+            break;
+        }
         case 'move':
             if (time < tribe.nextMove) return refuse(world, tribe, kind, 'cooldown');
             if (!placed || (terrain !== null && campSite(world, x, y) === -Infinity)) return refuse(world, tribe, kind, 'site');
@@ -267,21 +276,43 @@ export function issueOrder(world, tribe, { kind, x, y }) {
 // `p` is the parameters (world.p).
 export const hungry = (p, tribe) => tribe.store < p.orders.surplus * (p.human.birthCost + p.human.reserve * tribe.members);
 
-// Gather food and Defend camp keep people from food outright, so a hungry
-// camp sets them aside and feeds itself first, as it would without an
-// order: they spend only the camp's surplus. (The model's economy lives on
-// hunting and the store, and births on the store: held for long, either
-// order stopped the births of every tribe, and random orders to every tribe
-// ended the people on every seed: headless/orders.mjs.) Hunt here only moves
+// Gather food, wood or flint and Defend camp keep people from food
+// outright, so a hungry camp sets them aside and feeds itself first, as it
+// would without an order: they spend only the camp's surplus. (The model's
+// economy lives on hunting and the store, and births on the store: held for
+// long, either of the first two stopped the births of every tribe, and
+// random orders to every tribe ended the people on every seed:
+// headless/orders.mjs.) Hunt here only moves
 // where people forage: it stands unless the camp is nearly empty (below
 // orders.starving a member: with items, far hunts held through such times
 // ended the people of half the worlds). Move camp is done at once.
 export const setAside = (p, tribe) => {
     const o = tribe.order;
     if (o === null) return false;
-    if (o.kind === 'gather' || o.kind === 'defend') return hungry(p, tribe);
+    if (o.kind === 'gather' || o.kind === 'defend' || o.kind === 'wood' || o.kind === 'flint') return hungry(p, tribe);
     return o.kind === 'hunt' && tribe.store < p.orders.starving * tribe.members;
 };
+
+// Gather wood or flint (humans.js, at camp, after the camp's own items):
+// person i of `tribe`, heeding `order`, if an adult with nothing to do for
+// the tribe and no raid in mind, goes for the material, to the tribe's spot
+// (items.js errands), whether the tribe needs it or not; one more than
+// materials.ordered of its adults at once (its own needs send one for flint,
+// and one for wood, a second from eight adults). (With every idle adult
+// sent, the orders check's people fell from 117 to 92 on average, births by
+// a third: a camp fed enough to heed it is one about to pay for a birth.
+// With this share: 133.)
+export function errand(world, i, tribe, order) {
+    const kind = order.kind;
+    if (kind !== 'wood' && kind !== 'flint') return;
+    const pop = world.humans;
+    if (pop.task[i] !== TASK.NONE || pop.goal[i] !== 0 || pop.age[i] < world.p.human.maturity) return;
+    const wood = kind === 'wood';
+    if ((wood ? tribe.woodSpot : tribe.flintSpot) === null) return;
+    const most = 1 + Math.round(world.p.materials.ordered * tribe.adults);
+    if ((wood ? tribe.chopping : tribe.quarrying) >= most) return;
+    startErrand(world, i, tribe, wood ? TASK.WOOD : TASK.FLINT);
+}
 
 // The order a tribe's people follow in what they do (humans.js): its
 // standing order, or null when it has none or has set it aside.

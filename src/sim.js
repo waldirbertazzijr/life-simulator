@@ -20,7 +20,9 @@
 //                                            'auto' {on} (autopilot: the AI runs it while the page is on the map),
 //                                            'call' {kind, x, y} (a call to its tribe: orders.js);
 //                                            the hands': 'attack' {heavy, dx, dy, power, target, lock}, 'butcher' {on, id},
-//                                            'gather' {on}, 'eat', 'store', 'take' (player.js); with items:
+//                                            'gather' {on} (food; with items, wood in forest and flint on rock or
+//                                            tundra, by the ground underfoot: items.js handWork),
+//                                            'eat', 'store', 'take' (player.js); with items:
 //                                            'craft' {kind, flint}, 'skill' {dx, dy, target, lock},
 //                                            'tool' {dx, dy, target}, 'pickup' {item}, 'cycle' {slot}, 'drop' {item}
 //        admin {id, cmd, args, target}       an admin console command (admin.js), run at the start of the
@@ -29,7 +31,9 @@
 //   out  started {gen, hash}                 the new world's first moment, hashed
 //        snapshot {...}                      see pack() below; with `events`, everything that happened
 //                                            since the last one (World.events, oldest first),
-//                                            `player`, the controlled person (playerSnapshot in player.js),
+//                                            `player`, the controlled person (playerSnapshot in player.js;
+//                                            its hands: gathering 'food' | 'wood' | 'flint' | false, and
+//                                            the load it carries: wood, flint, of loadMax at most),
 //                                            `spears` (x, y, vx, vy, progress, kind each: kind an ITEM_KINDS
 //                                            code, 1 a spear, 2 an arrow), and `carcasses`, the player's
 //                                            spears in flight and kills not yet butchered (spears.js);

@@ -8,10 +8,12 @@
 //   defend   Defend camp
 //   move     Move camp, to a random valid site within --reach (refused when
 //            none is found, or while the camp's last move is too recent)
+//   wood     Gather wood    (only with --kinds: the default is the four above)
+//   flint    Gather flint
 //
 // (--reach is 300 by default, about as far as a daughter tribe settles.)
-// Gather food and Defend camp are set aside while a tribe is hungry
-// (orders.js): the table says how often orders were heeded.
+// Gather food, wood and flint and Defend camp are set aside while a tribe is
+// hungry (orders.js): the table says how often orders were heeded.
 //
 // The orders' random numbers are the check's own, never the world's. Each
 // seed is also run without orders, the same world, for comparison. It fails
@@ -22,6 +24,7 @@
 //   make orders ARGS="--seeds 73-92 --steps 300000 --reach 800"
 //   make orders ARGS="--set orders.huntRange=60"
 //   make orders ARGS="--kinds defend,gather"     # only some kinds of order
+//   make orders ARGS="--kinds hunt,gather,defend,move,wood,flint"   # all of them
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
 import { availableParallelism } from 'node:os';
 import { params as defaults } from '../src/config.js';
@@ -58,7 +61,7 @@ function runSeed({ params, seed, steps, sample, orders, reach, kinds }) {
     const T = world.terrain;
     const rng = createRng(seed * 7919 + 101); // the check's own
     const next = new Map();                   // tribe id → when its next order comes
-    const given = { hunt: 0, gather: 0, defend: 0, move: 0 };
+    const given = { hunt: 0, gather: 0, defend: 0, move: 0, wood: 0, flint: 0 };
     const refused = {};
     const series = { herbivore: [], carnivore: [], human: [] };
     let extinct = null;
@@ -201,8 +204,8 @@ async function main() {
     const f = (x, d = 0) => x.toFixed(d);
     const pad = (s, n) => String(s).padStart(n);
     console.log(`\n${opts.seeds.length} seeds × ${opts.steps} steps · each tribe a random order (${opts.kinds.join(', ')}) every ${EVERY[0]}–${EVERY[1]} steps, within ${opts.reach} of its camp${opts.sets.length ? '  ' + opts.sets.join(' ') : ''}\n`);
-    console.log('seed  run     result         herbivores          carnivores        people        tribes    people   grazers   orders given             refused');
-    console.log('                             mean   cv   min     mean  cv   min    mean   min    alive/all starved  hunted    hunt gath defd move');
+    console.log('seed  run     result         herbivores          carnivores        people        tribes    people   grazers   orders given                       refused');
+    console.log('                             mean   cv   min     mean  cv   min    mean   min    alive/all starved  hunted    hunt gath defd move wood flnt');
     const rows = { true: [], false: [] };
     for (const seed of opts.seeds) {
         for (const orders of [true, false]) {
@@ -218,7 +221,7 @@ async function main() {
                 `${orders ? pad(seed, 4) : '    '}  ${(orders ? 'orders' : 'none').padEnd(6)}  ${res.padEnd(13)} ` +
                 `${pad(f(h.mean), 5)} ${f(h.cv, 2)} ${pad(h.min, 5)}    ${pad(f(c.mean), 4)} ${f(c.cv, 2)} ${pad(c.min, 4)}    ` +
                 `${pad(f(p.mean), 4)} ${pad(p.min, 5)}    ${pad(r.alive, 3)}/${String(r.founded).padEnd(3)}   ${pad(r.starved, 5)}  ${pad(r.hunted, 6)}    ` +
-                (orders ? `${pad(g.hunt, 4)} ${pad(g.gather, 4)} ${pad(g.defend, 4)} ${pad(g.move, 4)}   ${why}` : ''),
+                (orders ? `${pad(g.hunt, 4)} ${pad(g.gather, 4)} ${pad(g.defend, 4)} ${pad(g.move, 4)} ${pad(g.wood, 4)} ${pad(g.flint, 4)}   ${why}` : ''),
             );
         }
     }

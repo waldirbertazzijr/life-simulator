@@ -15,6 +15,9 @@
 // when there is one), takes up what lies within reach, cycles to its spare
 // weapon now and then, uses its weapon's skill when it has the Spirit and
 // its tool (a knife on its kills, a torch at a predator, a basket to gather).
+// Now and then it goes to its tribe's forest (or, the next time, its stones)
+// and chops wood (knaps flint) until its load is full, then takes the load
+// home to the rack; and its calls include Gather wood and Gather flint.
 //
 // It fails (exit code 1) on an exception, more than 1% of its moves turned
 // down, anyone alive with no energy, a snapshot.player field missing, food
@@ -22,8 +25,11 @@
 // that was carried, eating more than there is or past full, butchering more
 // than a kill held), items going astray (a material in store below zero,
 // something in its hands or kit that is not borne by it, a kit over its
-// size), or, over all sessions, no kill, none butchered, nothing stored, or
-// (with items) nothing crafted, taken up, cycled, no skill or tool used.
+// size), wood and flint moving as they should not (gathered faster than an
+// errand's rate, a load over its most, a store that is not all of the load),
+// or, over all sessions, no kill, none butchered, nothing stored, or (with
+// items) nothing crafted, taken up, cycled, no skill or tool used, no wood
+// or flint gathered and stored, no Gather wood or flint order taken.
 //
 //   make bot                                     # seeds 1-6 × 6000 steps
 //   make bot ARGS="--seeds 1-20 --steps 20000"
@@ -31,16 +37,25 @@
 import { params as defaults } from '../src/config.js';
 import { Sim, setParam } from '../src/sim.js';
 import { createRng } from '../src/rng.js';
-import { KIND, costOf, isWeapon } from '../src/items.js';
+import { KIND, TASK, costOf, isWeapon, handWork } from '../src/items.js';
 
-// What snapshot.player must hold, and of what type.
+// What snapshot.player must hold, and of what type (gathering: false, or
+// what: GATHERING).
 const FIELDS = {
     id: 'number', mode: 'string', tribe: 'number', energy: 'number', carry: 'number', spirit: 'number',
     crouch: 'boolean', resting: 'boolean', dodging: 'boolean', snap: 'boolean', heir: 'number', over: 'boolean',
     x: 'number', y: 'number', heading: 'number', seq: 'number', auto: 'boolean',
-    reload: 'number', gathering: 'boolean', butchering: 'number',
+    reload: 'number', butchering: 'number',
     weapon: 'number', tool: 'number', kit: 'object', crafting: 'object', skill: 'number',
+    wood: 'number', flint: 'number', loadMax: 'number',
 };
+const GATHERING = new Set([false, 'food', 'wood', 'flint']);
+// Out of every MATERIAL_EVERY steps, from MATERIAL_AT for MATERIAL_FOR, it
+// goes for wood (then, the next time, flint) at its tribe's spot.
+const MATERIAL_EVERY = 3000;
+const MATERIAL_AT = 500;
+const MATERIAL_FOR = 1500;
+const MATERIAL_NAME = { [TASK.WOOD]: 'wood', [TASK.FLINT]: 'flint' };
 const CYCLE_EVERY = 700;  // with a spare weapon: into the hand this often
 const SKILL_EVERY = 400;  // a weapon skill at most this often (Spirit allowing)
 
@@ -51,7 +66,7 @@ const CREEP = 25;      // and it creeps up on them from this close
 const DANGER = 6;      // a predator this close: roll away
 const PROBE_AT = 200;  // the step of the deliberate teleport, which must be turned down
 const AWAY = 500;      // steps on autopilot, halfway through
-const CALLS = ['rally', 'hunt', 'gather', 'defend', 'move']; // given in turn...
+const CALLS = ['rally', 'hunt', 'gather', 'defend', 'move', 'wood', 'flint']; // given in turn...
 const CALL_EVERY = 600;                                      // ...this often
 const THROW_AT = 14;   // a grazer this close: throw (locked on to it), or jab within reach
 const STORE_AT = 60;   // carrying this much: home to the rack to store it
@@ -153,6 +168,9 @@ function play(params, seed, mode, steps) {
         throws: 0, jabs: 0, hits: 0, kills: 0, carcasses: 0, butchered: 0, gathered: 0, eaten: 0, stored: 0, taken: 0,
         // Items: made, taken up, cycled to, skills and tools used, broken.
         crafted: 0, picked: 0, cycled: 0, skills: 0, tools: 0, broke: 0,
+        // Materials by hand: chopped, knapped, put in the store; Gather wood
+        // and flint orders the tribe took.
+        chopped: 0, knapped: 0, woodStored: 0, flintStored: 0, matOrders: 0,
     };
     const problem = (what) => {
         if (stats.problems.length < 10) stats.problems.push(what);
@@ -197,6 +215,7 @@ function play(params, seed, mode, steps) {
         for (const [f, type] of Object.entries(FIELDS)) {
             if (typeof p[f] !== type) problem(`step ${w.time}: snapshot.player.${f} is ${p[f]}`);
         }
+        if (!GATHERING.has(p.gathering)) problem(`step ${w.time}: snapshot.player.gathering is ${p.gathering}`);
         return p;
     };
 
@@ -335,6 +354,16 @@ function play(params, seed, mode, steps) {
             const cdy = wrapDelta(tribe.camp.y - body.y, w.height);
             const campD = Math.hypot(cdx, cdy) || 1;
             const lying = itemsOn && w.time > kit.pickAt + 20 ? lyingNear(w, body.x, body.y, p, kit.tried) : null;
+            // Materials (items): in a spell for wood (or flint), to the
+            // tribe's spot for it, if the ground there gives it by hand; a
+            // full load, or one left when the spell is over, home to the rack.
+            const phase = w.time % MATERIAL_EVERY;
+            const mat = Math.floor(w.time / MATERIAL_EVERY) % 2 ? TASK.FLINT : TASK.WOOD;
+            const spell = itemsOn && phase >= MATERIAL_AT && phase < MATERIAL_AT + MATERIAL_FOR;
+            const spot = spell ? (mat === TASK.WOOD ? tribe.woodSpot : tribe.flintSpot) : null;
+            const workable = spot && handWork(w, spot.x, spot.y, tribe) === mat ? spot : null;
+            const loaded = itemsOn ? p.wood + p.flint : 0;
+            const unload = loaded > 0 && (loaded >= p.loadMax - 1e-9 || !workable);
             if (p.butchering) {
                 v = 0; // (at it: a move would stop it)
             } else if (lying) {
@@ -354,7 +383,7 @@ function play(params, seed, mode, steps) {
                         hands.butcherAt = w.time;
                     }
                 } else v = Math.min(kill.d - 1.5, top * P.cruise);
-            } else if (p.carry >= STORE_AT) {
+            } else if (p.carry >= STORE_AT || unload) {
                 if (campD < Q.rackReach - 2) {
                     if (w.time > hands.storeAt + 5) {
                         send({ type: 'act', seq: ++seq, action: 'store' });
@@ -370,6 +399,29 @@ function play(params, seed, mode, steps) {
                         uy = cdy / campD;
                     }
                     v = Math.min(campD, top * P.cruise);
+                }
+            } else if (workable) {
+                // At the spot, E held (chop or knap) until the load is full;
+                // else on the way there, by land.
+                const sdx = wrapDelta(workable.x - body.x, w.width);
+                const sdy = wrapDelta(workable.y - body.y, w.height);
+                const sd = Math.hypot(sdx, sdy) || 1;
+                if (p.gathering === MATERIAL_NAME[mat]) v = 0;
+                else if (sd < 1.5) {
+                    if (w.time > hands.gatherAt + 5) {
+                        send({ type: 'act', seq: ++seq, action: 'gather', on: true });
+                        hands.gatherAt = w.time;
+                    }
+                } else {
+                    if (T !== null && workable.paths) {
+                        T.way(workable.paths, body.x, body.y, sdx, sdy, sd);
+                        ux = T.ux;
+                        uy = T.uy;
+                    } else {
+                        ux = sdx / sd;
+                        uy = sdy / sd;
+                    }
+                    v = Math.min(sd, top * P.cruise);
                 }
             } else if (prey && !gathering) {
                 ux = prey.dx / (prey.d || 1);
@@ -422,7 +474,7 @@ function play(params, seed, mode, steps) {
             send({ type: 'act', seq: ++seq, action: 'eat' });
             hands.eatAt = w.time;
         }
-        hands.pre = { id: p.id, carry: p.carry, energy: p.energy, butchering: p.butchering, gathering: p.gathering };
+        hands.pre = { id: p.id, carry: p.carry, energy: p.energy, butchering: p.butchering, gathering: p.gathering, wood: p.wood, flint: p.flint };
 
         // Move, around water and cliffs, as the page does with its own terrain.
         if (v > 0) {
@@ -501,7 +553,10 @@ function play(params, seed, mode, steps) {
             else if (e.type === 'heir') stats.heirs++;
             else if (e.type === 'death' && e.kind === 'human' && mine.has(e.id)) stats.deaths++;
             else if (e.type === 'released' || e.type === 'over') ended = e.type;
-            else if (e.type in stats.answers && e.tribe === snap.player?.tribe) stats.answers[e.type]++;
+            else if (e.type in stats.answers && e.tribe === snap.player?.tribe) {
+                stats.answers[e.type]++;
+                if (e.type === 'call' && (e.kind === 'wood' || e.kind === 'flint')) stats.matOrders++;
+            }
         }
         const pop = w.humans;
         for (let k = 0; k < pop.n; k++) {
@@ -535,7 +590,12 @@ function play(params, seed, mode, steps) {
             } else if (e.type === 'store' && mine.has(e.id)) {
                 moved = true;
                 stats.stored += e.amount;
+                stats.woodStored += e.wood ?? 0;
+                stats.flintStored += e.flint ?? 0;
                 if (pre && pre.id === e.id && Math.abs(e.amount - pre.carry) > 1e-9) problem(`step ${w.time}: stored ${e.amount}, carrying ${pre.carry}`);
+                if (pre && pre.id === e.id && (Math.abs((e.wood ?? 0) - pre.wood) > 1e-9 || Math.abs((e.flint ?? 0) - pre.flint) > 1e-9)) {
+                    problem(`step ${w.time}: stored ${e.wood ?? 0} wood and ${e.flint ?? 0} flint, carrying ${pre.wood} and ${pre.flint}`);
+                }
             } else if (e.type === 'take' && mine.has(e.id)) {
                 moved = true;
                 stats.taken += e.amount;
@@ -554,6 +614,7 @@ function play(params, seed, mode, steps) {
         if (itemsOn) items(p);
         if (!p || !pre || p.id !== pre.id || p.auto) return;
         if (!(p.carry >= 0 && p.carry <= P.carryMax + 1e-9)) problem(`step ${w.time}: carrying ${p.carry}`);
+        if (itemsOn) materials(p, pre);
         // What butchering or gathering put in the pouch (when nothing else
         // moved food, nor starving ate some).
         const gain = p.carry - pre.carry;
@@ -563,6 +624,26 @@ function play(params, seed, mode, steps) {
             stats.butchered += gain;
             hands.cut.set(cutting, (hands.cut.get(cutting) ?? 0) + gain);
         } else if (pre.gathering || p.gathering) stats.gathered += gain;
+    };
+
+    // The wood and flint it carries, after a step it played (pre: as the step
+    // began): never over the load's most; stored, all of it (checked with
+    // the store event); otherwise only ever more, and no faster than an
+    // errand's worker on rich ground (a knife: materials.knifeKnap for flint).
+    const materials = (p, pre) => {
+        const I = w.p.items;
+        if (p.wood + p.flint > p.loadMax + 1e-9) problem(`step ${w.time}: a load of ${p.wood} wood and ${p.flint} flint, at most ${p.loadMax}`);
+        if (snap.events.some((e) => e.type === 'store' && e.id === p.id)) {
+            if (p.wood !== 0 || p.flint !== 0) problem(`step ${w.time}: stored, still carrying ${p.wood} wood and ${p.flint} flint`);
+            return;
+        }
+        const dw = p.wood - pre.wood;
+        const df = p.flint - pre.flint;
+        if (dw < -1e-9 || df < -1e-9) problem(`step ${w.time}: wood ${pre.wood} → ${p.wood}, flint ${pre.flint} → ${p.flint} without storing`);
+        if (dw > I.wood + 1e-9 || df > I.flint * w.p.materials.knifeKnap + 1e-9) problem(`step ${w.time}: gathered ${dw} wood, ${df} flint in a step`);
+        if (dw > 0 && df > 0) problem(`step ${w.time}: wood and flint in one step`);
+        if (dw > 0) stats.chopped += dw;
+        if (df > 0) stats.knapped += df;
     };
 
     // The items' bookkeeping, after each step: what it made, took up, used,
@@ -678,6 +759,8 @@ for (const seed of opts.seeds) {
         );
         if (params.items.enabled) {
             console.log(`        items: ${s.crafted} crafted, ${s.picked} taken up, ${s.cycled} cycled, ${s.skills} skills, ${s.tools} tool uses, ${s.broke} broke`);
+            console.log(`        materials: ${s.chopped.toFixed(1)} wood chopped, ${s.knapped.toFixed(1)} flint knapped; stored ${s.woodStored.toFixed(1)} wood, `
+                + `${s.flintStored.toFixed(1)} flint; ${s.matOrders} Gather wood/flint orders taken`);
         }
         for (const msg of s.problems) console.log(`        ✗ ${msg}`);
     }
@@ -685,12 +768,13 @@ for (const seed of opts.seeds) {
 const bad = all.filter((s) => s.problems.length);
 // Over all the sessions, the hands must have done their work: kills, cut
 // up, and the meat home in the store; and with items, something made, taken
-// up, cycled to, a skill and a tool used.
+// up, cycled to, a skill and a tool used; wood and flint gathered by hand
+// and stored, and the tribe sent for them.
 const sum = (k) => all.reduce((t, s) => t + s[k], 0);
-const ITEM_WORK = ['crafted', 'picked', 'cycled', 'skills', 'tools'];
+const ITEM_WORK = ['crafted', 'picked', 'cycled', 'skills', 'tools', 'chopped', 'knapped', 'woodStored', 'flintStored', 'matOrders'];
 const idle = ['kills', 'carcasses', 'stored', ...(params.items.enabled ? ITEM_WORK : [])].filter((k) => !(sum(k) > 0));
 if (idle.length) console.log(`        ✗ no ${idle.join(', no ')} in any session`);
 console.log(`\n${all.length - bad.length}/${all.length} sessions clean · ${sum('kills')} kills, ${sum('carcasses')} butchered, `
-    + `${sum('stored').toFixed(0)} food stored${params.items.enabled ? ` · items: ${ITEM_WORK.map((k) => `${sum(k)} ${k}`).join(', ')}` : ''} · `
+    + `${sum('stored').toFixed(0)} food stored${params.items.enabled ? ` · items: ${ITEM_WORK.map((k) => `${+sum(k).toFixed(1)} ${k}`).join(', ')}` : ''} · `
     + `${(all.reduce((a, s) => a + s.ms, 0) / 1000).toFixed(1)} s\n`);
 process.exit(bad.length || idle.length ? 1 : 0);

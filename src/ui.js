@@ -8,7 +8,7 @@ import { drawFlag } from './flag.js';
 import { STATE, STATE_LABEL } from './world.js';
 import { personName, ageText, years } from './play/names.js';
 import { mostExperienced, eldestOf } from './play/modes.js';
-import { callName } from './play/calls.js';
+import { callName, MATERIAL_CALLS } from './play/calls.js';
 import { legendRows } from './play/gear.js';
 
 const LEGENDS_SHOWN = 10; // rows in the Legends list at most (the newest)
@@ -234,7 +234,8 @@ export class Panel {
     // Calls to your tribe from the map (play/calls.js), under the bar above:
     // `calls` = { shown, armed (the call waiting for a click, or null),
     // order (your tribe's standing order, or null), hungry (the tribe feeds
-    // itself before heeding it) }.
+    // itself before heeding it), materials (items are on: Gather wood and
+    // flint can be given) }.
     showCalls(calls) {
         const $ = this.$;
         const row = $('play-calls');
@@ -242,7 +243,10 @@ export class Panel {
         row.hidden = !calls.shown;
         line.hidden = !calls.shown;
         if (!calls.shown) return;
-        for (const b of row.querySelectorAll('[data-call]')) b.setAttribute('aria-pressed', String(b.dataset.call === calls.armed));
+        for (const b of row.querySelectorAll('[data-call]')) {
+            b.setAttribute('aria-pressed', String(b.dataset.call === calls.armed));
+            if (MATERIAL_CALLS.has(b.dataset.call)) b.hidden = !calls.materials;
+        }
         const text = calls.armed ? `click the map: ${callName(calls.armed).toLowerCase()} there`
             : calls.order ? `standing order: ${callName(calls.order.kind).toLowerCase()}${calls.hungry ? ', once the camp is fed' : ''}`
             : 'no standing order';

@@ -92,11 +92,15 @@ function play({ crosshair = null } = {}) {
 
 test('↑ cycles the calls, round', () => {
     const c = new Calls();
-    assert.deepEqual(CALLS.map((k) => k.kind), ['rally', 'hunt', 'gather', 'defend', 'move']);
+    assert.deepEqual(CALLS.map((k) => k.kind), ['rally', 'hunt', 'gather', 'defend', 'move', 'wood', 'flint']);
     assert.equal(c.call.kind, 'rally');
     const seen = [];
     for (let k = 0; k < CALLS.length; k++) seen.push(c.cycle().kind);
-    assert.deepEqual(seen, ['hunt', 'gather', 'defend', 'move', 'rally']);
+    assert.deepEqual(seen, ['hunt', 'gather', 'defend', 'move', 'wood', 'flint', 'rally']);
+    // Without items, Gather wood and flint are passed by.
+    const bare = [];
+    for (let k = 0; k < 5; k++) bare.push(c.cycle(false).kind);
+    assert.deepEqual(bare, ['hunt', 'gather', 'defend', 'move', 'rally']);
 
     const { modes } = play();
     modes.become(7);

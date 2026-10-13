@@ -172,10 +172,12 @@
         #play-bar canvas { width: 18px; height: 12px; border-radius: 1px; }
         #play-bar .self { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         #play-return { border-color: var(--line); color: var(--text); }
-        #play-calls { display: flex; align-items: center; gap: 2px; margin-top: 6px; }
+        #play-calls { display: grid; grid-template-columns: auto 1fr 1fr 1fr; align-items: center; gap: 2px; margin-top: 6px; }
+        #play-calls .label { grid-row: span 2; }
         #play-calls[hidden], #play-order[hidden] { display: none; }
         #play-calls .label { color: var(--muted); font-size: 11px; margin-right: 4px; }
-        #play-calls button { flex: 1; padding: 0 3px; white-space: nowrap; }
+        #play-calls button { padding: 0 3px; white-space: nowrap; }
+        #play-calls button[hidden] { display: none; }
         #play-order { color: var(--muted); font-size: 11px; margin-top: 3px; }
         #play-order.armed { color: var(--text); }
         #picker { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 6px; }
@@ -298,6 +300,14 @@
         .hud-cross .crafting[hidden] { display: none; }
         .hud-cross .crafting .bar { display: block; height: 2px; margin: 4px 22px 0; background: rgba(8, 9, 9, 0.6); box-shadow: 0 0 0 1px var(--hud-line); }
         .hud-cross .crafting .bar span { display: block; height: 100%; width: calc(var(--done, 0) * 100%); background: var(--hud-text); }
+        /* By the pouch: the wood and flint you carry, and how full the load is. */
+        .hud-cross .load { position: absolute; left: 118px; top: 119px; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; font-size: 15px; line-height: 1; text-align: left; }
+        .hud-cross .load[hidden], .hud-cross .load .mat[hidden] { display: none; }
+        .hud-cross .load .mat { display: flex; align-items: center; gap: 5px; }
+        .hud-cross .load svg { width: 16px; height: 16px; fill: none; stroke: var(--hud-text); stroke-width: 1.3; stroke-linejoin: round; filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.8)); }
+        .hud-cross .load .bar { display: block; width: 40px; height: 2px; margin-top: 2px; background: rgba(8, 9, 9, 0.6); box-shadow: 0 0 0 1px var(--hud-line); }
+        .hud-cross .load .bar span { display: block; height: 100%; width: calc(var(--full, 0) * 100%); background: var(--hud-text); opacity: 0.85; }
+        .hud-cross .load.full .bar span { background: var(--legend); }
         .hud-store .mats { display: flex; gap: 12px; margin-left: 6px; padding-left: 12px; border-left: 1px solid var(--hud-line); font-size: 17px; }
         .hud-store .mats[hidden] { display: none; }
         .hud-store .mat { display: flex; align-items: center; gap: 4px; }
@@ -463,6 +473,8 @@
                 <button data-call="gather" title="Gather food: no hunting, only gathering">gather</button>
                 <button data-call="defend" title="Defend camp: everyone to the camp">defend</button>
                 <button data-call="move" title="Move camp: then click the map where">move</button>
+                <button data-call="wood" title="Gather wood: the idle go for wood, to the tribe's forest">wood</button>
+                <button data-call="flint" title="Gather flint: the idle go for flint, to the tribe's stones">flint</button>
             </div>
             <div id="play-order" hidden></div>
 
@@ -556,6 +568,7 @@
                 <div class="slot left tool" id="hud-tool" title="Tool (← to change, right click to use)"><span class="icon"></span><span class="spares"></span><span class="wear"><span></span></span></div>
                 <div class="slot right weapon" id="hud-weapon" title="Weapon (→ to change)"><span class="icon"><svg viewBox="0 0 36 36" aria-hidden="true"><path d="M7 29 25.5 10.5"/><path d="M25.5 10.5 30 6l-1.2 5.8-3.3-1.3z"/><path d="M9.5 24.5l2 2"/></svg></span><span class="spares"></span><span class="wear"><span></span></span></div>
                 <div class="slot down" title="Food pouch"><svg viewBox="0 0 36 36" aria-hidden="true"><path d="M13 11.5c-4 3.5-6 8-5 12.5 1 4.2 5.2 6 10 6s9-1.8 10-6c1-4.5-1-9-5-12.5"/><path d="M12.5 11.5h11"/><path d="M14.5 11.5 13 7.5h10l-1.5 4"/></svg><span class="count" id="hud-carry">0</span></div>
+                <div class="load" id="hud-load" title="Wood and flint you carry (E at your camp's store puts them in)" hidden><span class="mat wood" id="hud-load-wood"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 13.5 13 4"/><path d="M7 17 16.5 7.5"/><circle cx="14.75" cy="5.75" r="2.47"/><circle cx="5.25" cy="15.25" r="2.47"/></svg><span class="n">0</span></span><span class="mat flint" id="hud-load-flint"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 13.5 7.5 5l6.5-1.5 3 7-4.5 6.5L6 17z"/><path d="M7.5 5l2 6 4.5-7.5M9.5 11l3 6.5"/></svg><span class="n">0</span></span><span class="bar"><span></span></span></div>
                 <div class="call" id="hud-call"></div>
             </div>
             <div class="item" id="hud-item">Plain spear</div>

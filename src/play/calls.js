@@ -8,7 +8,8 @@
 // The simulation hears it (orders.js) and the tribe answers in events, which
 // read here as the notices the HUD shows.
 //
-// (Gathering wood and flint come with items, as more calls.)
+// With items, Gather wood and Gather flint too (about the tribe's spot for
+// each: given at once from the map); without, ↑ passes them by.
 
 export const CALLS = [
     { kind: 'rally', name: 'Rally' },
@@ -16,7 +17,12 @@ export const CALLS = [
     { kind: 'gather', name: 'Gather food' },
     { kind: 'defend', name: 'Defend camp' },
     { kind: 'move', name: 'Move camp' },
+    { kind: 'wood', name: 'Gather wood' },
+    { kind: 'flint', name: 'Gather flint' },
 ];
+
+// The calls about materials, which need items.
+export const MATERIAL_CALLS = new Set(['wood', 'flint']);
 
 // The calls the map can give: a rally needs you there. Of those, the ones
 // that need a place wait for your click; the others are about the camp.
@@ -31,6 +37,8 @@ const TAKEN = {
     gather: 'Gather food — no hunting, only gathering',
     defend: 'Defend camp — everyone to the camp',
     move: 'Move camp — the camp moves here',
+    wood: 'Gather wood — the idle go for wood',
+    flint: 'Gather flint — the idle go for flint',
 };
 const REFUSED = {
     child: 'A child cannot lead',
@@ -54,6 +62,7 @@ export function noticeFor(e) {
         case 'rally':
             return e.count === 1 ? 'Rally — one follows you' : `Rally — ${e.count} follow you`;
         case 'refused':
+            if (e.reason === 'nowhere') return `No ${e.kind} within reach of the camp`;
             return REFUSED[e.reason] ?? `${callName(e.kind)} — refused`;
         default:
             return null;
@@ -76,8 +85,10 @@ export class Calls {
         return CALLS[this.index];
     }
 
-    cycle() {
-        this.index = (this.index + 1) % CALLS.length;
+    // The next call; `materials` false (no items): not Gather wood or flint.
+    cycle(materials = true) {
+        do this.index = (this.index + 1) % CALLS.length;
+        while (!materials && MATERIAL_CALLS.has(this.call.kind));
         return this.call;
     }
 

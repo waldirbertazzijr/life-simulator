@@ -91,7 +91,7 @@ test('an order is given, replaced, and lapses after 3000 steps', () => {
     assert.equal(issueOrder(w, tribe, { kind: 'dance', x, y }), false);
     assert.deepEqual(eventsOf(w, 'refused').map((e) => [e.kind, e.reason]), [['dance', 'unknown']]);
     assert.equal(tribe.order, null);
-    assert.deepEqual(ORDER_KINDS, ['', 'hunt', 'gather', 'defend', 'move']);
+    assert.deepEqual(ORDER_KINDS, ['', 'hunt', 'gather', 'defend', 'move', 'wood', 'flint']); // (the snapshot's codes)
 });
 
 test('move camp: the camp, its paths and its store move', () => {

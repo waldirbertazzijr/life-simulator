@@ -265,6 +265,7 @@ function showPlay() {
         armed: modes.calls.armed,
         order: tribe?.order ?? null,
         hungry: !!tribe && setAside(world.p, tribe),
+        materials: world.p?.items?.enabled === true,
     });
 }
 
@@ -476,6 +477,7 @@ window.play = {
             player: p ? { id: p.id, x: +p.x.toFixed(2), y: +p.y.toFixed(2), auto: p.auto, spirit: +p.spirit.toFixed(1), resting: p.resting } : null,
             hands: p ? {
                 carry: +p.carry.toFixed(1), energy: +p.energy.toFixed(1), reload: p.reload, gathering: p.gathering, butchering: p.butchering,
+                wood: +(p.wood ?? 0).toFixed(2), flint: +(p.flint ?? 0).toFixed(2),
                 doing: modes.doing?.kind ?? null, can: modes.interaction()?.kind ?? null,
             } : null,
             items: p && world.items ? {

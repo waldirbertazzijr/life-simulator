@@ -4,7 +4,8 @@
 // was just lost; top centre, a compass strip with your camp, your tribe's
 // standing order and your locked target; bottom left, the equipment cross
 // (→ the weapon, swept over while it comes back, ← the tool, each in its
-// rarity's colour with its wear and spares; the pouch, with what it holds;
+// rarity's colour with its wear and spares; the pouch, with what it holds,
+// and beside it the wood and flint you carry;
 // the top slot, your call; above, the weapon's skill and its Spirit; below,
 // its name and what is being crafted); bottom centre, what E and R (or P)
 // would do, and above it your tribe's answer to a call (or a word about
@@ -31,13 +32,16 @@ const SUBTITLED = new Set(['died', 'legend']); // (their text goes under the tit
 const NOTICE_MS = 3200; // a call's answer stays this long (calls.js)
 
 // The calls' signs in the top slot (36 × 36, drawn like the others): a horn,
-// a mark on the ground, a sprig, a shield, a flag on the move.
+// a mark on the ground, a sprig, a shield, a flag on the move, a log, a
+// knapped stone.
 const CALL_ICONS = {
     rally: '<path d="M7 15.5h3.5L25 9v18l-14.5-6.5H7z"/><path d="M12 21c0 3.6 3.4 5.6 7.5 5"/><path d="M28.5 13.5c1.6 2.6 1.6 6.4 0 9"/>',
     hunt: '<circle cx="18" cy="18" r="7"/><path d="M18 5v6M18 25v6M5 18h6M25 18h6"/><circle cx="18" cy="18" r="0.8"/>',
     gather: '<path d="M18 30V13"/><path d="M18 22c-5 0-8.5-3-8.5-8 5 0 8.5 3 8.5 8z"/><path d="M18 17.5c4.5 0 7.5-2.6 7.5-7-4.5 0-7.5 2.6-7.5 7z"/>',
     defend: '<path d="M18 6.5 27.5 10v7.5c0 6.5-4.2 10.6-9.5 12.5-5.3-1.9-9.5-6-9.5-12.5V10z"/><path d="M18 11v15"/>',
     move: '<path d="M11 30V7"/><path d="M11 8h13l-3.5 4 3.5 4H11"/><path d="M16 26h11m-3-3 3 3-3 3"/>',
+    wood: '<path d="M6.3 24.3 23.4 7.2"/><path d="M12.6 30.6 29.7 13.5"/><circle cx="26.55" cy="10.35" r="4.45"/><circle cx="9.45" cy="27.45" r="4.45"/><circle cx="9.45" cy="27.45" r="1.6"/>',
+    flint: '<path d="M7.2 24.3 13.5 9l11.7-2.7 5.4 12.6-8.1 11.7H10.8z"/><path d="M13.5 9l3.6 10.8 8.1-13.5M17.1 19.8l5.4 10.8"/>',
 };
 
 // The items' signs (36 × 36, drawn like the others): a spear, a bow with its
@@ -104,7 +108,7 @@ export class Hud {
             const el = this.root.querySelector(`.vbar.${k}`);
             this.bars[k] = { bar: new TrailBar(), fill: el.querySelector('.fill'), trail: el.querySelector('.trail') };
         }
-        this.shown = { name: null, age: null, flag: null, carry: null, store: null, prompt: null, reload: null, charge: null, call: null, gear: null, mats: null };
+        this.shown = { name: null, age: null, flag: null, carry: null, store: null, prompt: null, reload: null, charge: null, call: null, gear: null, mats: null, load: null };
         this.toolSlot = $('hud-tool');
         this.callSlot = this.root.querySelector('.slot.up');
         this.callName = $('hud-call');
@@ -177,7 +181,28 @@ export class Hud {
         this.showCall(s.call);
         this.showGear(s.gear);
         this.showMaterials(s.materials);
+        this.showLoad(s.load);
         this.drawCompass(s);
+    }
+
+    // By the pouch: the wood and flint you carry (gathered by hand, until
+    // stored at the rack), and a hairline of how full the load is. Hidden
+    // while you carry none.
+    showLoad(l) {
+        const any = !!l && (l.wood > 0 || l.flint > 0);
+        const full = any && l.max > 0 ? Math.min(1, (l.wood + l.flint) / l.max) : 0;
+        const key = any ? `${Math.floor(l.wood)}:${Math.floor(l.flint)}:${l.wood > 0}:${l.flint > 0}:${Math.round(full * 40)}` : '';
+        if (key === this.shown.load) return;
+        this.shown.load = key;
+        const el = this.$('hud-load');
+        el.hidden = !any;
+        if (!any) return;
+        this.$('hud-load-wood').hidden = !(l.wood > 0);
+        this.$('hud-load-flint').hidden = !(l.flint > 0);
+        el.querySelector('.wood .n').textContent = Math.floor(l.wood);
+        el.querySelector('.flint .n').textContent = Math.floor(l.flint);
+        el.style.setProperty('--full', full.toFixed(3));
+        el.classList.toggle('full', full >= 0.999);
     }
 
     // ---- Items (play/gear.js's equipment()) ----
