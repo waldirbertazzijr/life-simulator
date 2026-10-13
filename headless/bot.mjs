@@ -38,6 +38,7 @@ import { params as defaults } from '../src/config.js';
 import { Sim, setParam } from '../src/sim.js';
 import { createRng } from '../src/rng.js';
 import { KIND, TASK, costOf, isWeapon, handWork } from '../src/items.js';
+import { wrapDelta, wrapPos } from '../src/util.js';
 
 // What snapshot.player must hold, and of what type (gathering: false, or
 // what: GATHERING).
@@ -73,9 +74,6 @@ const STORE_AT = 60;   // carrying this much: home to the rack to store it
 const EAT_BELOW = 0.6; // hungry below this fraction: eat from the pouch
 const GATHER_EVERY = 1500; // out of every this many steps...
 const GATHER_FOR = 300;    // ...it gathers for this many, hunting or not
-
-const wrapDelta = (d, size) => (d > size / 2 ? d - size : d < -size / 2 ? d + size : d);
-const wrapPos = (v, size) => (v >= 0 && v < size ? v : ((v % size) + size) % size);
 
 function parseArgs(argv) {
     // (6000 steps of life: × the pace, so that as much happens around the bot.)

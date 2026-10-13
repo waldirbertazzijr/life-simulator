@@ -224,7 +224,7 @@ export const params = {
         jabRange: 5,         // a creature this close in front is jabbed instead of thrown at...
         jabArc: Math.PI / 4, // ...this far to either side of the aim
         jabHit: 0.5,         // chance a jab kills; from behind an unwary animal, always (an ambush)
-        // The player's kills wait to be butchered (player.js).
+        // The player's kills wait to be butchered (acts/hands.js).
         spoil: 900,          // steps an untouched carcass lasts
         butcherSteps: 60,    // steps to cut one up...
         butcherReach: 4,     // ...standing this close to it
@@ -329,7 +329,7 @@ export const params = {
         kit: 2,              // spare weapons, and spare tools, the player keeps
     },
 
-    // Wood and flint by the player's own hands (player.js, items.js
+    // Wood and flint by the player's own hands (acts/hands.js, items.js
     // handWork): E in forest chops wood, on rock or tundra knaps flint, at
     // the errands' rates (items.wood, flint, × the ground's richness), into
     // a load of up to items.load (× a basket's carry) carried to the rack.

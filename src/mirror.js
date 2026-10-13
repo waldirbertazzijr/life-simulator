@@ -198,7 +198,9 @@ export class Mirror {
 
     // Take over the person `id` ('god' or 'play' mode; 0 lets go), and steer
     // it: the body's position and posture each frame, and one-off acts such
-    // as a roll (play/modes.js; the simulation side is player.js).
+    // as a roll (play/modes.js takes over and moves the body; play/actions.js,
+    // hands.js, kit.js and lead.js send the acts; the simulation side is
+    // player.js, with acts/hands.js and acts/gear.js).
     control(id, mode) {
         this.host.send({ type: 'control', id, mode });
     }

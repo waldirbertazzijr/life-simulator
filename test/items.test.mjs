@@ -11,9 +11,10 @@ import { Mirror } from '../src/mirror.js';
 import { takeControl, applyInput, applyAct, playerSnapshot } from '../src/player.js';
 import {
     ITEM_KINDS, KIND, TASK, costOf, SKILLS, newItem, hold, unhold, heldLike, lay, wearItem, weaponStats, guards, blowOf,
-    efficiencyOf, carryOf, shielded, killed, credit, raiderKilled, raided, splitItems, wildPickup, tallyTribes, craft,
-    rareChance, affords, spend, fraction, richness, forge, describe,
+    efficiencyOf, carryOf, shielded, killed, credit, raiderKilled, raided, splitItems,
+    affords, spend, fraction, richness, forge, describe,
 } from '../src/items.js';
+import { wildPickup, tallyTribes, craft, rareChance } from '../src/tasks.js';
 import { BIOME } from '../src/terrain.js';
 
 const config = (set = {}) => {

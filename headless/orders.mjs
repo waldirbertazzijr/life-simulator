@@ -30,16 +30,15 @@ import { availableParallelism } from 'node:os';
 import { params as defaults } from '../src/config.js';
 import { World } from '../src/world.js';
 import { setParam } from '../src/sim.js';
-import { campSite } from '../src/humans.js';
+import { campSite } from '../src/tribes.js';
 import { issueOrder, hungry, setAside } from '../src/orders.js';
 import { createRng } from '../src/rng.js';
+import { wrapMod } from '../src/util.js';
 
 const KINDS = ['hunt', 'gather', 'defend', 'move'];
 const EVERY = [1500, 4500]; // steps between a tribe's orders
 const TRIES = 40;           // random spots tried for a hunt or a new camp
 const FULL = [5, 10, 15, 20, 30]; // store a member: how often a tribe holds at least this much
-
-const wrapPos = (v, size) => ((v % size) + size) % size;
 
 // A random spot within `reach` of the tribe's camp that passes `ok`, or the
 // last one tried.
@@ -48,7 +47,7 @@ function spotNear(world, tribe, reach, rng, ok) {
     for (let k = 0; k < TRIES; k++) {
         const r = reach * Math.sqrt(rng.next());
         const a = rng.next() * Math.PI * 2;
-        spot = { x: wrapPos(tribe.camp.x + Math.cos(a) * r, world.width), y: wrapPos(tribe.camp.y + Math.sin(a) * r, world.height) };
+        spot = { x: wrapMod(tribe.camp.x + Math.cos(a) * r, world.width), y: wrapMod(tribe.camp.y + Math.sin(a) * r, world.height) };
         if (ok(spot)) break;
     }
     return spot;

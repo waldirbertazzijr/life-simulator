@@ -20,15 +20,14 @@
 // does.
 import { setParam } from './sim.js';
 import { applyAct } from './player.js';
-import { spawnPerson } from './humans.js';
+import { spawnPerson } from './tribes.js';
 import { personName, YEAR } from './play/names.js';
 import { ITEM_KINDS, KIND, isWeapon, newItem, hold, heldLike, putDown, forge, fraction, carryOf } from './items.js';
+import { TAU, wrapDelta, wrapMod, livingIndexOf } from './util.js';
 
-const TAU = Math.PI * 2;
 const MAX_SKIP = 50000;  // steps a skip may run at once
 const MAX_SPAWN = 100;   // creatures a spawn may make at once
 const MAX_EVENTS = 2000; // as sim.js: events kept for the next snapshot at most
-const wrapPos = (v, size) => ((v % size) + size) % size;
 
 const RARITIES = ['normal', 'rare', 'legendary'];
 const WEAPON_TRAITS = ['range', 'accuracy', 'reload', 'durability'];
@@ -161,18 +160,12 @@ export function runAdmin(sim) {
 
 // ---- Who ----------------------------------------------------------------------------------
 
-function indexOf(pop, id) {
-    const ids = pop.id;
-    for (let i = 0; i < pop.n; i++) if (ids[i] === id) return pop.energy[i] > 0 ? i : -1;
-    return -1;
-}
-
 // You: {kind, pop, i, player} (player: the person you control), or a refusal.
 function you(world) {
     const pl = world.player;
     if (pl !== null) {
         if (!pl.id) refuse('your line has ended: there is nobody to do it to');
-        const i = indexOf(world.humans, pl.id);
+        const i = livingIndexOf(world.humans, pl.id);
         if (i < 0) refuse('your person is gone');
         return { kind: 'human', pop: world.humans, i, player: true };
     }
@@ -264,7 +257,7 @@ function place(world, f, item) {
     }
     const spares = f.player && pl.kit ? (isWeapon(item.kind) ? pl.kit.weapons : pl.kit.tools) : null;
     if (spares !== null && spares.length < world.p.items.kit) {
-        // (As a crafted one goes into the kit: player.js finishCrafting.)
+        // (As a crafted one goes into the kit: acts/gear.js finishCrafting.)
         spares.push(item.id);
         item.bearer = pop.id[i];
         item.last = pop.id[i];
@@ -311,8 +304,8 @@ function near(world, x, y) {
     for (let k = 0; k < 30; k++) {
         const a = rng.next() * TAU;
         const r = 4 + rng.next() * 10;
-        const nx = wrapPos(x + Math.cos(a) * r, world.width);
-        const ny = wrapPos(y + Math.sin(a) * r, world.height);
+        const nx = wrapMod(x + Math.cos(a) * r, world.width);
+        const ny = wrapMod(y + Math.sin(a) * r, world.height);
         if (terrain === null || !terrain.blocked(nx, ny)) return { x: nx, y: ny };
     }
     return { x, y };
@@ -333,7 +326,6 @@ function nearestTribe(world, x, y) {
     }
     return best;
 }
-const wrapDelta = (d, size) => (d > size / 2 ? d - size : d < -size / 2 ? d + size : d);
 
 // A value typed for a parameter, as the kind of value it holds now.
 function valueFor(raw, now) {
@@ -581,8 +573,8 @@ const RUN = {
             x = numberArg(args[0], 'x');
             y = numberArg(args[1], 'y');
         }
-        x = wrapPos(x, world.width);
-        y = wrapPos(y, world.height);
+        x = wrapMod(x, world.width);
+        y = wrapMod(y, world.height);
         if (world.terrain !== null && world.terrain.blocked(x, y)) refuse(`${fmt(x)} ${fmt(y)} is water or a cliff`);
         pop.x[i] = x;
         pop.y[i] = y;
@@ -685,7 +677,7 @@ const RUN = {
         lines.push(`items ${world.items.size}${lying ? ` (${lying} lying about)` : ''}: ${parts.join(' · ') || 'none'}`);
         lines.push(`legends ${legends.length}${legends.length ? ':' : ''}`);
         for (const item of legends.sort((a, b) => b.legend.time - a.legend.time).slice(0, 12)) {
-            const k = item.bearer ? indexOf(world.humans, item.bearer) : -1;
+            const k = item.bearer ? livingIndexOf(world.humans, item.bearer) : -1;
             const bearer = k >= 0 ? who(world, { kind: 'human', pop: world.humans, i: k }) : 'lying about';
             lines.push(`  ${item.legend.name}, a ${kindName(item)} (${item.legend.deed}) · ${bearer} · ${item.kills} kills`);
         }
@@ -719,7 +711,7 @@ export function keepLife(world) {
     const id = world.player.id;
     if (!id) return;
     const pop = world.humans;
-    const i = indexOf(pop, id);
+    const i = livingIndexOf(pop, id);
     if (i < 0) return;
     if (im.id === id && pop.energy[i] < im.life) pop.energy[i] = im.life;
     im.id = id;

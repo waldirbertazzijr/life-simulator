@@ -7,7 +7,7 @@ import { params as defaults } from '../src/config.js';
 import { World, STATE } from '../src/world.js';
 import { Sim, setParam, TRIBE_STRIDE } from '../src/sim.js';
 import { Mirror } from '../src/mirror.js';
-import { campSite } from '../src/humans.js';
+import { campSite } from '../src/tribes.js';
 import { issueOrder, ORDER_KINDS, fighting, heeded } from '../src/orders.js';
 import { takeControl, applyAct, applyInput } from '../src/player.js';
 

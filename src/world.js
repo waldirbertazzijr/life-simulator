@@ -16,16 +16,18 @@ import { Population, STATE } from './population.js';
 import { SpatialHash } from './spatial.js';
 import { Grass } from './grass.js';
 import { Terrain, BIOME } from './terrain.js';
-import { seedTribes, stepHumans, stepTribes, driveOff } from './humans.js';
+import { stepHumans, driveOff } from './humans.js';
+import { seedTribes, stepTribes } from './tribes.js';
 import { caught, afterStep } from './player.js';
 import { Spears, stepSpears, spoilCarcasses } from './spears.js';
 import { fighting } from './orders.js';
-import { initItems, stepItems, bequeath, shielded, creditHolder, TASK } from './items.js';
+import { initItems, bequeath, shielded, creditHolder, TASK } from './items.js';
+import { stepItems } from './tasks.js';
 import { spared, keepLife } from './admin.js';
+import { TAU } from './util.js';
 
 export { STATE, STATE_LABEL } from './population.js';
 
-const TAU = Math.PI * 2;
 const LOOK_ANGLE = 0.8; // a grazer peeks this far (radians) to either side
 const LOOK_COS = Math.cos(LOOK_ANGLE);
 const LOOK_SIN = Math.sin(LOOK_ANGLE);

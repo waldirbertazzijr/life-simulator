@@ -1,6 +1,6 @@
 // Spears in flight, what they strike, and the kills they leave to butcher.
 //
-// Only the player's spears fly (player.js throws them): everyone else's
+// Only the player's spears fly (acts/hands.js throws them): everyone else's
 // throws are decided where they are thrown (humans.js) and only drawn. A
 // spear goes straight, a fixed distance each step, until it has flown its
 // range. Each step it strikes the first creature its path passes close to
@@ -11,7 +11,7 @@
 // predator dies, killed; a person of another tribe loses play.spearDamage,
 // and dies of it at 0. The player's kills do not go straight into the hands
 // as a hunter's do: the meat waits in a carcass (world.carcasses, by the
-// dead creature's id) to be butchered (player.js), and spoils if left.
+// dead creature's id) to be butchered (acts/hands.js), and spoils if left.
 //
 // world.spears holds the spears in flight; World.step calls stepSpears and
 // spoilCarcasses only while there is one, so a world nobody plays in never
@@ -26,9 +26,7 @@
 // up, not only the player's.
 import { STATE } from './population.js';
 import { KIND, credit, efficiencyOf } from './items.js';
-
-const wrapDelta = (d, size) => (d > size / 2 ? d - size : d < -size / 2 ? d + size : d);
-const wrapPos = (v, size) => (v >= 0 && v < size ? v : ((v % size) + size) % size);
+import { wrapDelta, wrapPos, livingIndexOf } from './util.js';
 
 // The spears in flight, as parallel arrays (a handful at most).
 const FIELDS = ['x', 'y', 'vx', 'vy', 'left', 'range', 'by', 'tribe', 'kind', 'item', 'pierce', 'reach'];
@@ -172,13 +170,7 @@ export function strike(world, pop, i, by, ux, uy, weapon = KIND.SPEAR, item = 0,
     world.events.push({ type: 'hit', id: pop.id[i], by, kind, x: pop.x[i], y: pop.y[i], dx: ux, dy: uy, time, weapon });
     // The thrower, if it still lives: the kill is its.
     const people = world.humans;
-    let thrower = -1;
-    for (let k = 0; k < people.n; k++) {
-        if (people.id[k] === by) {
-            if (people.energy[k] > 0) thrower = k;
-            break;
-        }
-    }
+    const thrower = livingIndexOf(people, by);
     const items = world.itemsOn;
     const weaponItem = items && item ? world.items.get(item) : undefined;
     if (pop === world.humans) {

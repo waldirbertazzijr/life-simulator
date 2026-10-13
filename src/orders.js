@@ -27,20 +27,13 @@
 // tests and the orders check (headless/orders.mjs) give any tribe an order
 // without a player.
 import { STATE } from './population.js';
-import { campSite, hitChance } from './humans.js';
-import { KIND, TASK, arm, armOf, hitWith, efficiencyOf, killed, credit, wearItem, campMoved, startErrand } from './items.js';
+import { throwAt } from './humans.js';
+import { campSite } from './tribes.js';
+import { TASK, arm, armOf, campMoved } from './items.js';
+import { startErrand } from './tasks.js';
+import { wrapDelta, wrapPos, livingIndexOf } from './util.js';
 
-const wrapDelta = (d, size) => (d > size / 2 ? d - size : d < -size / 2 ? d + size : d);
-// (A position already on the world is kept exactly as it was given.)
-const wrapPos = (v, size) => (v >= 0 && v < size ? v : ((v % size) + size) % size);
 const GOLDEN = Math.PI * (3 - Math.sqrt(5)); // the golden angle: bearings that never bunch up
-
-// The index of the living member of `pop` with this id, or -1.
-function indexOf(pop, id) {
-    const ids = pop.id;
-    for (let i = 0; i < pop.n; i++) if (ids[i] === id) return pop.energy[i] > 0 ? i : -1;
-    return -1;
-}
 
 // ---- Calls from the player -------------------------------------------------------
 
@@ -70,7 +63,7 @@ export function lead(world) {
 function hear(world, c) {
     const pl = world.player;
     const pop = world.humans;
-    const i = pl.id ? indexOf(pop, pl.id) : -1;
+    const i = pl.id ? livingIndexOf(pop, pl.id) : -1;
     if (i < 0) return; // gone (an heir is on the way)
     const tribe = world.tribeById.get(pop.tribe[i]);
     if (pop.age[i] < world.p.human.maturity) refuse(world, tribe, c.kind, 'child');
@@ -121,12 +114,12 @@ function rally(world, i, tribe) {
 function rallying(world) {
     const pl = world.player;
     const r = pl.rally;
-    r.at = pl.auto || pl.id !== r.leader || world.time >= r.until ? -1 : indexOf(world.humans, pl.id);
+    r.at = pl.auto || pl.id !== r.leader || world.time >= r.until ? -1 : livingIndexOf(world.humans, pl.id);
     if (r.at < 0) {
         pl.rally = null;
         return null;
     }
-    r.prey = pl.lastTarget ? indexOf(world.herbivores, pl.lastTarget) : -1;
+    r.prey = pl.lastTarget ? livingIndexOf(world.herbivores, pl.lastTarget) : -1;
     return r;
 }
 
@@ -165,32 +158,15 @@ export function follow(world, r, i, tribe, e, c) {
             led.dy = gy / d;
             led.v = top * P.cruise;
         } else if (pop.timer[i] === 0) {
-            pop.timer[i] = items ? arm.reload : P.reload;
             const mates = world.humanHash.count(x[i], y[i], P.groupRadius, i, pop.tribe, pop.tribe[i], true);
-            const hit = world.rng.next() < (items ? hitWith(P, tribe, mates, arm.hit) : hitChance(P, tribe, mates));
-            // (For the page, which draws the spear: nothing reads it here.)
-            world.events.push({
-                type: items && arm.kind === KIND.CLUB ? 'swing' : 'throw', id: pop.id[i], x: x[i], y: y[i], tx: G.x[j], ty: G.y[j],
-                hit, time: world.time, weapon: items ? arm.kind : KIND.SPEAR,
-            });
-            const weapon = items ? arm.item : null;
-            if (hit && items) {
-                // The kill waits to be cut up (items.js).
-                killed(world, i, G, j, efficiencyOf(world, pop, i));
-                credit(world, weapon, G, j);
-                world.die(G, j, 'hunted', pop.id[i]);
-                pop.kills[i]++;
-            } else if (hit) {
-                const food = G.energy[j] * P.efficiency;
-                world.die(G, j, 'hunted', pop.id[i]);
-                pop.kills[i]++;
+            const food = throwAt(world, i, tribe, mates, G, j, 'hunted'); // (humans.js; with items, the kill waits to be cut up)
+            if (food >= 0) {
                 // Eat a share now; the rest goes home to the camp.
                 let eat = food * (1 - tribe.sociality);
                 if (eat > P.maxEnergy - e) eat = P.maxEnergy - e;
                 e += eat;
                 c += food - eat;
             }
-            if (items) wearItem(world, i, weapon);
         }
     } else {
         // Its place: `close` from the leader, on a bearing of its own.
