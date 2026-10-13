@@ -375,7 +375,7 @@ test('costs (params.items.costs, by name): spear 2 wood, bow 3 wood and a hide, 
     assert.equal(p.items.pickReach, 6);
 });
 
-test('an adult at camp makes what the tribe needs: 150 steps, paid from the store', () => {
+test('an adult at camp makes what the tribe needs: items.craftSteps, paid from the store', () => {
     const w = world(EMPTY);
     const t = w.tribes[0];
     const [first] = adults(w);
@@ -773,7 +773,7 @@ function control(w, x, y) {
     return pop.id[i];
 }
 
-test('crafting by hand: at camp, from the store, 150 steps; into the kit; a move stops it and gives the materials back', () => {
+test('crafting by hand: at camp, from the store, items.craftSteps; into the kit; a move stops it and gives the materials back', () => {
     const w = world(EMPTY);
     const t = w.tribes[0];
     const id = control(w);
@@ -790,7 +790,7 @@ test('crafting by hand: at camp, from the store, 150 steps; into the kit; a move
     assert.deepEqual(p.crafting, { kind: KIND.SPEAR, until: w.time - 1 + w.p.items.craftSteps });
     assert.equal(w.humans.state[at(w, id)], STATE.CRAFTING);
     let made = null;
-    for (let k = 0; k < 200 && !made; k++) {
+    for (let k = 0; k < w.p.items.craftSteps + 50 && !made; k++) {
         w.step();
         made = happened(w, 'crafted')[0];
     }

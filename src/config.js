@@ -4,7 +4,22 @@
 //   energy   — arbitrary; 1 unit of grass is worth `grassEnergy`
 //
 // planning/THEORY.md explains which knobs stabilise the system and why.
+//
+// Times and rates of life below are written for pace 1; the simulation reads
+// them through paced() (at the end of this file), at `life.pace`.
 export const params = {
+    // The pace of life: every life takes this many times longer than the
+    // numbers below say (paced() lists what it touches). Growing up, ageing,
+    // hunger, births, spoiling, crafting and fetching wood all slow down
+    // together; walking, running, seeing and throwing do not. Encounters
+    // keep their rate in a life only if the world is that much emptier, so
+    // the grass feeds that many fewer, too. At 2, the world moves as at 1 but
+    // lives half as fast, with about half as many of everyone. Applies to a
+    // new world.
+    life: {
+        pace: 2,
+    },
+
     world: {
         // The world always has this AREA; its aspect ratio follows the screen.
         // Densities — and so the balance — are identical on any display.
@@ -72,8 +87,10 @@ export const params = {
         // Each patch regrows toward full (1.0) at this rate: g += regrowth·(1 − g).
         // Supply-driven regrowth (like rain filling a pond) cannot be grazed to
         // extinction, and it does not amplify oscillations the way logistic
-        // prey growth does. This is the base of the whole food web.
-        regrowth: 0.0009,
+        // prey growth does. This is the base of the whole food web. (At pace 2 it
+        // regrows half as fast: about 520 grazers and 48 predators; more grass
+        // feeds more of both, and is calmer still: THEORY.md §7.)
+        regrowth: 0.0012,
         initial: 0.25,       // start near the level herbivores graze it down to
     },
 
@@ -169,7 +186,7 @@ export const params = {
         // The tribe
         storeTarget: 30,     // food per member the tribe wants in store before resting
         spoil: 0.0005,       // the store loses this fraction per step
-        birthCost: 90,       // a birth takes this much from the store...
+        birthCost: 120,      // a birth takes this much from the store (90 made tribes too many)...
         childEnergy: 60,     // ...of which the newborn gets this
         reserve: 5,          // food per member kept back when deciding on a birth
         birthInterval: 200,  // steps between births in one tribe
@@ -343,3 +360,49 @@ export const params = {
 
     lifespanJitter: 0.2,
 };
+
+// The parameters a world runs on (World's constructor applies this): a copy
+// of `p` at life.pace = k. Pace 1 gives back the numbers as written.
+//
+// Each life runs k times slower: it lasts k times longer, burns energy k
+// times slower, and so needs k times less food a step and breeds k times
+// less often. But everyone still moves as fast. So that encounters (a
+// predator finding prey, a hunter a grazer, strangers meeting) come no more
+// often in a life than before, a slower world must hold k times fewer of
+// everyone: grass regrows k times slower, a bite of grass (or a handful
+// gathered) is worth k times less, and the world starts with k times fewer
+// animals. Meat is found by encounter, so a kill is worth as much as ever.
+// The upshot: the same ecology in a life's terms (the same balance between
+// predators and prey, the same genes evolve), at half the bustle per step,
+// on half the crowd. Kept as written: speeds, senses, bites, throws, the
+// crowding cost (rivals nearby are k times rarer already), everything in
+// play.* and orders.*.
+const LONGER = [ // × k
+    'herbivore.maturity', 'herbivore.lifespan',
+    'carnivore.maturity', 'carnivore.lifespan', 'carnivore.handling',
+    'human.maturity', 'human.lifespan', 'human.birthInterval',
+    'items.craftSteps', 'items.butcher', 'items.errand', 'items.torch', 'items.vanish',
+];
+const SLOWER = [ // ÷ k
+    'grass.regrowth',
+    'herbivore.baseCost', 'herbivore.moveCost', 'herbivore.grassEnergy',
+    'carnivore.baseCost', 'carnivore.moveCost',
+    'human.baseCost', 'human.moveCost', 'human.plantEnergy', 'human.spoil', 'human.raidRate',
+    'items.wood', 'items.flint',
+];
+const FEWER = ['herbivore.initial', 'carnivore.initial']; // ÷ k, whole
+
+export function paced(p) {
+    const q = structuredClone(p);
+    const k = q.life?.pace ?? 1;
+    const each = (paths, f) => {
+        for (const path of paths) {
+            const [a, b] = path.split('.');
+            q[a][b] = f(q[a][b]);
+        }
+    };
+    each(LONGER, (v) => v * k);
+    each(SLOWER, (v) => v / k);
+    each(FEWER, (v) => Math.round(v / k));
+    return q;
+}

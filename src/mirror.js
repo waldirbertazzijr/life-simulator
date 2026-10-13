@@ -190,7 +190,7 @@ export class Mirror {
     }
 
     // Change a parameter in the running simulation, e.g. set('herbivore.speed', 0.7).
-    // (Here too, so the next reset starts with it.)
+    // (Here too, for the page; a new world starts from sim.params again.)
     set(path, value) {
         setParam(this.p, path, value);
         this.host.send({ type: 'set', path, value });
@@ -226,7 +226,7 @@ export class Mirror {
     reset(params, seed, aspect) {
         const world = new World(params, { seed, aspect });
         this.gen++;
-        this.p = params;
+        this.p = world.p; // (the numbers the world lives by: at params.life.pace, config.js)
         this.seed = seed;
         this.width = world.width;
         this.height = world.height;

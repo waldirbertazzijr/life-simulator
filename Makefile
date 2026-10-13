@@ -23,7 +23,9 @@ orders:
 	$(DOCKER) $(NODE) node headless/orders.mjs $(ARGS)
 
 # Behaviour fingerprint (must not change for a pure refactor), e.g. make fingerprint ARGS="--set human.enabled=false"
-# Baselines (all:): default cf91f2a652ac37cd; --set items.enabled=false 9d4e5263c001546d (the world before items)
+# Baselines (all:): default 2a6f0633606fc95a; --set items.enabled=false 5d18bd1739f3aee6 (the world before items).
+# Before the pace of life (WP-5): --set life.pace=1 --set grass.regrowth=0.0009 --set human.birthCost=90 gives
+# cf91f2a652ac37cd, and 9d4e5263c001546d with items off.
 fingerprint:
 	$(DOCKER) $(NODE) node tools/fingerprint.mjs $(ARGS)
 

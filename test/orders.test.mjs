@@ -317,7 +317,7 @@ test('a hungry tribe sets its order aside to feed itself, but meets predators an
     const out = adultsOf(w, tribe).filter((i) => w.humans.state[i] !== STATE.GUARDING);
     assert.ok(out.length > 0, 'hungry, they go out for food');
     assert.equal(fighting(tribe), 1, 'and still stand against predators');
-    keep(tribe, 15);
+    tribe.store = w.p.human.birthCost + (w.p.human.reserve + 10) * tribe.members; // (a birth's worth, and more)
     assert.equal(heeded(w.p, tribe), tribe.order, 'fed again, they heed it');
 
     // Hunt here only moves where they forage: it stands though they are

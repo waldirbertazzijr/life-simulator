@@ -463,6 +463,7 @@ test('spawn: adults near you; people join your tribe, with a spear', () => {
     let r = run(w, 'spawn herbivore 3');
     assert.equal(r.ok, true);
     assert.equal(w.herbivores.n, h + 3);
+    const spawned = Array.from(w.herbivores.id.subarray(h, h + 3));
     for (let k = h; k < h + 3; k++) {
         assert.ok(Math.hypot(wrapDelta(w.herbivores.x[k] - x, w.width), wrapDelta(w.herbivores.y[k] - y, w.height)) <= 15);
         assert.equal(w.herbivores.age[k], w.p.herbivore.maturity);
@@ -481,8 +482,14 @@ test('spawn: adults near you; people join your tribe, with a spear', () => {
         assert.ok(w.humans.age[k] >= w.p.human.maturity);
         assert.equal(w.items.get(w.humans.weapon[k]).kind, KIND.SPEAR);
     }
-    for (let s = 0; s < 50; s++) w.step();
-    assert.ok(w.herbivores.n >= h + 2, 'they live on');
+    // The newcomers live on: none starves or dies of age (the tribe may hunt
+    // them; the herd as a whole may shrink meanwhile, at the pace of life).
+    const ends = [];
+    for (let s = 0; s < 50; s++) {
+        w.step();
+        for (const e of w.events) if (e.type === 'death' && spawned.includes(e.id)) ends.push(e.cause);
+    }
+    assert.deepEqual(ends.filter((c) => c !== 'hunted' && c !== 'eaten'), [], 'they live on');
 });
 
 test('spawn a person, following a grazer: it joins the nearest tribe', () => {
@@ -597,7 +604,7 @@ test('set and get: live parameters, typed as they are', () => {
     run(w, 'set items.costs.spear {"wood": 1, "flint": 0, "hide": 0}');
     assert.deepEqual(w.p.items.costs.spear, { wood: 1, flint: 0, hide: 0 });
     assert.equal(run(w, 'get herbivore.speed').text, 'herbivore.speed: 0.7');
-    assert.match(run(w, 'get').text, /^groups: world terrain biomes/);
+    assert.match(run(w, 'get').text, /^groups: life world terrain biomes/);
     assert.match(run(w, 'get items.costs').text, /^items\.costs\.spear: \{"wood":1/);
 });
 

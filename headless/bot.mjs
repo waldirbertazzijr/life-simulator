@@ -31,7 +31,7 @@
 // items) nothing crafted, taken up, cycled, no skill or tool used, no wood
 // or flint gathered and stored, no Gather wood or flint order taken.
 //
-//   make bot                                     # seeds 1-6 × 6000 steps
+//   make bot                                     # seeds 1-6 × 6000 steps × life.pace
 //   make bot ARGS="--seeds 1-20 --steps 20000"
 //   make bot ARGS="--set terrain.enabled=false"  # a flat world
 import { params as defaults } from '../src/config.js';
@@ -78,7 +78,8 @@ const wrapDelta = (d, size) => (d > size / 2 ? d - size : d < -size / 2 ? d + si
 const wrapPos = (v, size) => (v >= 0 && v < size ? v : ((v % size) + size) % size);
 
 function parseArgs(argv) {
-    const opts = { seeds: [1, 2, 3, 4, 5, 6], steps: 6000, sets: [] };
+    // (6000 steps of life: × the pace, so that as much happens around the bot.)
+    const opts = { seeds: [1, 2, 3, 4, 5, 6], steps: 6000 * defaults.life.pace, sets: [] };
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
         const next = () => argv[++i];

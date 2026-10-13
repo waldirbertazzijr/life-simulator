@@ -61,13 +61,14 @@ test('names are varied and pronounceable', () => {
     }
 });
 
-test('ages are in years of 150 steps', () => {
-    assert.equal(YEAR, 150);
-    assert.equal(years(900), 6);
-    assert.equal(years(149), 0);
-    assert.equal(ageText(100), 'under a year');
-    assert.equal(ageText(150), '1 year');
-    assert.equal(ageText(4000), '26 years');
+test('ages are in years of 150 steps × the pace of life (people come of age at 6)', () => {
+    const k = defaults.life.pace;
+    assert.equal(YEAR, 150 * k);
+    assert.equal(years(900 * k), 6);
+    assert.equal(years(150 * k - 1), 0);
+    assert.equal(ageText(100 * k), 'under a year');
+    assert.equal(ageText(150 * k), '1 year');
+    assert.equal(ageText(4000 * k), '26 years');
 });
 
 test('relations by generations', () => {
@@ -856,7 +857,7 @@ test('Play with nobody left is over, with the story', () => {
     frame(DEATH_SECONDS);
     assert.ok(hud.story, 'the summary card');
     const { people, generations, years: lived, kills, children, line } = hud.story;
-    assert.deepEqual({ people, generations, lived, kills, children, line }, { people: 1, generations: 1, lived: 6, kills: 0, children: 0, line: [personName(20)] });
+    assert.deepEqual({ people, generations, lived, kills, children, line }, { people: 1, generations: 1, lived: Math.floor(1000 / YEAR), kills: 0, children: 0, line: [personName(20)] });
     assert.equal(hud.banners.at(-1), 'ended');
     assert.equal(modes.self, 0);
     assert.equal(state.inBody, false);

@@ -11,6 +11,7 @@
 // world.terrain is null and every terrain branch below is skipped, so the
 // flat world runs exactly as it always did.
 import { createRng } from './rng.js';
+import { paced } from './config.js';
 import { Population, STATE } from './population.js';
 import { SpatialHash } from './spatial.js';
 import { Grass } from './grass.js';
@@ -39,7 +40,9 @@ export function worldSize(area, aspect) {
 
 export class World {
     constructor(params, { seed = 1, aspect = 1.6 } = {}) {
-        this.p = params;
+        // The numbers this world lives by: life's spans and rates at
+        // params.life.pace (config.js). Everything reads these, world.p.
+        this.p = params = paced(params);
         this.seed = seed;
         this.rng = createRng(seed);
         const { width, height } = worldSize(params.world.area, aspect);

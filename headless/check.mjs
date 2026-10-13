@@ -27,6 +27,12 @@ function runSeed({ params, seed, steps, sample, shock, aspect }) {
     let extinct = null;
     let humansGone = null;
     const hadHumans = world.humans.n > 0;
+    // For the pace: how many each species started with, and raids set off
+    // (a person taking up a raid goal: the ids on a raid, step to step).
+    const start = { herbivore: world.herbivores.n, carnivore: world.carnivores.n, human: world.humans.n };
+    let raids = 0;
+    let raiding = new Set();
+    let raidingNow = new Set();
     const t0 = performance.now();
 
     for (let t = 1; t <= steps; t++) {
@@ -36,6 +42,16 @@ function runSeed({ params, seed, steps, sample, shock, aspect }) {
             h.compact();
         }
         world.step();
+        if (hadHumans) {
+            const pop = world.humans;
+            raidingNow.clear();
+            for (let i = 0; i < pop.n; i++) {
+                if (pop.goal[i] === 0) continue;
+                raidingNow.add(pop.id[i]);
+                if (!raiding.has(pop.id[i])) raids++;
+            }
+            [raiding, raidingNow] = [raidingNow, raiding];
+        }
         if (t % sample === 0) {
             series.herbivore.push(world.herbivores.n);
             series.carnivore.push(world.carnivores.n);
@@ -86,7 +102,29 @@ function runSeed({ params, seed, steps, sample, shock, aspect }) {
             hunted: world.deaths.herbivore.hunted ?? 0,
         } : null,
         items: world.itemsOn ? itemSummary(world) : null,
+        pace: paceSummary(world, start, raids),
     };
+}
+
+// The pace of life over the run: births and deaths (by cause) of each
+// species, tribes split, raids set off, items made and errands run. Births
+// are what the counts cannot otherwise explain: died + alive now − at start.
+function paceSummary(world, start, raids) {
+    const out = { steps: world.time };
+    for (const [kind, pop] of [['herbivore', world.herbivores], ['carnivore', world.carnivores], ['human', world.humans]]) {
+        const died = world.deaths[kind];
+        const deaths = Object.values(died).reduce((a, b) => a + b, 0);
+        out[kind] = { births: deaths + pop.n - start[kind], deaths, died: { ...died } };
+    }
+    out.splits = world.nextTribeId - 1 - (world.p.human.enabled ? world.p.human.tribes : 0);
+    out.raids = raids;
+    if (world.itemsOn) {
+        const s = world.itemStats;
+        out.crafted = s.crafted.reduce((a, b) => a + b, 0);
+        out.errands = s.errands.wood + s.errands.flint;
+        out.butchered = s.butchered;
+    }
+    return out;
 }
 
 // With items (src/items.js): what was made, broken and lost; the legends and
@@ -209,14 +247,15 @@ function period(a, sample) {
 }
 
 function summarise(r) {
-    const out = { seed: r.seed, steps: r.steps, extinct: r.extinct, stepsPerSec: r.stepsPerSec, genes: r.genes, terrain: r.terrain, biomes: r.biomes, items: r.items };
-    for (const s of ['herbivore', 'carnivore', 'grass']) {
+    const out = { seed: r.seed, steps: r.steps, extinct: r.extinct, stepsPerSec: r.stepsPerSec, genes: r.genes, terrain: r.terrain, biomes: r.biomes, items: r.items, pace: r.pace };
+    for (const s of ['herbivore', 'carnivore', 'grass', 'human', 'tribes']) {
         const ser = r.series[s];
         const back = ser.slice(Math.floor(ser.length / 2));
         const m = mean(back);
         // mean and CV describe the second half (after any start-up wobble);
-        // min is over the WHOLE run, opening included.
-        out[s] = { mean: m, cv: m ? sd(back) / m : 0, min: ser.length ? Math.min(...ser) : 0, max: Math.max(...back, 0) };
+        // min is over the WHOLE run, opening included; `all` is the mean of
+        // the whole run (for births and deaths a head).
+        out[s] = { mean: m, cv: m ? sd(back) / m : 0, min: ser.length ? Math.min(...ser) : 0, max: Math.max(...back, 0), all: mean(ser) };
     }
     out.period = period(r.series.carnivore.slice(Math.floor(r.series.carnivore.length / 4)), r.sample ?? 100);
     if (r.humans) {
@@ -293,6 +332,13 @@ async function main() {
             console.log(`        items now (normal/rare/legendary): ${kinds} · adults armed ${f(100 * it.armed)}%, with a tool ${f(100 * it.tooled)}%`);
             console.log(`        made ${Object.values(it.crafted).reduce((a, b) => a + b, 0)} (${it.rare} rare), broke ${it.broke}, lost ${it.vanished} · legends: ${deeds} · deaths with a kill to butcher: ${died} (eaten in all: ${s.humans?.died?.eaten ?? 0})`);
         }
+        if (s.pace) {
+            const p = s.pace;
+            const per = (v) => f((v * 10000) / p.steps, 1);
+            console.log(`        pace /10k steps: herbivores born ${per(p.herbivore.births)} · carnivores born ${per(p.carnivore.births)}` +
+                (s.humans ? ` · people born ${per(p.human.births)}, died ${per(p.human.deaths)} · tribes ${f(s.tribes.mean, 1)} (2nd half) · ` +
+                    `splits ${per(p.splits)}, raids ${per(p.raids)}${p.crafted !== undefined ? `, crafted ${per(p.crafted)}, errands ${per(p.errands)}` : ''}` : ''));
+        }
         if (s.terrain) {
             const t = s.terrain;
             console.log(`        terrain: water ${f(100 * t.water)}% · cliffs ${f(100 * t.cliff)}% · regrowth ×${f(t.boost, 2)} on the land left`);
@@ -341,6 +387,28 @@ async function main() {
             Object.entries(kinds).map(([k, v]) => `${k} ${v.map(per).join('/')}`).join(' · '));
         console.log(`        held in aggressive tribes: ${share(culture.aggressive)} · in social tribes: ${share(culture.social)} · ` +
             `eaten with a kill to butcher ${per(atKills)} a seed · adults armed ${f(100 * avg((s) => s.items.armed))}%`);
+    }
+    // The pace of life, per 10k steps, as means over the seeds: births and
+    // deaths by cause, and the same a head (÷ the whole run's mean count).
+    const paced = sums.filter((s) => s.pace);
+    if (paced.length) {
+        const per = (s, v) => (v * 10000) / s.pace.steps;
+        const m = (get) => mean(paced.map(get));
+        const line = (kind, series) => {
+            const causes = {};
+            for (const s of paced) for (const [c, v] of Object.entries(s.pace[kind].died)) causes[c] = (causes[c] ?? 0) + per(s, v) / paced.length;
+            const head = (get) => m((s) => (s[series].all ? per(s, get(s)) / s[series].all : 0));
+            return `born ${f(m((s) => per(s, s.pace[kind].births)), 1)} (${f(head((s) => s.pace[kind].births), 3)} a head), ` +
+                `died ${f(m((s) => per(s, s.pace[kind].deaths)), 1)} (${Object.entries(causes).sort((a, b) => b[1] - a[1]).map(([c, v]) => `${c} ${f(v, 1)}`).join(', ')})`;
+        };
+        console.log(`pace, per 10k steps: herbivores ${line('herbivore', 'herbivore')}`);
+        console.log(`        carnivores ${line('carnivore', 'carnivore')}`);
+        if (withPeople.length) {
+            console.log(`        people ${line('human', 'human')}`);
+            console.log(`        tribes ${f(m((s) => s.tribes.mean), 1)} (2nd half; lowest seed ${f(Math.min(...paced.map((s) => s.tribes.mean)), 1)}, at the end ${f(m((s) => s.humans.tribes), 1)}) · ` +
+                `splits ${f(m((s) => per(s, s.pace.splits)), 2)} · raids ${f(m((s) => per(s, s.pace.raids)), 1)}` +
+                (withItems.length ? ` · crafted ${f(m((s) => per(s, s.pace.crafted ?? 0)), 1)} · errands ${f(m((s) => per(s, s.pace.errands ?? 0)), 1)} · butchered ${f(m((s) => per(s, s.pace.butchered ?? 0)), 1)}` : ''));
+        }
     }
     console.log(`\n${ok}/${sums.length} ecosystems persisted${withPeople.length ? ` · people survived in ${peopleOk}/${withPeople.length}` : ''} · median ${f(sums.map((s) => s.stepsPerSec).sort((a, b) => a - b)[Math.floor(sums.length / 2)])} steps/s per core\n`);
 }

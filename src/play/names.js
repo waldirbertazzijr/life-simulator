@@ -7,13 +7,15 @@
 // may be just a vowel), and the last may close on a soft consonant: Tiko,
 // Ana, Maren, Shulavi.
 
+import { params } from '../config.js';
+
 const ONSETS = ['b', 'd', 'g', 'h', 'k', 'l', 'm', 'n', 'p', 'r', 's', 't', 'v', 'y', 'z', 'sh', 'th', 'k', 't', 'm', 'n', 'r', 'l', 's'];
 const VOWELS = ['a', 'e', 'i', 'o', 'u', 'a', 'i', 'o'];
 const CODAS = ['', '', '', 'n', 'r', 'l', 's', 'k'];
 
-// Steps in a year: maturity (900 steps) comes at 6, the longest life
-// (9000 × 1.2) ends at 72. For display only.
-export const YEAR = 150;
+// Steps in a year: maturity (900 steps × the pace of life) comes at 6, the
+// longest life (9000 × 1.2 × the pace) ends at 72. For display only.
+export const YEAR = 150 * params.life.pace;
 
 // A 32-bit integer hash (lowbias32): neighbouring ids give unrelated names.
 function hash(n) {

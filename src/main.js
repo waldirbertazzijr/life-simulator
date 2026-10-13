@@ -376,7 +376,7 @@ requestAnimationFrame(frame);
 //   sim.follow(id)   follow anyone; sim.reset(seed), sim.pause(on), sim.speed(s)
 //   sim.set('herbivore.speed', 0.7)   change a parameter in the running simulation
 //   sim.params       the parameters a new world starts with (edits apply on reset;
-//                    with ?noworker, at once, as they share this object)
+//                    e.g. sim.params.life.pace = 1, then sim.reset())
 //   sim.frameMs      JavaScript time per frame spent drawing; sim.mainMs, all of it
 //   sim.worker       whether the simulation runs in a Web Worker
 //   sim.timing       how the snapshots flow (interpolation delay, size)
