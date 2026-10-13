@@ -1,0 +1,1254 @@
+// Items (spec §8): what people make from the land, use, wear out, hand down,
+// lose and find; the few that become legends; and butchering for everyone
+// (§15). With params.items.enabled off, `world.itemsOn` is false, nothing
+// here is ever called, and the world is the one of before items, to the bit.
+//
+// Materials. A tribe's store holds wood, flint and hide besides its food
+// (numbers on the tribe; they do not spoil). Wood is chopped in forest, and a
+// little anywhere grass grows; flint is quarried on bare rock, and a little on
+// tundra (on a flat world, a little anywhere); hides come with kills. Each
+// tribe finds its nearest good spots when it is founded (findSpots), each with
+// a way there by land, as its camp has (tribe.paths).
+//
+// Items. world.items maps an item's id to a plain object:
+//
+//   id, kind      KIND code (an index into ITEM_KINDS)
+//   rarity        0 normal, 1 rare, 2 legendary; `trait` the boosted one ('' if
+//                 none) and `mult` its factor (1, rare, legendary)
+//   wear, max     uses left, of how many (Infinity for a legend); a torch
+//                 burns until `expires` (a world time), and `wear` is the
+//                 steps left
+//   uses, kills   how often it has been used, and killed with
+//   maker, tribe, made    who made it (an id, 0 for the first spears), the
+//                 tribe it was made in, when
+//   bearer        who holds it (an id), or 0: then it lies at x, y since
+//                 `dropped`, in a camp's goods (`camp`, the tribe's id) or out
+//                 in the wild (world.wild)
+//   gens, line    generations of one line that have borne it, and the first
+//                 of them; `last` the bearer before
+//   legend        {name, skill, deed, time, history: [{time, text, by}]} or null
+//   log           its story so far (made, bearers, great kills): a legend's
+//                 history starts from it
+//   rev           counts changes to what the page is told once (sim.js)
+//
+// A person holds one weapon and one tool (the population's `weapon` and
+// `tool` columns, item ids, and `gear`, their two kinds as weapon × 8 + tool,
+// for the hot loops); the player also keeps a few spares (player.kit).
+//
+// What people do with items lives in humans.js, in guarded branches; the
+// work itself is here: tasks (TASK: butchering a kill, an errand for wood or
+// flint, crafting at camp) are stepped by stepTask, which leaves the result in
+// `job`; tribes decide what they need every TALLY steps (tallyTribes).
+import { STATE } from './population.js';
+import { BIOME } from './terrain.js';
+
+const GOLDEN = Math.PI * (3 - Math.sqrt(5));
+const FAR = 0x3fffffff; // terrain.js: a cell no land path reaches
+const TALLY = 10;       // steps between a tribe's reckonings of what it needs
+const SWEEP = 50;       // steps between sweeps for burnt-out torches and items left too long
+const LOG = 8;          // entries an item's story keeps (the first, and the latest)
+const STROKE = 30;      // a chop or a knap event at most this often, per worker
+
+const wrapDelta = (d, size) => (d > size / 2 ? d - size : d < -size / 2 ? d + size : d);
+const wrapPos = (v, size) => (v >= 0 && v < size ? v : ((v % size) + size) % size);
+
+export const ITEM_KINDS = ['', 'spear', 'bow', 'club', 'knife', 'basket', 'torch'];
+export const KIND = { SPEAR: 1, BOW: 2, CLUB: 3, KNIFE: 4, BASKET: 5, TORCH: 6 };
+export const WEAPONS = [KIND.SPEAR, KIND.BOW, KIND.CLUB];
+export const TOOLS = [KIND.KNIFE, KIND.BASKET, KIND.TORCH];
+export const isWeapon = (kind) => kind >= KIND.SPEAR && kind <= KIND.CLUB;
+export const TASK = { NONE: 0, BUTCHER: 1, WOOD: 2, FLINT: 3, CRAFT: 4 };
+
+// What a kind (a KIND code) costs to make: {wood, flint, hide}, from
+// params.items.costs (by name). `p` is the parameters (world.p).
+export const costOf = (p, kind) => p.items.costs[ITEM_KINDS[kind]];
+
+// The traits a rare item can have boosted, by kind.
+const WEAPON_TRAITS = ['range', 'accuracy', 'reload', 'durability'];
+const TOOL_TRAITS = ['effect', 'durability'];
+const traitsOf = (kind) => (isWeapon(kind) ? WEAPON_TRAITS : TOOL_TRAITS);
+
+// The player's weapon skills (§8.6): a legend's is its kind's, stronger, under
+// a name of its own (`word` of the legend's name).
+export const SKILLS = [
+    null,
+    { name: 'Piercing throw', cost: 30, word: 'Flight' },
+    { name: 'Volley', cost: 30, word: 'Rain' },
+    { name: 'Ground slam', cost: 40, word: 'Quake' },
+    null, null, null,
+];
+
+// ---- Setting up ------------------------------------------------------------------------
+
+// The world's items, before anything is made (World's constructor).
+export function initItems(world) {
+    world.itemsOn = world.p.items.enabled === true;
+    world.items = new Map();
+    world.nextItemId = 1;
+    world.wild = [];          // ids of items lying out in the wild...
+    world.wildX = [];         // ...and where
+    world.wildY = [];
+    world.legendNames = new Set();
+    // What items did, for the checks (headless/check.mjs).
+    world.itemStats = world.itemsOn ? {
+        crafted: [0, 0, 0, 0, 0, 0, 0], rare: 0, broke: [0, 0, 0, 0, 0, 0, 0], vanished: 0,
+        legends: { famous: 0, kills: 0, generations: 0, defender: 0, outlived: 0 },
+        picked: 0, inherited: 0, raided: 0, butchered: 0, butcherDeaths: {}, errands: { wood: 0, flint: 0 },
+        eatenAt: [0, 0, 0, 0, 0], // people eaten, by the task they were at (TASK)...
+        eatenArm: [0, 0, 0, 0],   // ...and the weapon they held (KIND; 0: none)
+    } : null;
+}
+
+// A new tribe's share of items: its goods (items lying in camp), its spots,
+// and what it needs (foundTribe, with items on).
+export function foundItems(world, tribe) {
+    tribe.goods = [];
+    tribe.want = 0;          // the kind it would make next (0: nothing)...
+    tribe.wanted = 0;        // ...how many of them
+    tribe.needWood = false;  // and whether it lacks the wood or flint for it
+    tribe.needFlint = false;
+    tribe.crafting = 0;      // its people at each task
+    tribe.chopping = 0;
+    tribe.quarrying = 0;
+    findSpots(world, tribe);
+}
+
+// The nearest good spots for wood and flint, by land from the camp (and again
+// when the camp moves).
+export function findSpots(world, tribe) {
+    tribe.woodSpot = spotFor(world, tribe, TASK.WOOD);
+    tribe.flintSpot = spotFor(world, tribe, TASK.FLINT);
+}
+
+// How rich the ground at (x, y) is in a material (TASK.WOOD or TASK.FLINT):
+// 1 where it is plentiful, items.poor where there is a little, 0 where there
+// is none.
+export function richness(world, x, y, mat) {
+    const T = world.terrain;
+    const poor = world.p.items.poor;
+    if (T === null) return poor; // a flat world: a little of each, anywhere
+    if (T.biomeGrid !== null) {
+        const b = T.biomeGrid[world.grass.index(x, y)];
+        return biomeRichness(b, mat, poor);
+    }
+    // Terrain without biomes: no forests; flint up the mountains.
+    if (mat === TASK.WOOD) return T.fertility(x, y) > 0 ? poor : 0;
+    if (T.blocked(x, y)) return 0;
+    const r = T.rockiness(x, y);
+    return r >= 0.6 ? 1 : r >= 0.3 ? poor : 0;
+}
+
+function biomeRichness(b, mat, poor) {
+    if (mat === TASK.WOOD) {
+        if (b === BIOME.FOREST) return 1;
+        return b === BIOME.WETLAND || b === BIOME.MEADOW || b === BIOME.STEPPE || b === BIOME.TUNDRA ? poor : 0;
+    }
+    return b === BIOME.ROCK ? 1 : b === BIOME.TUNDRA ? poor : 0;
+}
+
+// Where a tribe goes for a material: the ground outside camp where a load
+// comes soonest, there and back by land (at a walk) and the gathering
+// (quicker on rich ground); with a way there (its own path field). Null if
+// there is none within items.spotReach. On a flat world: poor ground
+// anywhere, so a spot a little outside camp, on a bearing of the tribe's own.
+function spotFor(world, tribe, mat) {
+    const T = world.terrain;
+    const H = world.p.human;
+    const I = world.p.items;
+    const { camp } = tribe;
+    if (T === null) {
+        const a = tribe.id * GOLDEN + (mat === TASK.FLINT ? Math.PI : 0);
+        const d = H.campRadius * 2.5;
+        return { x: wrapPos(camp.x + Math.cos(a) * d, world.width), y: wrapPos(camp.y + Math.sin(a) * d, world.height), rich: false, paths: null };
+    }
+    const { grass } = world;
+    const field = tribe.paths;
+    const unit = T.wayW / 2; // a path field counts 2 a cell straight on
+    const poor = I.poor;
+    const minD = H.campRadius * 2;
+    const pace = H.speed * H.cruise;
+    const work = I.load / (mat === TASK.WOOD ? I.wood : I.flint); // steps to gather a load on rich ground
+    let best = -1;
+    let bestT = Infinity;
+    let bestYld = 0;
+    for (let r = 0; r < grass.rows; r++) {
+        for (let c = 0; c < grass.cols; c++) {
+            const k = c + r * grass.cols;
+            const x = (c + 0.5) * grass.cellW;
+            const y = (r + 0.5) * grass.cellH;
+            const yld = T.biomeGrid !== null ? biomeRichness(T.biomeGrid[k], mat, poor) : richness(world, x, y, mat);
+            if (yld === 0) continue;
+            const f = field[T.wayIndex(x, y)];
+            if (f >= FAR) continue;
+            const d = f * unit;
+            if (d < minD || d > I.spotReach) continue;
+            const t = (2 * d) / pace + work / yld;
+            if (t < bestT && !T.blocked(x, y)) {
+                bestT = t;
+                best = k;
+                bestYld = yld;
+            }
+        }
+    }
+    if (best < 0) return null;
+    const x = ((best % grass.cols) + 0.5) * grass.cellW;
+    const y = (Math.floor(best / grass.cols) + 0.5) * grass.cellH;
+    return { x, y, rich: bestYld === 1, paths: T.pathField(x, y) };
+}
+
+// A new item of `kind`, made by `maker` (an id, 0: nobody in particular) in
+// `tribe` (its id). Rare items come with a trait already rolled.
+export function newItem(world, kind, rarity, trait, maker, tribe) {
+    const I = world.p.items;
+    const mult = rarity === 0 ? 1 : rarity === 1 ? I.rare : I.legendary;
+    let max = kind === KIND.TORCH ? I.torch : rarity === 1 ? I.rareUses : I.uses;
+    if (trait === 'durability') max *= mult;
+    if (rarity === 2) max = Infinity;
+    const { time } = world;
+    const t = world.tribeById.get(tribe);
+    const item = {
+        id: world.nextItemId++, kind, rarity, trait, mult, wear: max, max, uses: 0, kills: 0,
+        maker, tribe, made: time, bearer: 0, x: 0, y: 0, dropped: time, gens: 0, line: 0, legend: null,
+        camp: 0, last: 0, raiders: 0, expires: kind === KIND.TORCH && rarity < 2 ? time + max : 0, rev: 0,
+        log: [{ time, text: t ? `Made among the ${t.name}` : 'Made', by: maker }],
+    };
+    world.items.set(item.id, item);
+    return item;
+}
+
+// ---- Holding, laying down, losing ------------------------------------------------------
+
+// How much use is left in an item, 0..1 (a legend: 1).
+export function fraction(world, item) {
+    if (item.rarity === 2) return 1;
+    if (item.kind === KIND.TORCH) return item.expires > world.time ? (item.expires - world.time) / item.max : 0;
+    return item.wear / item.max;
+}
+
+// Is `a` better than `b` (null: nothing)? Rarity first, then the use left in
+// it. `npc`: as someone who lets the tribe's needs decide its kind: never a
+// club for a spear or a bow (a club cannot hunt), and another kind only in
+// place of a worn one.
+export function better(world, a, b, npc) {
+    if (!b) return true;
+    if (a.rarity !== b.rarity) return a.rarity > b.rarity;
+    const fa = fraction(world, a);
+    const fb = fraction(world, b);
+    if (npc && a.kind !== b.kind) {
+        if (a.kind === KIND.CLUB) return false;
+        return fb < world.p.items.worn && fa > fb;
+    }
+    return fa > fb + 0.05;
+}
+
+// Person i's held item in the slot `item` would go to (or null).
+export function heldLike(world, i, kind) {
+    const pop = world.humans;
+    const id = isWeapon(kind) ? pop.weapon[i] : pop.tool[i];
+    return id ? world.items.get(id) ?? null : null;
+}
+
+// Put `item` into person i's hand. The hand must be empty (put the old one
+// down first). From the ground, it is taken off the ground. `inherited`: the
+// dying bearer's child takes it (bequeath), carrying its line on.
+export function hold(world, i, item, inherited = false) {
+    const pop = world.humans;
+    if (item.bearer === 0) unlay(world, item);
+    if (isWeapon(item.kind)) {
+        pop.weapon[i] = item.id;
+        pop.gear[i] = item.kind * 8 + (pop.gear[i] & 7);
+    } else {
+        pop.tool[i] = item.id;
+        pop.gear[i] = (pop.gear[i] >> 3) * 8 + item.kind;
+    }
+    bear(world, item, i, inherited);
+}
+
+// Person i is the item's bearer now. Handed down to a child at its parent's
+// death, it carries the line on; anyone else taking it up starts a new one.
+function bear(world, item, i, inherited) {
+    const pop = world.humans;
+    const id = pop.id[i];
+    item.bearer = id;
+    item.camp = 0;
+    if (item.last === id) return;
+    const gens = item.gens;
+    if (inherited && pop.parent[i] === item.last) item.gens++;
+    else {
+        item.gens = 1;
+        item.line = id;
+    }
+    if (item.gens !== gens) item.rev++; // (the page is told: its description says it)
+    item.last = id;
+    note(world, item, item.gens > 1 ? `Handed down to a child, the ${ordinal(item.gens)} of its line to bear it` : 'Taken up', id);
+    if (item.gens >= world.p.items.generations) forge(world, item, 'generations', `Borne by ${item.gens} generations of one line`, id);
+}
+
+// Take `item` out of person i's hand (if it is there).
+export function unhold(world, i, item) {
+    const pop = world.humans;
+    if (pop.weapon[i] === item.id) {
+        pop.weapon[i] = 0;
+        pop.gear[i] = pop.gear[i] & 7;
+    } else if (pop.tool[i] === item.id) {
+        pop.tool[i] = 0;
+        pop.gear[i] = (pop.gear[i] >> 3) * 8;
+    }
+}
+
+// Lay `item` down at (x, y): among `tribe`'s goods (in its camp), or out in
+// the wild (tribe null).
+export function lay(world, item, x, y, tribe) {
+    item.bearer = 0;
+    item.x = wrapPos(x, world.width);
+    item.y = wrapPos(y, world.height);
+    item.dropped = world.time;
+    if (tribe) {
+        item.camp = tribe.id;
+        tribe.goods.push(item.id);
+    } else toWild(world, item);
+    world.events.push({ type: 'dropped', item: item.id, x: item.x, y: item.y, time: world.time });
+}
+
+// Into the wild: its id and where it lies (world.wildX, wildY, kept beside
+// world.wild, so a look around needs no lookups).
+function toWild(world, item) {
+    item.camp = 0;
+    world.wild.push(item.id);
+    world.wildX.push(item.x);
+    world.wildY.push(item.y);
+}
+
+// Off the ground: out of the camp's goods or the wild.
+function unlay(world, item) {
+    if (item.camp !== 0) {
+        const goods = world.tribeById.get(item.camp)?.goods;
+        const k = goods ? goods.indexOf(item.id) : -1;
+        if (k >= 0) goods.splice(k, 1);
+        return;
+    }
+    const k = world.wild.indexOf(item.id);
+    if (k < 0) return;
+    world.wild.splice(k, 1);
+    world.wildX.splice(k, 1);
+    world.wildY.splice(k, 1);
+}
+
+// Where in a camp its goods lie: around the centre, each on a bearing of its own.
+function campSpot(tribe, item) {
+    const a = item.id * GOLDEN;
+    const r = 5 + (item.id % 5);
+    return { x: tribe.camp.x + Math.cos(a) * r, y: tribe.camp.y + Math.sin(a) * r };
+}
+
+// Is (x, y) inside the tribe's camp?
+function inCamp(world, tribe, x, y) {
+    const dx = wrapDelta(tribe.camp.x - x, world.width);
+    const dy = wrapDelta(tribe.camp.y - y, world.height);
+    const R = world.p.human.campRadius;
+    return dx * dx + dy * dy < R * R;
+}
+
+// Person i puts `item` (held, or the player's spare) down where it stands:
+// in its camp, among the goods; elsewhere, in the wild.
+export function putDown(world, i, item) {
+    const pop = world.humans;
+    unhold(world, i, item);
+    const tribe = world.tribeById.get(pop.tribe[i]);
+    const home = tribe && inCamp(world, tribe, pop.x[i], pop.y[i]);
+    lay(world, item, pop.x[i], pop.y[i], home ? tribe : null);
+}
+
+// Gone for good: off the ground and out of the world.
+function removeItem(world, item) {
+    if (item.bearer === 0) unlay(world, item);
+    world.items.delete(item.id);
+}
+
+// An item worn out (or burnt down): it breaks in its bearer's hand. `i`:
+// the bearer's index if known.
+export function breakItem(world, item, i = -1) {
+    const pop = world.humans;
+    if (item.bearer !== 0) {
+        if (i < 0 || pop.id[i] !== item.bearer) i = indexOf(pop, item.bearer);
+        const inHand = i >= 0 && (pop.weapon[i] === item.id || pop.tool[i] === item.id);
+        if (inHand) unhold(world, i, item);
+        const pl = world.player;
+        if (pl !== null && pl.id === item.bearer) unkit(pl, item.id);
+        world.events.push({
+            type: 'broke', item: item.id, kind: item.kind, bearer: item.bearer,
+            x: i >= 0 ? pop.x[i] : item.x, y: i >= 0 ? pop.y[i] : item.y, time: world.time,
+        });
+        // The player takes up a spare at once (if it broke in hand).
+        if (pl !== null && pl.id === item.bearer && inHand && pl.kit) {
+            const spares = isWeapon(item.kind) ? pl.kit.weapons : pl.kit.tools;
+            if (spares.length) hold(world, i, world.items.get(spares.shift()));
+        }
+    } else {
+        world.events.push({ type: 'broke', item: item.id, kind: item.kind, bearer: 0, x: item.x, y: item.y, time: world.time });
+    }
+    world.itemStats.broke[item.kind]++;
+    removeItem(world, item);
+}
+
+// A spare out of the player's kit.
+function unkit(pl, id) {
+    if (!pl.kit) return;
+    for (const list of [pl.kit.weapons, pl.kit.tools]) {
+        const k = list.indexOf(id);
+        if (k >= 0) list.splice(k, 1);
+    }
+}
+
+function indexOf(pop, id) {
+    const ids = pop.id;
+    for (let i = 0; i < pop.n; i++) if (ids[i] === id) return i;
+    return -1;
+}
+
+// One use of person i's `item` (a throw, a swing, a fight, a kill cut up, a
+// load home): it wears, and may break. Legends never wear; torches burn
+// with time instead.
+export function wearItem(world, i, item) {
+    if (!item) return;
+    item.uses++;
+    if (item.rarity === 2 || item.kind === KIND.TORCH) return;
+    item.wear--;
+    if (item.wear <= 0) breakItem(world, item, i);
+}
+
+// ---- What an item does ----------------------------------------------------------------
+
+// The weapon in person i's hand, as the AI uses it: its item, kind, reach
+// (and its square), chance (× the spear's) and reload. armOf fills it and
+// returns the kind (0: unarmed).
+export const arm = { item: null, kind: 0, range: 0, range2: 0, hit: 1, reload: 0 };
+export function armOf(world, i) {
+    const id = world.humans.weapon[i];
+    const item = id ? world.items.get(id) : undefined;
+    if (item === undefined) {
+        arm.item = null;
+        arm.kind = 0;
+        arm.range = 0;
+        arm.range2 = 0;
+        return 0;
+    }
+    weaponStats(world, item, arm);
+    return item.kind;
+}
+
+// What a weapon does, into `out` (as `arm`).
+export function weaponStats(world, item, out) {
+    const P = world.p.human;
+    const I = world.p.items;
+    const k = item.kind;
+    let range = k === KIND.CLUB ? I.clubReach : k === KIND.BOW ? P.throwRange * I.arrowRange : P.throwRange;
+    let hit = k === KIND.BOW ? I.bowHit : 1;
+    let reload = k === KIND.BOW ? P.reload * I.bowReload : P.reload;
+    if (item.trait === 'range') range *= item.mult;
+    else if (item.trait === 'accuracy') hit *= item.mult;
+    else if (item.trait === 'reload') reload /= item.mult;
+    out.item = item;
+    out.kind = k;
+    out.range = range;
+    out.range2 = range * range;
+    out.hit = hit;
+    out.reload = Math.max(1, Math.round(reload));
+    return out;
+}
+
+// The chance a throw kills (humans.js hitChance), × the weapon's.
+export const hitWith = (P, tribe, mates, mult) => Math.min(0.95, P.hit * mult * (1 + P.teamwork * mates * tribe.sociality));
+
+// A tool's effect × its trait.
+const effect = (item) => (item && item.trait === 'effect' ? item.mult : 1);
+
+// Food a kill gives person i of pop: human.efficiency, more with a knife.
+export function efficiencyOf(world, pop, i) {
+    const P = world.p.human;
+    if ((pop.gear[i] & 7) !== KIND.KNIFE) return P.efficiency;
+    return P.efficiency + (world.p.items.knife - P.efficiency) * effect(world.items.get(pop.tool[i]));
+}
+
+// × what person i can carry: more with a basket.
+export function carryOf(world, pop, i) {
+    if ((pop.gear[i] & 7) !== KIND.BASKET) return 1;
+    return 1 + (world.p.items.basket - 1) * effect(world.items.get(pop.tool[i]));
+}
+
+// The damage person i does to a stranger, × the fight's usual: more with a club.
+export function blowOf(world, pop, i) {
+    return (pop.gear[i] >> 3) === KIND.CLUB ? world.p.items.clubDamage : 1;
+}
+
+// Does person j bear a burning torch? A predator will not take it.
+export function shielded(world, j) {
+    const pop = world.humans;
+    if ((pop.gear[j] & 7) !== KIND.TORCH) return false;
+    const item = world.items.get(pop.tool[j]);
+    return item !== undefined && (item.rarity === 2 || item.expires > world.time);
+}
+
+// How many defenders stand by person j against a predator (humans.js
+// driveOff): tribe-mates within defendRadius, a club counting double and a
+// bow not at all.
+export function guards(world, j) {
+    const P = world.p.human;
+    const I = world.p.items;
+    const pop = world.humans;
+    const { x, y, energy, gear } = pop;
+    const tribe = pop.tribe[j];
+    const r2 = P.defendRadius * P.defendRadius;
+    let w = 0;
+    for (let k = 0; k < pop.n; k++) {
+        if (k === j || energy[k] <= 0 || pop.tribe[k] !== tribe) continue;
+        const dx = wrapDelta(x[k] - x[j], world.width);
+        const dy = wrapDelta(y[k] - y[j], world.height);
+        if (dx * dx + dy * dy >= r2) continue;
+        const kind = gear[k] >> 3;
+        w += kind === KIND.BOW ? 0 : kind === KIND.CLUB ? I.clubGuard : 1;
+    }
+    return w;
+}
+
+// ---- Kills, butchering ------------------------------------------------------------------
+
+// Person i has killed individual j of `prey` (before world.die): its meat
+// (`eff` of its energy) and hide wait in a carcass, which i will butcher if
+// it has nothing else to do.
+export function killed(world, i, prey, j, eff) {
+    const pop = world.humans;
+    const meat = prey.energy[j] * eff;
+    const id = prey.id[j];
+    world.carcasses.set(id, {
+        id, kind: world.kindOf(prey), x: prey.x[j], y: prey.y[j], meat, total: meat, done: 0, cut: 0,
+        by: pop.id[i], born: world.time, hide: prey === world.carnivores ? 2 : 1, steps: world.p.items.butcher,
+    });
+    if (pop.task[i] === TASK.NONE) {
+        pop.task[i] = TASK.BUTCHER;
+        pop.work[i] = id;
+    }
+}
+
+// A kill made with `item`: it counts, and a famous predator's (items.famous
+// kills), or its items.kills-th, makes a legend.
+export function credit(world, item, prey, j) {
+    if (!item) return;
+    const I = world.p.items;
+    item.kills++;
+    if (prey === world.carnivores && prey.kills[j] >= I.famous) {
+        const text = `Killed a famous predator, with ${prey.kills[j]} kills to its name`;
+        if (item.rarity === 2) note(world, item, text, item.bearer);
+        else forge(world, item, 'famous', text, item.bearer);
+    }
+    if (item.rarity < 2 && item.kills >= I.kills) forge(world, item, 'kills', `Its ${ordinal(item.kills)} kill`, item.bearer);
+    else if (item.rarity === 2 && item.kills % 25 === 0) note(world, item, `Its ${ordinal(item.kills)} kill`, item.bearer);
+}
+
+// The weapon in person j's hand made a kill (as defenders drive a predator
+// off and kill it: the one it went for gets the kill).
+export function creditHolder(world, j, prey, k) {
+    const id = world.humans.weapon[j];
+    if (id) credit(world, world.items.get(id), prey, k);
+}
+
+// A raider (person i) dies at `target`'s camp: the nearest armed defender's
+// weapon struck it down. At its own camp (made by that tribe), that is a deed.
+export function raiderKilled(world, i, target) {
+    const P = world.p.human;
+    const I = world.p.items;
+    const pop = world.humans;
+    let best = -1;
+    let bestD2 = P.defendRadius * P.defendRadius;
+    for (let k = 0; k < pop.n; k++) {
+        if (pop.tribe[k] !== target.id || pop.energy[k] <= 0 || !pop.weapon[k]) continue;
+        const dx = wrapDelta(pop.x[k] - pop.x[i], world.width);
+        const dy = wrapDelta(pop.y[k] - pop.y[i], world.height);
+        const d2 = dx * dx + dy * dy;
+        if (d2 < bestD2) {
+            bestD2 = d2;
+            best = k;
+        }
+    }
+    if (best < 0) return;
+    const item = world.items.get(pop.weapon[best]);
+    if (!item) return;
+    item.kills++;
+    if (item.tribe !== target.id) return;
+    item.raiders++;
+    const text = `Struck down a raider in the camp of the ${target.name}`;
+    if (item.rarity === 2) note(world, item, text, pop.id[best]);
+    else if (item.raiders >= I.defender) forge(world, item, 'defender', text, pop.id[best]);
+}
+
+// Can person i still butcher the carcass it is at (it lasts, and it is not
+// far off)?
+export function butcherable(world, i) {
+    const pop = world.humans;
+    const c = world.carcasses.get(pop.work[i]);
+    if (!c) return false;
+    const dx = wrapDelta(c.x - pop.x[i], world.width);
+    const dy = wrapDelta(c.y - pop.y[i], world.height);
+    return dx * dx + dy * dy < 60 * 60;
+}
+
+// ---- Tasks -------------------------------------------------------------------------------
+
+// What a task step comes to (stepTask): the state, the way (dx, dy) and pace
+// (v), and the energy and food in hand after it.
+export const job = { s: 0, dx: 0, dy: 0, v: 0, e: 0, c: 0 };
+
+// One step of person i's task (pop.task[i], not NONE), for `tribe`; e and c
+// its energy and food in hand; (campDx, campDy) the way home, campD long.
+export function stepTask(world, i, tribe, e, c, campDx, campDy, campD) {
+    const pop = world.humans;
+    job.s = STATE.AT_CAMP;
+    job.dx = 0;
+    job.dy = 0;
+    job.v = 0;
+    job.e = e;
+    job.c = c;
+    const task = pop.task[i];
+    if (task === TASK.BUTCHER) butcherStep(world, i, tribe, e, c);
+    else if (task === TASK.CRAFT) craftStep(world, i, tribe, campDx, campDy, campD);
+    else errandStep(world, i, tribe, task, campDx, campDy, campD);
+}
+
+// Walk the way to `place` (a camp or a spot: {x, y, paths}), (ddx, ddy) away
+// at distance d: by land with terrain, straight on a flat world. Into job.dx, dy.
+function wayTo(world, place, x, y, ddx, ddy, d) {
+    if (world.terrain === null || !place.paths) {
+        job.dx = ddx / d;
+        job.dy = ddy / d;
+        return;
+    }
+    world.terrain.way(place.paths, x, y, ddx, ddy, d);
+    job.dx = world.terrain.ux;
+    job.dy = world.terrain.uy;
+}
+
+// Cutting up a kill: to it, then items.butcher steps of cutting (twice as fast
+// with a knife), eating a share as it goes (1 − sociality, as a hunter always
+// has) and carrying the rest; a stroke for the page every play.butcherEvery;
+// the hides to carry home at the end.
+function butcherStep(world, i, tribe, e, c) {
+    const P = world.p.human;
+    const Q = world.p.play;
+    const pop = world.humans;
+    const cc = world.carcasses.get(pop.work[i]);
+    const dx = wrapDelta(cc.x - pop.x[i], world.width);
+    const dy = wrapDelta(cc.y - pop.y[i], world.height);
+    const d2 = dx * dx + dy * dy;
+    pop.focus[i] = cc.id;
+    if (d2 > Q.butcherReach * Q.butcherReach) {
+        const d = Math.sqrt(d2);
+        job.s = STATE.HUNTING;
+        job.dx = dx / d;
+        job.dy = dy / d;
+        job.v = Math.min(P.speed * pop.speedGene[i] * P.cruise, d - 1);
+        return;
+    }
+    job.s = STATE.BUTCHERING;
+    const fast = (pop.gear[i] & 7) === KIND.KNIFE;
+    const before = cc.done;
+    cc.done += fast ? 2 : 1;
+    const last = cc.done >= cc.steps;
+    const share = ((fast ? 2 : 1) * cc.total) / cc.steps;
+    const meat = last || share > cc.meat ? cc.meat : share;
+    cc.meat -= meat;
+    cc.cut = last ? 1 : cc.done / cc.steps;
+    let eat = meat * (1 - tribe.sociality);
+    if (eat > P.maxEnergy - e) eat = P.maxEnergy - e;
+    if (eat < 0) eat = 0;
+    job.e = e + eat;
+    job.c = c + meat - eat;
+    const { time } = world;
+    if (before % Q.butcherEvery === 0) world.events.push({ type: 'butcher', id: pop.id[i], carcass: cc.id, x: cc.x, y: cc.y, time });
+    if (!last) return;
+    world.carcasses.delete(cc.id);
+    world.events.push({ type: 'butchered', id: pop.id[i], carcass: cc.id, time });
+    pop.hides[i] += cc.hide;
+    pop.task[i] = TASK.NONE;
+    pop.work[i] = 0;
+    world.itemStats.butchered++;
+    if (fast) wearItem(world, i, world.items.get(pop.tool[i]));
+}
+
+// An errand for wood or flint: to the tribe's spot, gather there until the
+// load is full (or the errand has lasted long enough), and home with it. The
+// camp takes it in (campItems).
+function errandStep(world, i, tribe, task, campDx, campDy, campD) {
+    const P = world.p.human;
+    const I = world.p.items;
+    const pop = world.humans;
+    const x = pop.x[i];
+    const y = pop.y[i];
+    const pace = P.speed * pop.speedGene[i] * P.cruise;
+    const wood = task === TASK.WOOD;
+    const spot = wood ? tribe.woodSpot : tribe.flintSpot;
+    if (spot === null || pop.load[i] >= I.load || pop.work[i] >= I.errand) {
+        if (spot === null) pop.work[i] = I.errand;
+        job.s = STATE.HOMEWARD;
+        wayTo(world, tribe, x, y, campDx, campDy, campD);
+        job.v = pace;
+        return;
+    }
+    job.s = wood ? STATE.CHOPPING : STATE.QUARRYING;
+    const dx = wrapDelta(spot.x - x, world.width);
+    const dy = wrapDelta(spot.y - y, world.height);
+    const d = Math.hypot(dx, dy);
+    if (d > 4) {
+        wayTo(world, spot, x, y, dx, dy, d);
+        job.v = pace < d ? pace : d;
+        return;
+    }
+    pop.work[i]++;
+    const load = pop.load[i] + (wood ? I.wood : I.flint) * richness(world, x, y, task);
+    pop.load[i] = load > I.load ? I.load : load;
+    if (pop.work[i] % STROKE === 1) world.events.push({ type: wood ? 'chop' : 'knap', id: pop.id[i], x, y, time: world.time });
+}
+
+// Making an item at camp: into the camp, then items.craftSteps of work.
+function craftStep(world, i, tribe, campDx, campDy, campD) {
+    const P = world.p.human;
+    const pop = world.humans;
+    job.s = STATE.CRAFTING;
+    if (campD > P.campRadius * 0.6) {
+        wayTo(world, tribe, pop.x[i], pop.y[i], campDx, campDy, campD);
+        job.v = P.speed * pop.speedGene[i] * P.cruise;
+        return;
+    }
+    if (--pop.work[i] <= 0) finishCraft(world, i, tribe);
+}
+
+// The chance a crafter who has made `made` items makes a rare one, with a
+// flint more.
+export const rareChance = (I, made) => Math.min(I.rareMax, I.rareChance + I.rareGain * made);
+
+// Done: the item, rare by chance if a flint more went in. It goes to the
+// crafter's hand if that is empty (or holds worse), else among the camp's goods.
+function finishCraft(world, i, tribe) {
+    const pop = world.humans;
+    const make = pop.make[i];
+    const item = craft(world, i, make % 8, make >= 8, tribe);
+    pop.task[i] = TASK.NONE;
+    pop.work[i] = 0;
+    pop.make[i] = 0;
+    const held = heldLike(world, i, item.kind);
+    if (better(world, item, held, true)) {
+        if (held) {
+            unhold(world, i, held);
+            const at = campSpot(tribe, held);
+            lay(world, held, at.x, at.y, tribe);
+        }
+        hold(world, i, item);
+    } else {
+        const at = campSpot(tribe, item);
+        lay(world, item, at.x, at.y, tribe);
+    }
+}
+
+// Person i of `tribe` makes an item of `kind` (the materials are already
+// spent): rare by chance with a flint more (`flint`). Not yet anywhere.
+export function craft(world, i, kind, flint, tribe) {
+    const I = world.p.items;
+    const pop = world.humans;
+    let rarity = 0;
+    let trait = '';
+    if (flint && world.rng.next() < rareChance(I, pop.crafted[i])) {
+        const traits = traitsOf(kind);
+        rarity = 1;
+        trait = traits[Math.floor(world.rng.next() * traits.length)];
+    }
+    const item = newItem(world, kind, rarity, trait, pop.id[i], tribe.id);
+    pop.crafted[i]++;
+    const stats = world.itemStats;
+    stats.crafted[kind]++;
+    if (rarity === 1) stats.rare++;
+    world.events.push({ type: 'crafted', id: pop.id[i], item: item.id, kind, rarity, tribe: tribe.id, by: pop.id[i], time: world.time });
+    return item;
+}
+
+// Has the tribe the materials for `kind`? (`p`: the parameters.)
+export const affords = (p, tribe, kind) => {
+    const c = costOf(p, kind);
+    return tribe.wood >= c.wood && tribe.flint >= c.flint && tribe.hide >= c.hide;
+};
+
+// Spend them (sign −1: give them back).
+export function spend(p, tribe, kind, sign = 1) {
+    const c = costOf(p, kind);
+    tribe.wood -= sign * c.wood;
+    tribe.flint -= sign * c.flint;
+    tribe.hide -= sign * c.hide;
+}
+
+// ---- At camp, and out in the wild ------------------------------------------------------
+
+// Person i is at its tribe's camp (humans.js, after the food is in): hides
+// and a finished errand's load go into the store; an adult takes up
+// something better from the camp's goods, and a task if the tribe needs one.
+export function campItems(world, i, tribe) {
+    const I = world.p.items;
+    const pop = world.humans;
+    if (pop.hides[i] > 0) {
+        tribe.hide += pop.hides[i];
+        pop.hides[i] = 0;
+    }
+    const task = pop.task[i];
+    if ((task === TASK.WOOD || task === TASK.FLINT) && (pop.load[i] >= I.load || pop.work[i] >= I.errand)) {
+        if (task === TASK.WOOD) tribe.wood += pop.load[i];
+        else tribe.flint += pop.load[i];
+        pop.load[i] = 0;
+        pop.task[i] = TASK.NONE;
+        pop.work[i] = 0;
+    }
+    if (pop.age[i] < world.p.human.maturity) return;
+    if (tribe.goods.length) campPickup(world, i, tribe);
+    if (pop.task[i] === TASK.NONE && pop.goal[i] === 0 && tribe.want !== 0) assign(world, i, tribe);
+}
+
+// From the camp's goods, the first thing better than what person i holds.
+function campPickup(world, i, tribe) {
+    const goods = tribe.goods;
+    for (let k = 0; k < goods.length; k++) {
+        const item = world.items.get(goods[k]);
+        const held = heldLike(world, i, item.kind);
+        if (!better(world, item, held, true)) continue;
+        if (held) {
+            unhold(world, i, held);
+            lay(world, held, item.x, item.y, tribe);
+        }
+        hold(world, i, item);
+        world.events.push({ type: 'picked', item: item.id, by: world.humans.id[i], time: world.time });
+        world.itemStats.picked++;
+        return;
+    }
+}
+
+// Out in the wild (every few steps): an item lying within items.pickReach that
+// is better than what person i holds, taken up; its own left in its place.
+export function wildPickup(world, i) {
+    const pop = world.humans;
+    const R = world.p.items.pickReach;
+    const { wild, wildX, wildY, width: W, height: H } = world;
+    const px = pop.x[i];
+    const py = pop.y[i];
+    for (let k = 0; k < wild.length; k++) {
+        const dx = wrapDelta(wildX[k] - px, W);
+        if (dx > R || dx < -R) continue;
+        const dy = wrapDelta(wildY[k] - py, H);
+        if (dx * dx + dy * dy > R * R) continue;
+        const item = world.items.get(wild[k]);
+        const held = heldLike(world, i, item.kind);
+        if (!better(world, item, held, true)) continue;
+        if (held) {
+            unhold(world, i, held);
+            lay(world, held, pop.x[i], pop.y[i], null);
+        }
+        hold(world, i, item);
+        world.events.push({ type: 'picked', item: item.id, by: pop.id[i], time: world.time });
+        world.itemStats.picked++;
+        return;
+    }
+}
+
+// A task for person i, an adult at camp with none, if its tribe needs one:
+// make what it wants if the store has the materials (taken now, a flint more
+// for a chance of rare while items.spare are kept back); otherwise go for the wood
+// or flint it lacks. A few at a time.
+function assign(world, i, tribe) {
+    const I = world.p.items;
+    const pop = world.humans;
+    const kind = tribe.want;
+    const adults = tribe.adults;
+    if (affords(world.p, tribe, kind) && tribe.crafting < 1 + Math.floor(adults / 12)) {
+        spend(world.p, tribe, kind);
+        let make = kind;
+        if (tribe.flint >= 1 + I.spare) {
+            tribe.flint -= 1;
+            make += 8;
+        }
+        pop.task[i] = TASK.CRAFT;
+        pop.work[i] = I.craftSteps;
+        pop.make[i] = make;
+        tribe.crafting++;
+        if (--tribe.wanted <= 0) tribe.want = 0;
+    } else if (tribe.needWood && tribe.woodSpot !== null && tribe.chopping < 1 + Math.floor(adults / 8)) {
+        pop.task[i] = TASK.WOOD;
+        pop.work[i] = 0;
+        pop.load[i] = 0;
+        tribe.chopping++;
+        world.itemStats.errands.wood++;
+    } else if (tribe.needFlint && tribe.flintSpot !== null && tribe.quarrying < 1) {
+        pop.task[i] = TASK.FLINT;
+        pop.work[i] = 0;
+        pop.load[i] = 0;
+        tribe.quarrying++;
+        world.itemStats.errands.flint++;
+    }
+}
+
+// ---- Every few steps -------------------------------------------------------------------
+
+// Once a step, after the tribes' bookkeeping (World.step): every SWEEP steps,
+// burnt-out torches go out and items left lying too long are gone; every
+// TALLY, each tribe reckons what it needs.
+export function stepItems(world) {
+    if (world.time % SWEEP === 0) sweep(world);
+    if (world.time % TALLY === 0) tallyTribes(world);
+}
+
+function sweep(world) {
+    const I = world.p.items;
+    const { time } = world;
+    for (const item of world.items.values()) {
+        if (item.rarity === 2) continue;
+        if (item.kind === KIND.TORCH) {
+            item.wear = item.expires > time ? item.expires - time : 0;
+            if (item.wear <= 0) {
+                breakItem(world, item);
+                continue;
+            }
+        }
+        if (item.bearer === 0 && time - item.dropped >= I.vanish) {
+            world.events.push({ type: 'vanished', item: item.id, time });
+            world.itemStats.vanished++;
+            removeItem(world, item);
+        }
+    }
+}
+
+// What each tribe needs: its adults without a weapon fit to use (none, or
+// worn below items.worn), less the fit ones lying in its camp; the same for
+// tools. It wants a weapon first (its culture choosing the kind), else a tool;
+// and the wood or flint that takes, if it lacks them. A hungry camp wants
+// only weapons for the empty-handed (they cannot hunt), then knives (more
+// from each kill, cut up sooner). Its people at each task are counted again
+// too.
+export function tallyTribes(world) {
+    const P = world.p.human;
+    const I = world.p.items;
+    const pop = world.humans;
+    const { items } = world;
+    for (const t of world.tribes) {
+        if (!t.kinds) t.kinds = new Int32Array(ITEM_KINDS.length);
+        t.kinds.fill(0);
+        t.armed = 0;
+        t.unarmed = 0;
+        t.tooled = 0;
+        t.crafting = 0;
+        t.chopping = 0;
+        t.quarrying = 0;
+    }
+    const pl = world.player;
+    for (let i = 0; i < pop.n; i++) {
+        if (pop.energy[i] <= 0) continue;
+        const t = world.tribeById.get(pop.tribe[i]);
+        const task = pop.task[i];
+        if (task === TASK.CRAFT) t.crafting++;
+        else if (task === TASK.WOOD) t.chopping++;
+        else if (task === TASK.FLINT) t.quarrying++;
+        if (pop.age[i] < P.maturity) continue;
+        if (pl !== null && pl.crafting && pl.id === pop.id[i]) t.kinds[pl.crafting.kind]++; // (what the player is making)
+        const w = pop.weapon[i] ? items.get(pop.weapon[i]) : undefined;
+        if (w === undefined) t.unarmed++;
+        else if (fraction(world, w) >= I.worn) {
+            t.kinds[w.kind]++;
+            t.armed++;
+        }
+        const u = pop.tool[i] ? items.get(pop.tool[i]) : undefined;
+        if (u !== undefined && fraction(world, u) >= I.worn) {
+            t.kinds[u.kind]++;
+            t.tooled++;
+        }
+    }
+    for (const t of world.tribes) {
+        let weapons = 0;
+        let tools = 0;
+        for (const id of t.goods) {
+            const item = items.get(id);
+            if (fraction(world, item) < I.worn) continue;
+            t.kinds[item.kind]++;
+            if (isWeapon(item.kind)) weapons++;
+            else tools++;
+        }
+        // (A hungry camp, one whose store could not pay for a birth, makes
+        // only weapons for those with none, and knives: food comes first.)
+        const A = t.adults;
+        const fed = t.store >= P.birthCost + P.reserve * t.members;
+        const needW = (fed ? A - t.armed : t.unarmed) - weapons;
+        const needT = A - t.tooled - tools;
+        let want = 0;
+        let wanted = 0;
+        if (needW > 0) {
+            want = weaponFor(world.p, t, A);
+            wanted = needW;
+        } else if (needT > 0 && t.store >= I.tools * (P.birthCost + P.reserve * t.members)) {
+            want = toolFor(t, A);
+            wanted = needT;
+        } else if (needT > 0 && (t.flintSpot !== null || t.flint >= 1)) {
+            want = KIND.KNIFE;
+            wanted = needT;
+        }
+        t.want = want;
+        t.wanted = wanted;
+        const cost = want ? costOf(world.p, want) : null;
+        t.needWood = cost !== null && t.wood < cost.wood;
+        t.needFlint = cost !== null && t.flint < cost.flint;
+    }
+}
+
+// The weapon a tribe makes next: clubs up to a share of its adults that
+// grows with its aggression, bows up to one that grows with its sociality
+// (the more, the less aggressive it is; and if it has a hide for one), else
+// spears.
+function weaponFor(p, t, A) {
+    if (t.kinds[KIND.CLUB] < Math.round(0.15 * t.aggression * A)) return KIND.CLUB;
+    if (t.kinds[KIND.BOW] < Math.round(0.6 * t.sociality * (1 - 0.5 * t.aggression) * A) && t.hide >= p.items.costs.bow.hide) return KIND.BOW;
+    return KIND.SPEAR;
+}
+
+// The tool a tribe makes next: the kind furthest below its share of the
+// adults (knives grow with aggression, baskets with sociality; torches a
+// small, steady share); knives only where it can find flint.
+function toolFor(t, A) {
+    const shares = [0, 0, 0, 0, 0.3 + 0.5 * t.aggression, 0.2 + 0.6 * t.sociality, 0.1];
+    let best = 0;
+    let most = -Infinity;
+    for (const k of TOOLS) {
+        if (k === KIND.KNIFE && t.flintSpot === null && t.flint < 1) continue;
+        const gap = shares[k] * A - t.kinds[k];
+        if (gap > most) {
+            most = gap;
+            best = k;
+        }
+    }
+    return best;
+}
+
+// ---- Tribes coming and going -------------------------------------------------------------
+
+// A daughter tribe takes half the materials and every other item lying in
+// the camp (people keep what they hold).
+export function splitItems(world, t, daughter) {
+    for (const m of ['wood', 'flint', 'hide']) {
+        daughter[m] = t[m] / 2;
+        t[m] -= daughter[m];
+    }
+    const keep = [];
+    for (let k = 0; k < t.goods.length; k++) {
+        const item = world.items.get(t.goods[k]);
+        if (k % 2 === 0) {
+            keep.push(item.id);
+            continue;
+        }
+        const at = campSpot(daughter, item);
+        item.camp = daughter.id;
+        item.x = wrapPos(at.x, world.width);
+        item.y = wrapPos(at.y, world.height);
+        daughter.goods.push(item.id);
+    }
+    t.goods = keep;
+}
+
+// A camp has moved (orders.js): its goods go with it, and it finds new spots.
+export function campMoved(world, tribe) {
+    for (const id of tribe.goods) {
+        const item = world.items.get(id);
+        const at = campSpot(tribe, item);
+        item.x = wrapPos(at.x, world.width);
+        item.y = wrapPos(at.y, world.height);
+    }
+    findSpots(world, tribe);
+}
+
+// A tribe has died out: what lay in its camp lies on, in the wild; and its
+// most storied item still in someone's hands (most kills, at least
+// items.outlived; then the oldest) has outlived it, a legend.
+export function tribeEnded(world, t) {
+    for (const id of t.goods) toWild(world, world.items.get(id));
+    t.goods.length = 0;
+    let best = null;
+    for (const item of world.items.values()) {
+        if (item.tribe !== t.id || item.bearer === 0 || item.rarity === 2 || item.kills < world.p.items.outlived) continue;
+        if (best === null || item.kills > best.kills || (item.kills === best.kills && item.made < best.made)) best = item;
+    }
+    if (best !== null) forge(world, best, 'outlived', `Outlived the ${t.name}, who made it`, best.bearer);
+}
+
+// A raider (person i) has robbed `target`'s camp: it takes what lies there,
+// whatever is better than its own into its hands, the rest home to its own
+// camp's goods.
+export function raided(world, i, target) {
+    if (!target.goods.length) return;
+    const pop = world.humans;
+    const own = world.tribeById.get(pop.tribe[i]);
+    const haul = [];
+    for (const id of target.goods.slice()) {
+        const item = world.items.get(id);
+        unlay(world, item);
+        const held = heldLike(world, i, item.kind);
+        if (pop.age[i] >= world.p.human.maturity && better(world, item, held, true)) {
+            if (held) {
+                unhold(world, i, held);
+                haul.push(held);
+            }
+            hold(world, i, item);
+            world.events.push({ type: 'picked', item: item.id, by: pop.id[i], time: world.time });
+        } else haul.push(item);
+        world.itemStats.raided++;
+    }
+    for (const item of haul) {
+        item.bearer = 0;
+        const at = campSpot(own, item);
+        lay(world, item, at.x, at.y, own);
+    }
+}
+
+// Person i is dying (World.die): what it holds (and the player's spares) goes
+// to its eldest living child in the tribe if it dies at camp and the child
+// holds nothing better; otherwise it lies in camp, or where it fell.
+export function bequeath(world, i) {
+    const pop = world.humans;
+    const pl = world.player;
+    const id = pop.id[i];
+    const list = [];
+    if (pop.weapon[i]) list.push(world.items.get(pop.weapon[i]));
+    if (pop.tool[i]) list.push(world.items.get(pop.tool[i]));
+    if (pl !== null && pl.id === id && pl.kit) {
+        for (const k of [...pl.kit.weapons, ...pl.kit.tools]) list.push(world.items.get(k));
+        pl.kit.weapons.length = 0;
+        pl.kit.tools.length = 0;
+    }
+    pop.weapon[i] = 0;
+    pop.tool[i] = 0;
+    pop.gear[i] = 0;
+    if (list.length === 0) return;
+    const tribe = world.tribeById.get(pop.tribe[i]);
+    const x = pop.x[i];
+    const y = pop.y[i];
+    const home = tribe !== undefined && inCamp(world, tribe, x, y);
+    let heir = -1;
+    if (home) {
+        for (let k = 0; k < pop.n; k++) {
+            if (k === i || pop.parent[k] !== id || pop.energy[k] <= 0 || pop.tribe[k] !== pop.tribe[i]) continue;
+            if (heir < 0 || pop.age[k] > pop.age[heir]) heir = k;
+        }
+    }
+    for (const item of list) {
+        if (!item) continue;
+        if (heir >= 0) {
+            const held = heldLike(world, heir, item.kind);
+            if (better(world, item, held, false)) {
+                if (held) {
+                    unhold(world, heir, held);
+                    const at = campSpot(tribe, held);
+                    lay(world, held, at.x, at.y, tribe);
+                }
+                hold(world, heir, item, true);
+                world.events.push({ type: 'picked', item: item.id, by: pop.id[heir], from: id, time: world.time });
+                world.itemStats.inherited++;
+                continue;
+            }
+        }
+        lay(world, item, x, y, home ? tribe : null);
+    }
+}
+
+// ---- Legends -----------------------------------------------------------------------------
+
+const ADJECTIVES = [
+    'Grey', 'Red', 'Black', 'White', 'Old', 'Swift', 'Silent', 'Bright', 'Bitter', 'Pale', 'Wild', 'Hollow',
+    'Long', 'Dusk', 'Ash', 'Storm', 'Frost', 'Stone', 'Bone', 'Thorn', 'Night', 'Morning', 'Rain', 'River',
+];
+const BEASTS = [
+    'Heron', 'Wolf', 'Bear', 'Elk', 'Hawk', 'Owl', 'Raven', 'Lynx', 'Boar', 'Crane', 'Fox', 'Stag', 'Otter',
+    'Badger', 'Eagle', 'Viper', 'Bison', 'Moth',
+];
+const NOUNS = [
+    [],
+    ['Fang', 'Reach', 'Thorn', 'Sting', 'Tooth', 'Talon', 'Point'],
+    ['Reach', 'Song', 'Wing', 'Whisper', 'Sight', 'Gaze', 'Call'],
+    ['Maul', 'Fist', 'Thunder', 'Root', 'Knot', 'Stone', 'Hoof'],
+    ['Tooth', 'Edge', 'Claw', 'Fang', 'Shard', 'Sliver'],
+    ['Bounty', 'Nest', 'Cradle', 'Plenty', 'Hoard', 'Harvest'],
+    ['Ember', 'Flame', 'Dawn', 'Glow', 'Spark', 'Blaze', 'Eye'],
+];
+const pick = (rng, list) => list[Math.floor(rng.next() * list.length)];
+const ORDINALS = ['zeroth', 'first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth'];
+const ordinal = (n) => (n < ORDINALS.length ? ORDINALS[n] : `${n}${n % 10 === 1 && n % 100 !== 11 ? 'st' : n % 10 === 2 && n % 100 !== 12 ? 'nd' : n % 10 === 3 && n % 100 !== 13 ? 'rd' : 'th'}`);
+
+// A name for a legend of `kind`, from the word tables (like tribe names,
+// identity.js): "Grey Fang", "Heron's Reach". Not one already taken, if it
+// can help it.
+function legendName(world, kind) {
+    const { rng } = world;
+    let name = '';
+    for (let tries = 0; tries < 8; tries++) {
+        name = rng.next() < 0.5 ? `${pick(rng, ADJECTIVES)} ${pick(rng, NOUNS[kind])}` : `${pick(rng, BEASTS)}'s ${pick(rng, NOUNS[kind])}`;
+        if (!world.legendNames.has(name)) break;
+    }
+    world.legendNames.add(name);
+    return name;
+}
+
+// Add to an item's story (and a legend's history, which the page is told again).
+export function note(world, item, text, by) {
+    const entry = { time: world.time, text, by };
+    if (item.legend !== null) {
+        const h = item.legend.history;
+        h.push(entry);
+        if (h.length > 24) h.splice(1, 1);
+        item.rev++;
+        return;
+    }
+    item.log.push(entry);
+    if (item.log.length > LOG) item.log.splice(1, 1); // the first (its making), and the latest
+}
+
+// An item becomes a legend by a deed: its trait (a rare one's, unless that
+// was durability: a legend never wears) × items.legendary, a name, its
+// weapon skill's name, and a history from its story so far.
+export function forge(world, item, deed, text, by) {
+    if (item.rarity === 2) return;
+    const I = world.p.items;
+    if (!item.trait || item.trait === 'durability') {
+        const traits = traitsOf(item.kind).filter((t) => t !== 'durability');
+        item.trait = pick(world.rng, traits);
+    }
+    item.rarity = 2;
+    item.mult = I.legendary;
+    item.wear = Infinity;
+    item.max = Infinity;
+    item.expires = 0;
+    const name = legendName(world, item.kind);
+    const skill = SKILLS[item.kind];
+    const { time } = world;
+    item.legend = { name, skill: skill ? `${skill.word} of ${name}` : '', deed, time, history: [...item.log, { time, text, by }] };
+    item.log = [];
+    item.rev++;
+    let tribe = item.tribe;
+    if (item.bearer !== 0) {
+        const k = indexOf(world.humans, item.bearer);
+        if (k >= 0) tribe = world.humans.tribe[k];
+    }
+    world.events.push({ type: 'legend', item: item.id, name, kind: item.kind, bearer: item.bearer, tribe, deed, time });
+    world.itemStats.legends[deed]++;
+}
+
+// ---- For the page ------------------------------------------------------------------------
+
+// What the page is told once about an item (and again when it changes: it
+// becomes a legend, its legend's history grows, or another generation of one
+// line takes it up).
+export function describe(item) {
+    const L = item.legend;
+    return {
+        id: item.id, kind: item.kind, rarity: item.rarity, trait: item.trait, mult: item.mult,
+        maker: item.maker, tribe: item.tribe, made: item.made, gens: item.gens,
+        legend: L === null ? null : { name: L.name, skill: L.skill, deed: L.deed, time: L.time, history: L.history.map((h) => ({ ...h })) },
+    };
+}
+
+

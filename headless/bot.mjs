@@ -10,12 +10,20 @@
 // At the end it kills off the line and the tribe it leads, which must
 // release it (God) or end the game (Play).
 //
+// With items (package 3) it also crafts at camp when the store has the
+// materials (a tool when it has none, else a spare weapon, with a flint more
+// when there is one), takes up what lies within reach, cycles to its spare
+// weapon now and then, uses its weapon's skill when it has the Spirit and
+// its tool (a knife on its kills, a torch at a predator, a basket to gather).
+//
 // It fails (exit code 1) on an exception, more than 1% of its moves turned
 // down, anyone alive with no energy, a snapshot.player field missing, food
 // moving as it should not (the pouch out of bounds, a store that is not all
 // that was carried, eating more than there is or past full, butchering more
-// than a kill held), or, over all sessions, no kill, none butchered, or
-// nothing stored.
+// than a kill held), items going astray (a material in store below zero,
+// something in its hands or kit that is not borne by it, a kit over its
+// size), or, over all sessions, no kill, none butchered, nothing stored, or
+// (with items) nothing crafted, taken up, cycled, no skill or tool used.
 //
 //   make bot                                     # seeds 1-6 × 6000 steps
 //   make bot ARGS="--seeds 1-20 --steps 20000"
@@ -23,6 +31,7 @@
 import { params as defaults } from '../src/config.js';
 import { Sim, setParam } from '../src/sim.js';
 import { createRng } from '../src/rng.js';
+import { KIND, costOf, isWeapon } from '../src/items.js';
 
 // What snapshot.player must hold, and of what type.
 const FIELDS = {
@@ -30,7 +39,10 @@ const FIELDS = {
     crouch: 'boolean', resting: 'boolean', dodging: 'boolean', snap: 'boolean', heir: 'number', over: 'boolean',
     x: 'number', y: 'number', heading: 'number', seq: 'number', auto: 'boolean',
     reload: 'number', gathering: 'boolean', butchering: 'number',
+    weapon: 'number', tool: 'number', kit: 'object', crafting: 'object', skill: 'number',
 };
+const CYCLE_EVERY = 700;  // with a spare weapon: into the hand this often
+const SKILL_EVERY = 400;  // a weapon skill at most this often (Spirit allowing)
 
 // Stamina lives on the page and only limits what it sends (SPEC §5).
 const STAMINA = { max: 100, sprint: 1, roll: 20, light: 10, regen: 2, rest: 7 }; // rest: steps without spending before it regenerates
@@ -82,17 +94,34 @@ function nearest(w, pop, x, y, r) {
     return best;
 }
 
-// The nearest of the player's kills (snapshot.carcasses) within 60 of (x, y):
-// its id and offset, or null.
-function nearestCarcass(w, list, x, y) {
+// The nearest of the player's kills (snapshot.carcasses, which with items
+// lists everyone's: those `by` it) within 60 of (x, y): its id and offset, or null.
+function nearestCarcass(w, list, x, y, by) {
     let best = null;
     for (const c of list) {
+        if (c.by !== undefined && c.by !== by) continue;
         const dx = wrapDelta(c.x - x, w.width);
         const dy = wrapDelta(c.y - y, w.height);
         const d = Math.hypot(dx, dy);
         if (d < 60 && (!best || d < best.d)) best = { id: c.id, dx, dy, d };
     }
     return best;
+}
+
+// An item lying within reach of (x, y) (items.pickReach, less a little) that the
+// player p can take up without putting anything down (room in the kit for
+// what it holds in that hand), not tried before: the item, or null.
+function lyingNear(w, x, y, p, tried) {
+    const R = w.p.items.pickReach - 0.5;
+    for (const item of w.items.values()) {
+        if (item.bearer !== 0 || tried.has(item.id)) continue;
+        const dx = wrapDelta(item.x - x, w.width);
+        const dy = wrapDelta(item.y - y, w.height);
+        if (dx * dx + dy * dy > R * R) continue;
+        const room = isWeapon(item.kind) ? p.kit.weapons.length < w.p.items.kit : p.kit.tools.length < w.p.items.kit;
+        if (room) return item;
+    }
+    return null;
 }
 
 // Who the bot plays: in Play, the first tribe's most experienced adult (most
@@ -122,6 +151,8 @@ function play(params, seed, mode, steps) {
         // The hands: spears thrown, jabs, blows that struck, kills; and food:
         // butchered, gathered, eaten from the pouch, put in the store, taken.
         throws: 0, jabs: 0, hits: 0, kills: 0, carcasses: 0, butchered: 0, gathered: 0, eaten: 0, stored: 0, taken: 0,
+        // Items: made, taken up, cycled to, skills and tools used, broken.
+        crafted: 0, picked: 0, cycled: 0, skills: 0, tools: 0, broke: 0,
     };
     const problem = (what) => {
         if (stats.problems.length < 10) stats.problems.push(what);
@@ -152,6 +183,9 @@ function play(params, seed, mode, steps) {
     // butchered, what the person held before this step (for the checks),
     // and each kill's meat when first seen, with what butchering it gave.
     const hands = { attackAt: -99, butcher: 0, butcherAt: -99, storeAt: -99, gatherAt: -99, eatAt: -99, pre: null, meat: new Map(), cut: new Map() };
+    // Items: when each was last tried (a step), and what a cycle should bring.
+    const kit = { craftAt: -999, pickAt: -99, cycleAt: 0, skillAt: -999, toolAt: -99, expect: 0, expectId: 0, tried: new Set() };
+    const itemsOn = w.itemsOn;
     let seq = 0;
     let probing = false;
     let resuming = false; // just back from autopilot: the snap that follows is expected
@@ -210,11 +244,41 @@ function play(params, seed, mode, steps) {
         body.crouch = false;
 
         const danger = nearest(w, w.carnivores, body.x, body.y, DANGER);
+        // Items: what it holds, whether it is in camp.
+        const tool = itemsOn && p.tool ? w.items.get(p.tool) : undefined;
+        const weapon = itemsOn && p.weapon ? w.items.get(p.weapon) : undefined;
+        const atCamp = Math.hypot(wrapDelta(tribe.camp.x - body.x, w.width), wrapDelta(tribe.camp.y - body.y, w.height)) < P.campRadius - 3;
+        // The spare it cycled to last step is in its hand (unless that body is gone, or it broke).
+        if (kit.expect && kit.expectId === p.id && !snap.events.some((e) => e.type === 'broke')) {
+            if (p.weapon === kit.expect) stats.cycled++;
+            else problem(`step ${w.time}: cycled to ${p.weapon}, expected ${kit.expect}`);
+        }
+        kit.expect = 0;
+        const craftable = () => {
+            // A tool if it has none; else a spare weapon, a spare tool; whatever the store affords.
+            const kinds = p.tool === 0 ? [KIND.TORCH, KIND.KNIFE, KIND.BASKET]
+                : p.kit.weapons.length < 2 ? [KIND.SPEAR, KIND.BOW, KIND.CLUB]
+                : p.kit.tools.length < 2 ? [KIND.KNIFE, KIND.TORCH, KIND.BASKET] : [];
+            for (const k of kinds) {
+                const c = costOf(w.p, k);
+                if (tribe.wood >= c.wood && tribe.flint >= c.flint && tribe.hide >= c.hide) return k;
+            }
+            return 0;
+        };
+        let make = 0;
         if (body.rolling > 0) {
             ux = body.rx;
             uy = body.ry;
             v = Q.rollSpeed;
             body.rolling--;
+        } else if (danger && tool && tool.kind === KIND.TORCH && w.time > kit.toolAt + 20) {
+            // A torch: brandish it at the predator.
+            send({ type: 'act', seq: ++seq, action: 'tool', dx: danger.dx, dy: danger.dy, target: w.carnivores.id[danger.k] });
+            kit.toolAt = w.time;
+        } else if (danger && weapon && weapon.kind === KIND.CLUB && p.spirit >= p.skill && p.reload === 0) {
+            // A club: the ground slam.
+            send({ type: 'act', seq: ++seq, action: 'skill', dx: danger.dx, dy: danger.dy, target: w.carnivores.id[danger.k] });
+            kit.skillAt = w.time;
         } else if (danger && body.stamina >= STAMINA.roll) {
             // Roll away from it.
             send({ type: 'act', seq: ++seq, action: 'roll' });
@@ -232,6 +296,12 @@ function play(params, seed, mode, steps) {
                 send({ type: 'act', seq: ++seq, action: 'rest', on: false });
                 body.resting = false;
             }
+        } else if (itemsOn && p.crafting) {
+            v = 0; // making something: a move would stop it
+        } else if (itemsOn && atCamp && w.time > kit.craftAt + 300 && (make = craftable())) {
+            // In camp, with the materials in store: make something (a flint more when there is one).
+            send({ type: 'act', seq: ++seq, action: 'craft', kind: make, flint: tribe.flint >= costOf(w.p, make).flint + 1 });
+            kit.craftAt = w.time;
         } else if (p.energy < 0.5 * P.maxEnergy) {
             // Home to rest.
             const dx = wrapDelta(tribe.camp.x - body.x, w.width);
@@ -259,19 +329,27 @@ function play(params, seed, mode, steps) {
             // nearest grazer (sprint when it is far, walk nearer, creep up on
             // it at the end, and throw, or jab); with none in sight, gather.
             const prey = nearest(w, w.herbivores, body.x, body.y, NOTICE);
-            const kill = nearestCarcass(w, snap.carcasses, body.x, body.y);
+            const kill = nearestCarcass(w, snap.carcasses, body.x, body.y, p.id);
             const gathering = w.time % GATHER_EVERY < GATHER_FOR; // (a spell of gathering now and then)
             const cdx = wrapDelta(tribe.camp.x - body.x, w.width);
             const cdy = wrapDelta(tribe.camp.y - body.y, w.height);
             const campD = Math.hypot(cdx, cdy) || 1;
+            const lying = itemsOn && w.time > kit.pickAt + 20 ? lyingNear(w, body.x, body.y, p, kit.tried) : null;
             if (p.butchering) {
                 v = 0; // (at it: a move would stop it)
+            } else if (lying) {
+                // Something lying within reach, with room in the kit for what is in hand: take it up.
+                send({ type: 'act', seq: ++seq, action: 'pickup', item: lying.id });
+                kit.pickAt = w.time;
+                kit.tried.add(lying.id);
             } else if (kill) {
                 ux = kill.dx / (kill.d || 1);
                 uy = kill.dy / (kill.d || 1);
                 if (kill.d < 2.5) {
                     if (hands.butcher !== kill.id || w.time > hands.butcherAt + 5) {
-                        send({ type: 'act', seq: ++seq, action: 'butcher', on: true, id: kill.id });
+                        // (With a knife: its right click, which cuts twice as fast.)
+                        if (tool && tool.kind === KIND.KNIFE) send({ type: 'act', seq: ++seq, action: 'tool', dx: kill.dx, dy: kill.dy, target: 0 });
+                        else send({ type: 'act', seq: ++seq, action: 'butcher', on: true, id: kill.id });
                         hands.butcher = kill.id;
                         hands.butcherAt = w.time;
                     }
@@ -317,7 +395,10 @@ function play(params, seed, mode, steps) {
                     spend += STAMINA.roll;
                 }
                 if (ready && (ambush ? prey.d - v < Q.jabRange - 0.1 : prey.d < THROW_AT)) {
-                    send({ type: 'act', seq: ++seq, action: 'attack', heavy: false, dx: ux, dy: uy, power: 0, target: w.herbivores.id[prey.k], lock: true });
+                    // Now and then, with the Spirit for it, the weapon's skill (a club's is for predators).
+                    const skill = !ambush && weapon && weapon.kind !== KIND.CLUB && p.skill > 0 && p.spirit >= p.skill && w.time > kit.skillAt + SKILL_EVERY;
+                    send({ type: 'act', seq: ++seq, action: skill ? 'skill' : 'attack', heavy: false, dx: ux, dy: uy, power: 0, target: w.herbivores.id[prey.k], lock: true });
+                    if (skill) kit.skillAt = w.time;
                     hands.attackAt = w.time;
                     spend += STAMINA.light;
                     if (!ambush) v = 0;
@@ -325,7 +406,9 @@ function play(params, seed, mode, steps) {
             } else if (p.gathering) {
                 v = 0;
             } else if (campD > P.campRadius && w.grass.g[w.grass.index(body.x, body.y)] >= P.gatherMin && p.carry < P.carryMax && w.time > hands.gatherAt + 5) {
-                send({ type: 'act', seq: ++seq, action: 'gather', on: true });
+                // (With a basket: its right click.)
+                if (tool && tool.kind === KIND.BASKET) send({ type: 'act', seq: ++seq, action: 'tool', dx: ux, dy: uy, target: 0 });
+                else send({ type: 'act', seq: ++seq, action: 'gather', on: true });
                 hands.gatherAt = w.time;
             } else {
                 const h = body.heading + (rng.next() - 0.5) * 0.6;
@@ -371,6 +454,14 @@ function play(params, seed, mode, steps) {
             body.idle = 0;
         } else if (++body.idle > STAMINA.rest) {
             body.stamina = Math.min(STAMINA.max, body.stamina + STAMINA.regen);
+        }
+
+        // Now and then, the spare weapon into the hand (it must be there next step).
+        if (itemsOn && p.kit.weapons.length && w.time >= kit.cycleAt + CYCLE_EVERY && !p.crafting) {
+            send({ type: 'act', seq: ++seq, action: 'cycle', slot: 'weapon' });
+            kit.cycleAt = w.time;
+            kit.expect = p.kit.weapons[0];
+            kit.expectId = p.id;
         }
 
         // Now and then a call to the tribe (orders.js): each kind in turn, 30
@@ -460,6 +551,7 @@ function play(params, seed, mode, steps) {
             }
         }
         for (const c of snap.carcasses) if (!hands.meat.has(c.id)) hands.meat.set(c.id, c.meat);
+        if (itemsOn) items(p);
         if (!p || !pre || p.id !== pre.id || p.auto) return;
         if (!(p.carry >= 0 && p.carry <= P.carryMax + 1e-9)) problem(`step ${w.time}: carrying ${p.carry}`);
         // What butchering or gathering put in the pouch (when nothing else
@@ -471,6 +563,30 @@ function play(params, seed, mode, steps) {
             stats.butchered += gain;
             hands.cut.set(cutting, (hands.cut.get(cutting) ?? 0) + gain);
         } else if (pre.gathering || p.gathering) stats.gathered += gain;
+    };
+
+    // The items' bookkeeping, after each step: what it made, took up, used,
+    // and broke; and that what it holds and keeps is its own, the kit no
+    // bigger than it may be, no material in store below nothing.
+    const items = (p) => {
+        for (const e of snap.events) {
+            if (e.type === 'crafted' && mine.has(e.by)) stats.crafted++;
+            else if (e.type === 'picked' && mine.has(e.by) && kit.tried.has(e.item)) stats.picked++;
+            else if (e.type === 'skill' && mine.has(e.id)) stats.skills++;
+            else if (e.type === 'tool' && mine.has(e.id)) stats.tools++;
+            else if (e.type === 'broke' && mine.has(e.bearer)) stats.broke++;
+        }
+        for (const t of w.tribes) {
+            if (t.wood < -1e-9 || t.flint < -1e-9 || t.hide < -1e-9) problem(`step ${w.time}: tribe ${t.id} has ${t.wood} wood, ${t.flint} flint, ${t.hide} hides`);
+        }
+        if (!p || p.over || !p.id) return;
+        const K = w.p.items.kit;
+        if (p.kit.weapons.length > K || p.kit.tools.length > K) problem(`step ${w.time}: a kit of ${p.kit.weapons.length} weapons, ${p.kit.tools.length} tools`);
+        for (const id of [p.weapon, p.tool, ...p.kit.weapons, ...p.kit.tools]) {
+            if (!id) continue;
+            const item = w.items.get(id);
+            if (!item || item.bearer !== p.id) problem(`step ${w.time}: item ${id} in hand or kit is ${item ? `borne by ${item.bearer}` : 'gone'}`);
+        }
     };
 
     // Leave the body to the AI (on) or take it back (off); back by hand, the
@@ -560,15 +676,21 @@ for (const seed of opts.seeds) {
             `        hands: ${s.throws} throws, ${s.jabs} jabs, ${s.hits} struck, ${s.kills} kills, ${s.carcasses} butchered; food: `
             + `${s.butchered.toFixed(0)} cut, ${s.gathered.toFixed(0)} gathered, ${s.eaten.toFixed(0)} eaten, ${s.stored.toFixed(0)} stored`,
         );
+        if (params.items.enabled) {
+            console.log(`        items: ${s.crafted} crafted, ${s.picked} taken up, ${s.cycled} cycled, ${s.skills} skills, ${s.tools} tool uses, ${s.broke} broke`);
+        }
         for (const msg of s.problems) console.log(`        ✗ ${msg}`);
     }
 }
 const bad = all.filter((s) => s.problems.length);
 // Over all the sessions, the hands must have done their work: kills, cut
-// up, and the meat home in the store.
+// up, and the meat home in the store; and with items, something made, taken
+// up, cycled to, a skill and a tool used.
 const sum = (k) => all.reduce((t, s) => t + s[k], 0);
-const idle = ['kills', 'carcasses', 'stored'].filter((k) => !(sum(k) > 0));
+const ITEM_WORK = ['crafted', 'picked', 'cycled', 'skills', 'tools'];
+const idle = ['kills', 'carcasses', 'stored', ...(params.items.enabled ? ITEM_WORK : [])].filter((k) => !(sum(k) > 0));
 if (idle.length) console.log(`        ✗ no ${idle.join(', no ')} in any session`);
 console.log(`\n${all.length - bad.length}/${all.length} sessions clean · ${sum('kills')} kills, ${sum('carcasses')} butchered, `
-    + `${sum('stored').toFixed(0)} food stored · ${(all.reduce((a, s) => a + s.ms, 0) / 1000).toFixed(1)} s\n`);
+    + `${sum('stored').toFixed(0)} food stored${params.items.enabled ? ` · items: ${ITEM_WORK.map((k) => `${sum(k)} ${k}`).join(', ')}` : ''} · `
+    + `${(all.reduce((a, s) => a + s.ms, 0) / 1000).toFixed(1)} s\n`);
 process.exit(bad.length || idle.length ? 1 : 0);

@@ -23,6 +23,7 @@ orders:
 	$(DOCKER) $(NODE) node headless/orders.mjs $(ARGS)
 
 # Behaviour fingerprint (must not change for a pure refactor), e.g. make fingerprint ARGS="--set human.enabled=false"
+# Baselines (all:): default cf91f2a652ac37cd; --set items.enabled=false 9d4e5263c001546d (the world before items)
 fingerprint:
 	$(DOCKER) $(NODE) node tools/fingerprint.mjs $(ARGS)
 

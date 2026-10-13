@@ -320,7 +320,7 @@ test('a jab within reach in front; from behind, unnoticed, it always kills', () 
 });
 
 test('a jab from the front kills about half the time', () => {
-    const w = world(EMPTY);
+    const w = world({ ...EMPTY, 'items.enabled': false }); // (a plain spear that never wears out: 200 jabs)
     const id = control(w);
     const { x, y } = stand(w, id);
     input(w, x, y, { crouch: true });
@@ -444,8 +444,9 @@ test('snapshot.spears and the reload reach the page', () => {
     sim.handle({ type: 'act', seq: 1, action: 'attack', heavy: false, dx: 0, dy: -1, power: 0, target: 0 });
     sim.step();
     let snap = snapshot();
-    assert.equal(snap.spears.length, 5);
-    const [sx, sy, vx, vy, progress] = snap.spears;
+    assert.equal(snap.spears.length, 6);
+    const [sx, sy, vx, vy, progress, kind] = snap.spears;
+    assert.equal(kind, 1, 'a spear (an ITEM_KINDS code)');
     assert.ok(near(w, sx, sy, x, y - 3));
     assert.deepEqual([vx, vy], [0, -3]);
     assert.ok(Math.abs(progress - 3 / 20) < 1e-9);
@@ -568,7 +569,7 @@ test('snapshot.carcasses lists what is left', () => {
     const id = control(w);
     const { carcass } = kill(w, id);
     let [c] = snapshot().carcasses;
-    assert.deepEqual(Object.keys(c).sort(), ['cut', 'id', 'kind', 'meat', 'x', 'y']);
+    assert.deepEqual(Object.keys(c).sort(), ['by', 'cut', 'id', 'kind', 'meat', 'x', 'y']);
     assert.equal(c.id, carcass);
     assert.equal(c.kind, 'herbivore');
     assert.equal(c.cut, 0);

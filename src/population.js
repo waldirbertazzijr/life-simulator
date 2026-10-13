@@ -5,10 +5,15 @@
 // The second line is each individual's biography: who it is, who its parent was,
 // what it is doing and what it is reacting to (`focus`, an id). The third is
 // for people: their tribe, the food they carry, and a camp they are raiding.
+// The fourth, people's items (items.js): the weapon and the tool in hand (item
+// ids, 0: none) and their kinds (`gear`: weapon × 8 + tool); a task (TASK in
+// items.js), its progress, and the kind it makes; wood or flint carried home,
+// and hides; and how many items each has made.
 const FLOAT_FIELDS = [
     'x', 'y', 'heading', 'energy', 'age', 'lifespan', 'speedGene', 'senseGene', 'upkeep',
     'id', 'parent', 'lineage', 'generation', 'children', 'kills', 'focus',
     'tribe', 'carry', 'goal',
+    'weapon', 'tool', 'gear', 'task', 'work', 'make', 'load', 'hides', 'crafted',
 ];
 const INT_FIELDS = ['timer', 'state'];
 
@@ -21,8 +26,10 @@ export const STATE = {
     WALKING: 16, RUNNING: 17, CREEPING: 18, ROLLING: 19,
     // people the player leads (orders.js)
     FOLLOWING: 20, GUARDING: 21,
-    // the controlled person's hands (player.js)
+    // the controlled person's hands (player.js); with items, everyone's (items.js)
     BUTCHERING: 22,
+    // items (items.js): going for and gathering wood, or flint; making an item
+    CHOPPING: 23, QUARRYING: 24, CRAFTING: 25,
 };
 export const STATE_LABEL = [
     'grazing', 'looking for grass', 'fleeing', 'looking for prey', 'chasing', 'eating', 'catching its breath', 'full, ambling',
@@ -30,6 +37,7 @@ export const STATE_LABEL = [
     'walking', 'running', 'creeping', 'rolling',
     'following the leader', 'guarding the camp',
     'butchering',
+    'chopping wood', 'quarrying flint', 'crafting',
 ];
 
 // One species, stored as parallel arrays. An individual is an index.

@@ -1275,16 +1275,23 @@ test('dying in a body: YOU DIED, then the heir the simulation chose', async () =
 });
 
 test('a minute in a body at 1×: the simulation takes every move', async () => {
-    const { world, input, modes, frames } = together();
+    const { sim, world, input, modes, frames } = together();
     assert.equal(modes.startPlay(world.tribes[0].id), true);
     await frames(4);
     assert.equal(world.player.id, modes.self, 'the simulation has the person');
     const start = [modes.body.x, modes.body.y];
+    // (Kept fed: a bite or hunger would end the minute with an heir.)
+    const feed = () => {
+        const pop = sim.world.humans;
+        const i = pop.id.subarray(0, pop.n).indexOf(modes.self);
+        if (i >= 0) pop.energy[i] = sim.world.p.human.maxEnergy;
+    };
     input.y = 1;
     for (let s = 0; s < 60; s++) {
         input.sprinting = s < 5;          // a sprint, until the stamina is gone
         if (s === 20) modes.action('roll');
         if (s % 10 === 0) modes.body.yaw += 1.3; // (turning now and then)
+        feed();
         await frames(60);
     }
     assert.equal(modes.stats.snaps, 0, 'no move turned down');
@@ -1366,9 +1373,9 @@ test('the mirror keeps the spears and carcasses', async () => {
     w.carcasses.set(5, { id: 5, kind: 'herbivore', x: 50, y: 60, meat: 30, total: 30, done: 0, cut: 0, by: 1, born: 0 });
     sim.dirty = true;
     sim.handle({ type: 'want' });
-    assert.deepEqual([...mirror.spears], [100, 100, 3, 0, 0]);
+    assert.deepEqual([...mirror.spears], [100, 100, 3, 0, 0, 1]);
     assert.equal(mirror.spearsAt, 1);
-    assert.deepEqual(mirror.carcasses, [{ id: 5, kind: 'herbivore', x: 50, y: 60, meat: 30, cut: 0 }]);
+    assert.deepEqual(mirror.carcasses, [{ id: 5, kind: 'herbivore', x: 50, y: 60, meat: 30, cut: 0, by: 1 }]);
     mirror.reset(structuredClone(defaults), 4, 1.6);
     assert.deepEqual([mirror.spears, mirror.carcasses], [[], []], 'a new world: none');
 });

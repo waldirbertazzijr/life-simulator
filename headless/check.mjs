@@ -15,6 +15,7 @@ import { Worker, isMainThread, parentPort, workerData } from 'node:worker_thread
 import { availableParallelism } from 'node:os';
 import { params as defaults } from '../src/config.js';
 import { World } from '../src/world.js';
+import { ITEM_KINDS } from '../src/items.js';
 
 // ---- the actual run (worker side) ------------------------------------------
 function runSeed({ params, seed, steps, sample, shock, aspect }) {
@@ -81,7 +82,49 @@ function runSeed({ params, seed, steps, sample, shock, aspect }) {
             founded: world.nextTribeId - 1,
             tribes: world.tribes.length,
             culture: people ? { aggression: aggression / people, sociality: sociality / people } : null,
+            died: world.deaths.human,
+            hunted: world.deaths.herbivore.hunted ?? 0,
         } : null,
+        items: world.itemsOn ? itemSummary(world) : null,
+    };
+}
+
+// With items (src/items.js): what was made, broken and lost; the legends and
+// their deeds; what is in hand now, by kind and rarity, and by the culture
+// of the tribes that hold it; and people's deaths with a kill to butcher.
+function itemSummary(world) {
+    const s = world.itemStats;
+    const now = {}; // kind → [normal, rare, legendary]
+    const byCulture = { aggressive: {}, social: {} }; // kinds held by the people of tribes more aggressive than social, and the rest
+    const pop = world.humans;
+    let adults = 0;
+    let armed = 0;
+    let tooled = 0;
+    for (const item of world.items.values()) {
+        const k = ITEM_KINDS[item.kind];
+        (now[k] ??= [0, 0, 0])[item.rarity]++;
+    }
+    for (let i = 0; i < pop.n; i++) {
+        if (pop.age[i] < world.p.human.maturity) continue;
+        adults++;
+        const t = world.tribeById.get(pop.tribe[i]);
+        for (const id of [pop.weapon[i], pop.tool[i]]) {
+            if (!id) continue;
+            const k = ITEM_KINDS[world.items.get(id).kind];
+            const c = t.aggression > t.sociality ? byCulture.aggressive : byCulture.social;
+            c[k] = (c[k] ?? 0) + 1;
+        }
+        if (pop.weapon[i]) armed++;
+        if (pop.tool[i]) tooled++;
+    }
+    const legends = [...world.items.values()].filter((it) => it.legend).map((it) => ({ name: it.legend.name, kind: ITEM_KINDS[it.kind], deed: it.legend.deed }));
+    return {
+        crafted: Object.fromEntries(ITEM_KINDS.slice(1).map((k, j) => [k, s.crafted[j + 1]])),
+        broke: s.broke.reduce((a, b) => a + b, 0),
+        rare: s.rare, vanished: s.vanished, picked: s.picked, inherited: s.inherited, raided: s.raided,
+        butchered: s.butchered, butcherDeaths: s.butcherDeaths, errands: s.errands,
+        deeds: s.legends, legends, now, byCulture,
+        armed: adults ? armed / adults : 0, tooled: adults ? tooled / adults : 0,
     };
 }
 
@@ -166,7 +209,7 @@ function period(a, sample) {
 }
 
 function summarise(r) {
-    const out = { seed: r.seed, steps: r.steps, extinct: r.extinct, stepsPerSec: r.stepsPerSec, genes: r.genes, terrain: r.terrain, biomes: r.biomes };
+    const out = { seed: r.seed, steps: r.steps, extinct: r.extinct, stepsPerSec: r.stepsPerSec, genes: r.genes, terrain: r.terrain, biomes: r.biomes, items: r.items };
     for (const s of ['herbivore', 'carnivore', 'grass']) {
         const ser = r.series[s];
         const back = ser.slice(Math.floor(ser.length / 2));
@@ -242,6 +285,14 @@ async function main() {
                 ? `        people died out at step ${h.gone} (peak ${h.max}, ${h.founded} tribes founded)`
                 : `        people ${f(h.mean).padStart(4)} (min ${h.min}, peak ${h.max}) · ${h.tribes} tribes alive of ${h.founded} founded · ${culture}`);
         }
+        if (s.items) {
+            const it = s.items;
+            const kinds = Object.entries(it.now).map(([k, [n, r, l]]) => `${k} ${n}/${r}/${l}`).join(' · ');
+            const deeds = Object.entries(it.deeds).filter(([, v]) => v).map(([k, v]) => `${k} ${v}`).join(', ') || 'none';
+            const died = Object.entries(it.butcherDeaths).map(([k, v]) => `${k} ${v}`).join(', ') || 'none';
+            console.log(`        items now (normal/rare/legendary): ${kinds} · adults armed ${f(100 * it.armed)}%, with a tool ${f(100 * it.tooled)}%`);
+            console.log(`        made ${Object.values(it.crafted).reduce((a, b) => a + b, 0)} (${it.rare} rare), broke ${it.broke}, lost ${it.vanished} · legends: ${deeds} · deaths with a kill to butcher: ${died} (eaten in all: ${s.humans?.died?.eaten ?? 0})`);
+        }
         if (s.terrain) {
             const t = s.terrain;
             console.log(`        terrain: water ${f(100 * t.water)}% · cliffs ${f(100 * t.cliff)}% · regrowth ×${f(t.boost, 2)} on the land left`);
@@ -261,5 +312,35 @@ async function main() {
     const ok = sums.filter((s) => !s.extinct).length;
     const withPeople = sums.filter((s) => s.humans);
     const peopleOk = withPeople.filter((s) => !s.humans.gone).length;
+    // Means and lows over the seeds, for comparing runs.
+    const avg = (get) => mean(sums.map(get));
+    const low = (get) => Math.min(...sums.map(get));
+    console.log(`\nmeans over seeds: herbivores ${f(avg((s) => s.herbivore.mean))} (lowest ${low((s) => s.herbivore.min)}) · ` +
+        `carnivores ${f(avg((s) => s.carnivore.mean))} (lowest ${low((s) => s.carnivore.min)})` +
+        (withPeople.length ? ` · people ${f(avg((s) => s.humans?.mean ?? 0))} (lowest ${low((s) => s.humans?.min ?? 0)}) · ` +
+            `grazers hunted ${f(avg((s) => s.humans?.hunted ?? 0))} · people eaten ${f(avg((s) => s.humans?.died?.eaten ?? 0))}` : ''));
+    const withItems = sums.filter((s) => s.items);
+    if (withItems.length) {
+        const deeds = {};
+        const kinds = {};
+        const culture = { aggressive: {}, social: {} };
+        let atKills = 0;
+        for (const s of withItems) {
+            for (const [k, v] of Object.entries(s.items.deeds)) deeds[k] = (deeds[k] ?? 0) + v;
+            for (const [k, v] of Object.entries(s.items.now)) kinds[k] = (kinds[k] ?? [0, 0, 0]).map((x, j) => x + v[j]);
+            for (const c of ['aggressive', 'social']) for (const [k, v] of Object.entries(s.items.byCulture[c])) culture[c][k] = (culture[c][k] ?? 0) + v;
+            atKills += s.items.butcherDeaths.eaten ?? 0;
+        }
+        const per = (v) => f(v / withItems.length, 1);
+        const share = (o) => {
+            const tot = Object.values(o).reduce((a, b) => a + b, 0) || 1;
+            return Object.entries(o).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${f(100 * v / tot)}%`).join(', ');
+        };
+        console.log(`items, a seed on average: legends ${per(Object.values(deeds).reduce((a, b) => a + b, 0))} ` +
+            `(${Object.entries(deeds).map(([k, v]) => `${k} ${per(v)}`).join(', ')}) · in the world at the end (normal/rare/legendary): ` +
+            Object.entries(kinds).map(([k, v]) => `${k} ${v.map(per).join('/')}`).join(' · '));
+        console.log(`        held in aggressive tribes: ${share(culture.aggressive)} · in social tribes: ${share(culture.social)} · ` +
+            `eaten with a kill to butcher ${per(atKills)} a seed · adults armed ${f(100 * avg((s) => s.items.armed))}%`);
+    }
     console.log(`\n${ok}/${sums.length} ecosystems persisted${withPeople.length ? ` · people survived in ${peopleOk}/${withPeople.length}` : ''} · median ${f(sums.map((s) => s.stepsPerSec).sort((a, b) => a - b)[Math.floor(sums.length / 2)])} steps/s per core\n`);
 }

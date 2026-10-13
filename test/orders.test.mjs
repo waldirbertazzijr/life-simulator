@@ -320,12 +320,15 @@ test('a hungry tribe sets its order aside to feed itself, but meets predators an
     keep(tribe, 15);
     assert.equal(heeded(w.p, tribe), tribe.order, 'fed again, they heed it');
 
-    // Hunt here only moves where they forage: it stands, hungry or not.
-    tribe.store = 0;
+    // Hunt here only moves where they forage: it stands though they are
+    // hungry, unless the store is nearly empty (orders.starving a member).
+    tribe.store = (w.p.orders.starving + 1) * tribe.members;
     const site = { x: (tribe.camp.x + 100) % w.width, y: tribe.camp.y };
     issueOrder(w, tribe, { kind: 'hunt', ...site });
     assert.equal(eventsOf(w, 'call').at(-1).hungry, false);
     assert.equal(heeded(w.p, tribe), tribe.order);
+    tribe.store = 0;
+    assert.equal(heeded(w.p, tribe), null, 'an empty camp hunts near home');
 });
 
 test('defend camp: a raider meets every adult', () => {

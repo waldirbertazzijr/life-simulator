@@ -29,11 +29,21 @@
 // no wounds instead of death, no rolls, no crouching (wounds exist because
 // you steer by hand). Only the heir rules (afterStep) still apply.
 //
+// With items (items.js, package 3) the player also has
+//
+//   kit       {weapons, tools}: up to items.kit spares of each (item ids),
+//             besides the weapon and the tool in hand (the person's columns)
+//   crafting  {kind, flint, until, tribe}: an item being made at camp, or null
+//
 // The page moves the body (src/play/body.js); here it is only checked, and
 // everything that is not a decision still happens to it as to anyone.
 import { STATE } from './population.js';
 import { strike, aimAt } from './spears.js';
 import { giveCall } from './orders.js';
+import {
+    ITEM_KINDS, KIND, SKILLS, TASK, isWeapon, weaponStats, hold, unhold, lay, putDown, wearItem, heldLike,
+    affords, spend, craft, carryOf,
+} from './items.js';
 
 const wrapDelta = (d, size) => (d > size / 2 ? d - size : d < -size / 2 ? d + size : d);
 // (A position already on the world is kept exactly as the page sent it.)
@@ -50,6 +60,7 @@ function indexOf(pop, id) {
 // False, with nothing changed, if there is no such person alive.
 export function takeControl(world, id, mode) {
     if (!id) {
+        if (world.player !== null) leaveBody(world, world.player);
         world.player = null;
         return true;
     }
@@ -57,6 +68,8 @@ export function takeControl(world, id, mode) {
     const i = indexOf(pop, id);
     if (i < 0) return false;
     const before = world.player;
+    if (before !== null && before.id !== id) leaveBody(world, before);
+    if (world.itemsOn) clearTask(world, i); // (the AI's task for the tribe, if it had one)
     world.player = {
         id,
         mode: mode === 'play' ? 'play' : 'god',
@@ -76,6 +89,9 @@ export function takeControl(world, id, mode) {
         acts: [],    // the hands' one-off acts, carried out at the next step (useHands)
         gather: false, // gathering, until it stops
         butcher: 0,  // the carcass being butchered (its id), or 0
+        // Spares and an item being made (items.js): kept if it is the same body again.
+        kit: before !== null && before.id === id && before.kit ? before.kit : { weapons: [], tools: [] },
+        crafting: before !== null && before.id === id ? before.crafting ?? null : null,
         lastStep: world.time,
         // Where it was last seen alive (all that is left to report once over).
         x: pop.x[i],
@@ -120,12 +136,18 @@ export function applyAct(world, msg) {
         pl.resting = false;
         pl.rollUntil = 0;
         idleHands(pl);
+        stopCrafting(world, pl);
         if (!on) {
             // Back by hand: the page jumps its body to where the AI left it,
-            // and numbers its inputs afresh, as for an heir.
+            // and numbers its inputs afresh, as for an heir. (Whatever the AI
+            // was doing for the tribe is let go.)
             pl.snap = true;
             pl.seq = 0;
             pl.lastStep = world.time;
+            if (world.itemsOn) {
+                const i = indexOf(world.humans, pl.id);
+                if (i >= 0) clearTask(world, i);
+            }
         }
     } else if (msg.action === 'call') {
         giveCall(world, msg);
@@ -136,7 +158,10 @@ export function applyAct(world, msg) {
         pl.resting = false;
     } else if (msg.action === 'rest') {
         pl.resting = msg.on === true && inCamp(world, pl.id);
-        if (pl.resting) idleHands(pl);
+        if (pl.resting) {
+            idleHands(pl);
+            stopCrafting(world, pl);
+        }
     } else if (HANDS.has(msg.action)) {
         handAct(pl, msg);
     }
@@ -238,8 +263,8 @@ export function stepPlayer(world, i) {
         }
     }
 
-    // What the hands do, from where the body now is (package 2, below).
-    if (pl.acts.length !== 0 || pl.gather || pl.butcher !== 0) useHands(world, i, moved);
+    // What the hands do, from where the body now is (packages 2 and 3, below).
+    if (pl.acts.length !== 0 || pl.gather || pl.butcher !== 0 || pl.crafting !== null) useHands(world, i, moved);
 
     const campDx = wrapDelta(tribe.camp.x - x[i], W);
     const campDy = wrapDelta(tribe.camp.y - y[i], H);
@@ -271,6 +296,7 @@ export function stepPlayer(world, i) {
     // a run being nearer a sprint than a walk.
     const speed = pl.speed;
     state[i] = pl.resting ? STATE.AT_CAMP
+        : pl.crafting !== null ? STATE.CRAFTING
         : pl.butcher !== 0 ? STATE.BUTCHERING
         : pl.gather ? STATE.GATHERING
         : rolling ? STATE.ROLLING
@@ -319,8 +345,10 @@ export function afterStep(world) {
             pl.resting = false;
             pl.rollUntil = 0;
             idleHands(pl);
+            stopCrafting(world, pl);
             world.events.push({ type: 'over', time });
         } else {
+            stopCrafting(world, pl);
             world.player = null;
             world.events.push({ type: 'released', reason: 'no heir', time });
         }
@@ -340,6 +368,8 @@ export function afterStep(world) {
     pl.resting = false;
     pl.rollUntil = 0;
     idleHands(pl);
+    stopCrafting(world, pl);
+    if (world.itemsOn) clearTask(world, next);
     pl.x = pop.x[next];
     pl.y = pop.y[next];
     pl.heading = pop.heading[next];
@@ -399,7 +429,20 @@ export function playerSnapshot(world) {
         reload: alive ? pop.timer[i] : 0,
         gathering: pl.gather,
         butchering: pl.butcher,
+        // Items (package 3): what is in hand (item ids, 0: none), the spares,
+        // what is being made ({kind, until}: done at that world time), and
+        // the Spirit the weapon's skill costs (0: none).
+        weapon: alive ? pop.weapon[i] : 0,
+        tool: alive ? pop.tool[i] : 0,
+        kit: { weapons: pl.kit.weapons.slice(), tools: pl.kit.tools.slice() },
+        crafting: pl.crafting === null ? null : { kind: pl.crafting.kind, until: pl.crafting.until },
+        skill: 0,
     };
+    if (alive && pop.weapon[i]) {
+        const weapon = world.items.get(pop.weapon[i]);
+        const skill = weapon ? SKILLS[weapon.kind] : null;
+        if (skill) out.skill = skill.cost;
+    }
     pl.snap = false;
     pl.heir = 0;
     return out;
@@ -427,10 +470,26 @@ export function playerSnapshot(world) {
 //
 // Butchering and gathering go on from step to step until they are done, the
 // page says stop, or the body moves.
+//
+// And with items (package 3; all ignored with items off):
+//
+//   craft {kind, flint}   make an item at camp (a KIND code or its name),
+//            the materials taken from the store now (and a flint more for a
+//            chance of rare); done after items.craftSteps, into the empty
+//            hand, else the kit, else the camp's goods. A move stops it, and
+//            the materials go back.
+//   skill {dx, dy, target, lock}   the weapon's skill, for Spirit (SKILLS)
+//   tool {dx, dy, target}   the tool: a knife cuts (or, by a carcass,
+//            butchers), a torch drives off predators near, a basket gathers
+//   pickup {item}   take up an item lying within items.pickReach: into its
+//            hand, what was there into the kit (or down, if the kit is full)
+//   cycle {slot}    'weapon' | 'tool': the next spare into the hand
+//   drop {item}     put an item in hand or in the kit down
 
-const HANDS = new Set(['attack', 'butcher', 'gather', 'eat', 'store', 'take']);
-const MOVED = 0.05; // a move longer than this (units) stops butchering and gathering
+const HANDS = new Set(['attack', 'butcher', 'gather', 'eat', 'store', 'take', 'craft', 'skill', 'tool', 'pickup', 'cycle', 'drop']);
+const MOVED = 0.05; // a move longer than this (units) stops butchering, gathering and crafting
 const AIM = { x: 0, y: 0 };
+const ARM = { item: null, kind: 0, range: 0, range2: 0, hit: 1, reload: 0 }; // the player's weapon (weaponStats)
 
 // An act of the hands, from the page: one-offs wait for the next step;
 // butchering and gathering are switched on or off. (Copied: with ?noworker
@@ -449,6 +508,9 @@ function handAct(pl, msg) {
             action: a, heavy: msg.heavy === true, dx: Number(msg.dx), dy: Number(msg.dy),
             power: Number.isFinite(power) ? (power < 0 ? 0 : power > 1 ? 1 : power) : 1,
             target: Number(msg.target) || 0, lock: msg.lock !== false,
+            // (items)
+            kind: typeof msg.kind === 'number' ? msg.kind : ITEM_KINDS.indexOf(String(msg.kind)), flint: msg.flint === true,
+            item: Number(msg.item) || 0, slot: msg.slot === 'tool' ? 'tool' : 'weapon',
         });
     }
     if (pl.gather || pl.butcher) pl.resting = false;
@@ -466,18 +528,28 @@ function idleHands(pl) {
 function useHands(world, i, moved) {
     const pl = world.player;
     const acts = pl.acts;
+    const items = world.itemsOn;
+    if (moved > MOVED) stopCrafting(world, pl); // (before this step's acts: a craft asked for now is made where it stands)
     for (let k = 0; k < acts.length; k++) {
         const a = acts[k];
         if (a.action === 'attack') attack(world, i, a);
         else if (a.action === 'eat') eat(world, i);
         else if (a.action === 'store') store(world, i);
         else if (a.action === 'take') take(world, i);
+        else if (!items) continue;
+        else if (a.action === 'craft') startCrafting(world, i, a);
+        else if (a.action === 'skill') useSkill(world, i, a);
+        else if (a.action === 'tool') useTool(world, i, a);
+        else if (a.action === 'pickup') pickUp(world, i, a.item);
+        else if (a.action === 'cycle') cycle(world, i, a.slot);
+        else if (a.action === 'drop') drop(world, i, a.item);
     }
     acts.length = 0;
     if (moved > MOVED) {
         pl.gather = false;
         pl.butcher = 0;
     }
+    if (pl.crafting !== null && world.time >= pl.crafting.until) finishCrafting(world, i);
     if (pl.butcher !== 0) butcher(world, i);
     else if (pl.gather) gather(world, i);
 }
@@ -505,14 +577,21 @@ function eat(world, i) {
     world.events.push({ type: 'eat', id: pop.id[i], amount, time: world.time });
 }
 
-// At the rack, everything carried goes into the tribe's store.
+// At the rack, everything carried goes into the tribe's store (with items,
+// the hides too).
 function store(world, i) {
     const pop = world.humans;
     const amount = pop.carry[i];
-    if (!(amount > 0) || !atRack(world, i)) return;
-    world.tribeById.get(pop.tribe[i]).store += amount;
+    const hide = world.itemsOn ? pop.hides[i] : 0;
+    if (!(amount > 0 || hide > 0) || !atRack(world, i)) return;
+    const tribe = world.tribeById.get(pop.tribe[i]);
+    tribe.store += amount;
     pop.carry[i] = 0;
-    world.events.push({ type: 'store', id: pop.id[i], amount, time: world.time });
+    if (hide > 0) {
+        tribe.hide += hide;
+        pop.hides[i] = 0;
+    }
+    world.events.push(hide > 0 ? { type: 'store', id: pop.id[i], amount, hide, time: world.time } : { type: 'store', id: pop.id[i], amount, time: world.time });
 }
 
 // At the rack with empty hands (less than one in them), food for the road:
@@ -523,8 +602,9 @@ function take(world, i) {
     if (pop.carry[i] >= 1 || !atRack(world, i)) return;
     const tribe = world.tribeById.get(pop.tribe[i]);
     let amount = world.p.play.takeMax;
+    const most = P.carryMax * (world.itemsOn ? carryOf(world, pop, i) : 1);
     if (amount > tribe.store) amount = tribe.store;
-    if (amount > P.carryMax - pop.carry[i]) amount = P.carryMax - pop.carry[i];
+    if (amount > most - pop.carry[i]) amount = most - pop.carry[i];
     if (!(amount > 0)) return;
     tribe.store -= amount;
     pop.carry[i] += amount;
@@ -533,7 +613,8 @@ function take(world, i) {
 
 // A step's gathering, as gatherers do (humans.js): human.gatherRate from the
 // patch underfoot into the pouch (× plantEnergy). Not in camp; it stops
-// when the patch is too thin to bother (gatherMin) or the hands are full.
+// when the patch is too thin to bother (gatherMin) or the hands are full
+// (more with a basket).
 function gather(world, i) {
     const P = world.p.human;
     const pl = world.player;
@@ -541,7 +622,8 @@ function gather(world, i) {
     const { grass } = world;
     const g = grass.g;
     const gi = grass.index(pop.x[i], pop.y[i]);
-    if (inCamp(world, pl.id) || g[gi] < P.gatherMin || pop.carry[i] >= P.carryMax) {
+    const most = P.carryMax * (world.itemsOn ? carryOf(world, pop, i) : 1);
+    if (inCamp(world, pl.id) || g[gi] < P.gatherMin || pop.carry[i] >= most) {
         pl.gather = false;
         return;
     }
@@ -549,13 +631,14 @@ function gather(world, i) {
     if (take > g[gi]) take = g[gi];
     g[gi] -= take;
     const c = pop.carry[i] + take * P.plantEnergy;
-    pop.carry[i] = c > P.carryMax ? P.carryMax : c; // hands are full; the rest is left behind
+    pop.carry[i] = c > most ? most : c; // hands are full; the rest is left behind
 }
 
 // A step's cutting at the carcass pl.butcher: play.butcherSteps of them cut
-// it up, each putting its share of the meat into the pouch (as much as fits;
-// the rest is left), with a stroke for the page every play.butcherEvery.
-// Out of reach (or gone), it stops; started again, it goes on where it was.
+// it up (with a knife, twice as fast), each putting its share of the meat
+// into the pouch (as much as fits; the rest is left), with a stroke for the
+// page every play.butcherEvery. Out of reach (or gone), it stops; started
+// again, it goes on where it was. With items, the hides come at the end.
 function butcher(world, i) {
     const P = world.p.human;
     const Q = world.p.play;
@@ -568,68 +651,115 @@ function butcher(world, i) {
         pl.butcher = 0;
         return;
     }
-    c.done++;
-    const last = c.done >= Q.butcherSteps;
-    const share = c.total / Q.butcherSteps;
+    const fast = world.itemsOn && (pop.gear[i] & 7) === KIND.KNIFE;
+    const before = c.done;
+    c.done += fast ? 2 : 1;
+    const steps = c.steps ?? Q.butcherSteps; // (a hunter's kill: items.butcher)
+    const last = c.done >= steps;
+    const share = ((fast ? 2 : 1) * c.total) / steps;
     const meat = last || share > c.meat ? c.meat : share;
     c.meat -= meat;
-    c.cut = last ? 1 : c.done / Q.butcherSteps;
-    const room = P.carryMax - pop.carry[i];
+    c.cut = last ? 1 : c.done / steps;
+    const room = P.carryMax * (world.itemsOn ? carryOf(world, pop, i) : 1) - pop.carry[i];
     pop.carry[i] += meat < room ? meat : room > 0 ? room : 0;
     const { time } = world;
-    if ((c.done - 1) % Q.butcherEvery === 0) world.events.push({ type: 'butcher', id: pop.id[i], carcass: c.id, x: c.x, y: c.y, time });
+    if (before % Q.butcherEvery === 0) world.events.push({ type: 'butcher', id: pop.id[i], carcass: c.id, x: c.x, y: c.y, time });
     if (last) {
         world.carcasses.delete(c.id);
         world.events.push({ type: 'butchered', id: pop.id[i], carcass: c.id, time });
         pl.butcher = 0;
+        if (world.itemsOn) {
+            pop.hides[i] += c.hide ?? 0;
+            if (fast) wearItem(world, i, world.items.get(pop.tool[i]));
+        }
     }
+}
+
+// The aim (dx, dy), as a unit vector (none given: straight ahead). Into AIM.
+function aim(world, i, a) {
+    let ux = a.dx;
+    let uy = a.dy;
+    const len = Math.hypot(ux, uy);
+    if (!(len > 1e-9)) {
+        ux = Math.cos(world.humans.heading[i]);
+        uy = Math.sin(world.humans.heading[i]);
+    } else {
+        ux /= len;
+        uy /= len;
+    }
+    AIM.x = ux;
+    AIM.y = uy;
 }
 
 // An attack: a jab at whatever is within reach in front (a light one), or
-// a spear thrown.
+// a spear thrown. With items, with the weapon in hand: a spear as above; a
+// bow shoots an arrow; a club swings at what is within its reach, and never
+// leaves the hand; with none, nothing. Each wears the weapon.
 function attack(world, i, a) {
     const P = world.p.human;
-    const Q = world.p.play;
     const pl = world.player;
     const pop = world.humans;
     if (pop.age[i] < P.maturity || pop.timer[i] > 0) return; // children do not; the spear is not back yet
-    pop.timer[i] = P.reload;
+    const items = world.itemsOn;
+    let weapon = null;
+    if (items) {
+        weapon = pop.weapon[i] ? world.items.get(pop.weapon[i]) ?? null : null;
+        if (weapon === null) return; // empty-handed
+        weaponStats(world, weapon, ARM);
+    }
+    pop.timer[i] = items ? ARM.reload : P.reload;
     pl.resting = false;
     pl.gather = false;
     pl.butcher = 0;
-    let ux = a.dx;
-    let uy = a.dy;
-    let len = Math.hypot(ux, uy);
-    if (!(len > 1e-9)) {
-        // (No aim given: straight ahead.)
-        ux = Math.cos(pop.heading[i]);
-        uy = Math.sin(pop.heading[i]);
-        len = 1;
+    aim(world, i, a);
+    const ux = AIM.x;
+    const uy = AIM.y;
+    if (items && weapon.kind === KIND.CLUB) swing(world, i, ux, uy, a, weapon);
+    else if (!a.heavy && (!items || weapon.kind === KIND.SPEAR) && jab(world, i, ux, uy, weapon)) {
+        // (jabbed)
+    } else loose(world, i, ux, uy, a.heavy ? a.power : 0, a.target, a.lock, weapon, 0);
+    if (items) wearItem(world, i, weapon);
+}
+
+// A spear thrown, or (a bow) an arrow shot, from person i along (ux, uy):
+// farther and faster with `power` (0..1, a heavy throw), led onto `target`
+// if it is the lock-on; with items, as its weapon throws (ARM, filled) and
+// passing through `pierce` creatures.
+function loose(world, i, ux, uy, power, target, lock, weapon, pierce) {
+    const Q = world.p.play;
+    const pop = world.humans;
+    let speed = Q.throwSpeed + (Q.heavySpeed - Q.throwSpeed) * power;
+    let range = Q.throwRange + (Q.heavyRange - Q.throwRange) * power;
+    let kind = KIND.SPEAR;
+    let reach = 1;
+    if (weapon !== null) {
+        const I = world.p.items;
+        kind = weapon.kind;
+        // (Its reach × the spear's, and a bow's arrows fly faster too.)
+        range *= ARM.range / world.p.human.throwRange;
+        if (kind === KIND.BOW) speed *= I.arrowSpeed;
+        reach = kind === KIND.BOW ? I.bowHit : 1;
+        if (weapon.trait === 'accuracy') reach *= weapon.mult;
     }
-    ux /= len;
-    uy /= len;
-    if (!a.heavy && jab(world, i, ux, uy)) return;
-    const power = a.heavy ? a.power : 0;
-    const speed = Q.throwSpeed + (Q.heavySpeed - Q.throwSpeed) * power;
-    const range = Q.throwRange + (Q.heavyRange - Q.throwRange) * power;
     const x = pop.x[i];
     const y = pop.y[i];
-    if (a.target && a.lock && aimAt(world, x, y, speed, a.target, AIM)) {
+    if (target && lock && aimAt(world, x, y, speed, target, AIM)) {
         ux = AIM.x;
         uy = AIM.y;
     }
-    world.spears.add(x, y, ux * speed, uy * speed, range, pop.id[i], pop.tribe[i]);
+    if (weapon === null) world.spears.add(x, y, ux * speed, uy * speed, range, pop.id[i], pop.tribe[i]);
+    else world.spears.add(x, y, ux * speed, uy * speed, range, pop.id[i], pop.tribe[i], kind, weapon.id, pierce, reach);
     world.events.push({
         type: 'throw', id: pop.id[i], x, y, tx: wrapPos(x + ux * range, world.width), ty: wrapPos(y + uy * range, world.height), time: world.time,
+        weapon: kind,
     });
 }
 
-// A jab at the nearest creature within play.jabRange, within play.jabArc of
-// the aim (ux, uy) (never a tribe-mate). It kills (or, a person, wounds)
-// with chance play.jabHit; an ambush always does: an animal neither fleeing
-// nor chasing, struck from more than 90° off its heading (from behind).
-// False if there was nothing to jab.
-function jab(world, i, ux, uy) {
+// The nearest creature within `range` of person i and within play.jabArc of
+// the aim (ux, uy), never a tribe-mate: its population and index, and the
+// offset to it (into NEAR), or null.
+const NEAR = { pop: null, j: -1, dx: 0, dy: 0, d: 0 };
+function inFront(world, i, ux, uy, range) {
     const Q = world.p.play;
     const pop = world.humans;
     const { width: W, height: H } = world;
@@ -639,7 +769,7 @@ function jab(world, i, ux, uy) {
     const cone = Math.cos(Q.jabArc);
     let victims = null;
     let j = -1;
-    let bestD2 = Q.jabRange * Q.jabRange;
+    let bestD2 = range * range;
     let vdx = 0;
     let vdy = 0;
     for (const p of [world.herbivores, world.carnivores, pop]) {
@@ -658,14 +788,323 @@ function jab(world, i, ux, uy) {
             vdy = dy;
         }
     }
-    if (j < 0) return false;
-    world.events.push({ type: 'jab', id: pop.id[i], x: px, y: py, tx: victims.x[j], ty: victims.y[j], time: world.time });
-    const s = victims.state[j];
-    const h = victims.heading[j];
-    const ambush = victims !== pop && s !== STATE.FLEEING && s !== STATE.CHASING && -vdx * Math.cos(h) - vdy * Math.sin(h) < 0;
-    if (ambush || world.rng.next() < Q.jabHit) {
-        const d = Math.sqrt(bestD2) || 1;
-        strike(world, victims, j, pop.id[i], vdx / d, vdy / d);
+    if (j < 0) return null;
+    NEAR.pop = victims;
+    NEAR.j = j;
+    NEAR.dx = vdx;
+    NEAR.dy = vdy;
+    NEAR.d = Math.sqrt(bestD2);
+    return NEAR;
+}
+
+// An ambush: an animal neither fleeing nor chasing, struck from more than 90°
+// off its heading (from behind).
+function unaware(world, n) {
+    const { pop, j } = n;
+    if (pop === world.humans) return false;
+    const s = pop.state[j];
+    const h = pop.heading[j];
+    return s !== STATE.FLEEING && s !== STATE.CHASING && -n.dx * Math.cos(h) - n.dy * Math.sin(h) < 0;
+}
+
+// A jab at the nearest creature within play.jabRange, within play.jabArc of
+// the aim (ux, uy) (never a tribe-mate). It kills (or, a person, wounds)
+// with chance play.jabHit; an ambush always does. False if there was
+// nothing to jab. (`weapon`: the spear's item, with items, or null.)
+function jab(world, i, ux, uy, weapon = null) {
+    const Q = world.p.play;
+    const pop = world.humans;
+    const n = inFront(world, i, ux, uy, Q.jabRange);
+    if (n === null) return false;
+    const { pop: victims, j } = n;
+    world.events.push({ type: 'jab', id: pop.id[i], x: pop.x[i], y: pop.y[i], tx: victims.x[j], ty: victims.y[j], time: world.time });
+    if (unaware(world, n) || world.rng.next() < Q.jabHit) {
+        const d = n.d || 1;
+        strike(world, victims, j, pop.id[i], n.dx / d, n.dy / d, KIND.SPEAR, weapon ? weapon.id : 0);
     }
     return true;
+}
+
+// A club's swing (items): at the nearest creature within its reach in front.
+// It kills (a person: hurts, items.clubDamage × a spear's) with chance
+// play.jabHit, more with a charged (heavy) swing; an ambush always does.
+function swing(world, i, ux, uy, a, weapon) {
+    const Q = world.p.play;
+    const pop = world.humans;
+    const px = pop.x[i];
+    const py = pop.y[i];
+    const n = inFront(world, i, ux, uy, ARM.range);
+    const tx = n ? n.pop.x[n.j] : wrapPos(px + ux * ARM.range, world.width);
+    const ty = n ? n.pop.y[n.j] : wrapPos(py + uy * ARM.range, world.height);
+    world.events.push({ type: 'swing', id: pop.id[i], x: px, y: py, tx, ty, time: world.time, weapon: KIND.CLUB });
+    if (n === null) return;
+    const chance = Math.min(0.95, (Q.jabHit + (a.heavy ? 0.3 * a.power : 0)) * ARM.hit);
+    if (unaware(world, n) || world.rng.next() < chance) {
+        const d = n.d || 1;
+        strike(world, n.pop, n.j, pop.id[i], n.dx / d, n.dy / d, KIND.CLUB, weapon.id, Q.spearDamage * world.p.items.clubDamage);
+    }
+}
+
+// ---- Items in the player's hands (package 3) ----------------------------------------------
+
+// The weapon's skill (SKILLS), for its Spirit: a Piercing throw (a heavy
+// throw that passes through items.pierce creatures), a Volley (items.volley
+// arrows in a fan), a Ground slam (every predator within items.slam driven
+// off). A legend's is stronger: twice the piercing, two more arrows, half
+// as far again.
+function useSkill(world, i, a) {
+    const P = world.p.human;
+    const I = world.p.items;
+    const pl = world.player;
+    const pop = world.humans;
+    const weapon = pop.weapon[i] ? world.items.get(pop.weapon[i]) : undefined;
+    const skill = weapon ? SKILLS[weapon.kind] : null;
+    if (!skill || pop.age[i] < P.maturity || pop.timer[i] > 0 || pl.spirit < skill.cost) return;
+    pl.spirit -= skill.cost;
+    pl.resting = false;
+    pl.gather = false;
+    pl.butcher = 0;
+    const legend = weapon.rarity === 2;
+    weaponStats(world, weapon, ARM);
+    pop.timer[i] = ARM.reload;
+    aim(world, i, a);
+    const ux = AIM.x;
+    const uy = AIM.y;
+    const x = pop.x[i];
+    const y = pop.y[i];
+    world.events.push({ type: 'skill', id: pop.id[i], kind: weapon.kind, name: legend ? weapon.legend.skill : '', x, y, dx: ux, dy: uy, time: world.time });
+    if (weapon.kind === KIND.SPEAR) {
+        loose(world, i, ux, uy, 1, a.target, a.lock, weapon, legend ? 2 * I.pierce : I.pierce);
+    } else if (weapon.kind === KIND.BOW) {
+        // (Aimed at the lock-on, the middle arrow is led onto it; the fan around that.)
+        let cx = ux;
+        let cy = uy;
+        const speed = world.p.play.heavySpeed * I.arrowSpeed;
+        if (a.target && a.lock && aimAt(world, x, y, speed, a.target, AIM)) {
+            cx = AIM.x;
+            cy = AIM.y;
+        }
+        const n = legend ? I.volley + 2 : I.volley;
+        for (let k = 0; k < n; k++) {
+            const t = (k - (n - 1) / 2) * I.volleyFan;
+            const c = Math.cos(t);
+            const s = Math.sin(t);
+            loose(world, i, cx * c - cy * s, cx * s + cy * c, 1, 0, false, weapon, 0);
+        }
+    } else {
+        const R = I.slam * (legend ? 1.5 : 1);
+        drive(world, x, y, R, world.p.carnivore.rest * 2);
+    }
+    wearItem(world, i, weapon);
+}
+
+// Every predator within R of (x, y) is driven off: it backs away to rest for
+// `steps`.
+function drive(world, x, y, R, steps) {
+    const c = world.carnivores;
+    for (let k = 0; k < c.n; k++) {
+        if (c.energy[k] <= 0) continue;
+        const dx = wrapDelta(c.x[k] - x, world.width);
+        const dy = wrapDelta(c.y[k] - y, world.height);
+        if (dx * dx + dy * dy > R * R) continue;
+        c.timer[k] = steps;
+        c.state[k] = STATE.RESTING;
+        c.focus[k] = 0;
+        c.heading[k] = Math.atan2(dy, dx); // (facing away)
+    }
+}
+
+// The tool in hand (right click): a knife cuts what is within items.cutReach
+// in front (with chance items.cutHit), or, by a carcass, butchers it (twice
+// as fast); a torch is brandished, driving off predators within
+// items.torchReach (× its effect) at the cost of a tenth of its burning;
+// a basket starts or stops gathering, like E.
+function useTool(world, i, a) {
+    const I = world.p.items;
+    const Q = world.p.play;
+    const pl = world.player;
+    const pop = world.humans;
+    const tool = pop.tool[i] ? world.items.get(pop.tool[i]) : undefined;
+    if (!tool) return;
+    aim(world, i, a);
+    const ux = AIM.x;
+    const uy = AIM.y;
+    const x = pop.x[i];
+    const y = pop.y[i];
+    world.events.push({ type: 'tool', id: pop.id[i], kind: tool.kind, x, y, dx: ux, dy: uy, time: world.time });
+    if (tool.kind === KIND.BASKET) {
+        pl.gather = !pl.gather;
+        if (pl.gather) {
+            pl.butcher = 0;
+            pl.resting = false;
+        }
+        return;
+    }
+    pl.resting = false;
+    if (tool.kind === KIND.TORCH) {
+        const m = tool.trait === 'effect' ? tool.mult : 1;
+        drive(world, x, y, I.torchReach * m, world.p.carnivore.rest);
+        if (tool.rarity < 2) tool.expires -= 0.1 * tool.max;
+        return;
+    }
+    // A knife: by a carcass, cut it up; otherwise a quick cut.
+    let near = 0;
+    let best = Q.butcherReach * Q.butcherReach;
+    for (const c of world.carcasses.values()) {
+        const dx = wrapDelta(c.x - x, world.width);
+        const dy = wrapDelta(c.y - y, world.height);
+        if (dx * dx + dy * dy <= best) {
+            best = dx * dx + dy * dy;
+            near = c.id;
+        }
+    }
+    if (near) {
+        pl.butcher = near;
+        pl.gather = false;
+        return;
+    }
+    if (pop.age[i] < world.p.human.maturity) return;
+    const n = inFront(world, i, ux, uy, I.cutReach);
+    if (n === null) return;
+    if (world.rng.next() < I.cutHit) {
+        const d = n.d || 1;
+        strike(world, n.pop, n.j, pop.id[i], n.dx / d, n.dy / d, KIND.KNIFE, tool.id);
+    }
+    wearItem(world, i, tool);
+}
+
+// Take up the item `id` lying within items.pickReach: into its hand; what was
+// there into the kit, or (the kit full) down where it stands.
+function pickUp(world, i, id) {
+    const I = world.p.items;
+    const pl = world.player;
+    const pop = world.humans;
+    const item = world.items.get(id);
+    if (!item || item.bearer !== 0) return;
+    const dx = wrapDelta(item.x - pop.x[i], world.width);
+    const dy = wrapDelta(item.y - pop.y[i], world.height);
+    if (dx * dx + dy * dy > I.pickReach * I.pickReach) return;
+    const held = heldLike(world, i, item.kind);
+    if (held) {
+        const spares = isWeapon(held.kind) ? pl.kit.weapons : pl.kit.tools;
+        if (spares.length < I.kit) {
+            unhold(world, i, held);
+            spares.push(held.id);
+        } else putDown(world, i, held);
+    }
+    hold(world, i, item);
+    world.events.push({ type: 'picked', item: item.id, by: pop.id[i], time: world.time });
+}
+
+// The next spare into the hand; what was there to the back of the kit.
+function cycle(world, i, slot) {
+    const pl = world.player;
+    const pop = world.humans;
+    const spares = slot === 'tool' ? pl.kit.tools : pl.kit.weapons;
+    if (spares.length === 0) return;
+    const next = world.items.get(spares.shift());
+    const id = slot === 'tool' ? pop.tool[i] : pop.weapon[i];
+    if (id) {
+        unhold(world, i, world.items.get(id));
+        spares.push(id);
+    }
+    if (next) hold(world, i, next);
+}
+
+// Put down an item from the hand or the kit, where the person stands.
+function drop(world, i, id) {
+    const pl = world.player;
+    const pop = world.humans;
+    const item = world.items.get(id);
+    if (!item || item.bearer !== pop.id[i]) return;
+    for (const list of [pl.kit.weapons, pl.kit.tools]) {
+        const k = list.indexOf(id);
+        if (k >= 0) list.splice(k, 1);
+    }
+    putDown(world, i, item);
+}
+
+// Start making an item of a.kind at camp, if the store has the materials
+// (taken now; and a flint more, if asked for and there, for a chance of rare).
+function startCrafting(world, i, a) {
+    const P = world.p.human;
+    const pl = world.player;
+    const pop = world.humans;
+    const kind = a.kind;
+    if (pl.crafting !== null || !(kind >= KIND.SPEAR && kind <= KIND.TORCH) || pop.age[i] < P.maturity || !inCamp(world, pl.id)) return;
+    const tribe = world.tribeById.get(pop.tribe[i]);
+    if (!affords(world.p, tribe, kind)) return;
+    spend(world.p, tribe, kind);
+    let flint = false;
+    if (a.flint && tribe.flint >= 1) {
+        tribe.flint -= 1;
+        flint = true;
+    }
+    pl.crafting = { kind, flint, until: world.time + world.p.items.craftSteps, tribe: tribe.id };
+    pl.resting = false;
+    pl.gather = false;
+    pl.butcher = 0;
+}
+
+// Done: into the empty hand, else the kit, else among the camp's goods.
+function finishCrafting(world, i) {
+    const pl = world.player;
+    const pop = world.humans;
+    const c = pl.crafting;
+    pl.crafting = null;
+    const tribe = world.tribeById.get(pop.tribe[i]);
+    const item = craft(world, i, c.kind, c.flint, tribe);
+    const spares = isWeapon(item.kind) ? pl.kit.weapons : pl.kit.tools;
+    if (heldLike(world, i, item.kind) === null) hold(world, i, item);
+    else if (spares.length < world.p.items.kit) {
+        spares.push(item.id);
+        item.bearer = pop.id[i];
+        item.last = pop.id[i];
+        item.gens = 1;
+        item.line = pop.id[i];
+    } else lay(world, item, pop.x[i], pop.y[i], tribe);
+}
+
+// Stop making it: the materials go back to the store.
+function stopCrafting(world, pl) {
+    const c = pl.crafting;
+    if (!c) return;
+    pl.crafting = null;
+    const tribe = world.tribeById.get(c.tribe);
+    if (!tribe) return;
+    spend(world.p, tribe, c.kind, -1);
+    if (c.flint) tribe.flint += 1;
+}
+
+// The AI's task for the tribe, let go when the page takes the body over (a
+// craft's materials go back to the store).
+function clearTask(world, i) {
+    const pop = world.humans;
+    if (pop.task[i] === TASK.CRAFT) {
+        const tribe = world.tribeById.get(pop.tribe[i]);
+        if (tribe) {
+            spend(world.p, tribe, pop.make[i] % 8, -1);
+            if (pop.make[i] >= 8) tribe.flint += 1;
+        }
+    }
+    pop.task[i] = TASK.NONE;
+    pop.work[i] = 0;
+    pop.make[i] = 0;
+    pop.load[i] = 0;
+}
+
+// The page leaves a body (to another, or to nobody): what it was making is
+// let go, and its spares are put down where it stands (the AI holds one of
+// each).
+function leaveBody(world, pl) {
+    stopCrafting(world, pl);
+    if (!world.itemsOn || !pl.kit || !pl.id) return;
+    const i = indexOf(world.humans, pl.id);
+    for (const list of [pl.kit.weapons, pl.kit.tools]) {
+        for (const id of list) {
+            const item = world.items.get(id);
+            if (item && i >= 0) putDown(world, i, item);
+        }
+        list.length = 0;
+    }
 }

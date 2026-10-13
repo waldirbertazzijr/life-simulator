@@ -234,8 +234,82 @@ export const params = {
         // first. How its camp meets raiders and predators follows the order
         // regardless.
         surplus: 1,
-        huntRange: 160,      // Hunt here: foragers keep within this of the marker (100 starved the hunt)
-        moveCooldown: 3000,  // steps before a camp can move again
+        huntRange: 160,      // Hunt here: foragers keep within this of the marker (100 starved the hunt)...
+        starving: 7,         // ...unless the store holds less than this a member: then they hunt near home
+        moveCooldown: 6000,  // steps before a camp can move again (3000 let random moves end the people of some worlds, with items)
+    },
+
+    // Items (src/items.js): materials gathered on the land, things made from
+    // them, worn out with use, handed down, and the few that become legends.
+    // Off: the world of before items, to the bit (everyone hunts as if with a
+    // plain spear that never breaks, and eats a kill on the spot).
+    items: {
+        enabled: true,
+        // Materials. A worker gathers this much a step where the ground is
+        // rich (wood: forest; flint: bare rock), and `poor` × as much where it
+        // is poor (wood: anywhere grass grows; flint: tundra, or anywhere on a
+        // flat world), and carries up to `load` home.
+        wood: 0.04,
+        flint: 0.03,
+        poor: 0.25,
+        load: 8,
+        spotReach: 500,      // a tribe goes no farther than this (by land) for them: where a load comes soonest
+        initialWood: 6,      // wood in each starting camp (spears for the children who come of age)
+        errand: 1500,        // steps a worker keeps at it before going home with what it has
+        // Kinds (the plain spear is today's hunting: human.throwRange, hit, reload).
+        arrowRange: 1.6,     // a bow: × the spear's reach (a hunter's throw; the player's arrows: × play.throwRange, heavyRange)...
+        arrowSpeed: 1.6,     // ...its arrows fly × as fast as a thrown spear (play.throwSpeed, heavySpeed)...
+        bowReload: 0.6,      // ...× its reload...
+        bowHit: 0.9,         // ...× its chance to kill
+        clubReach: 4,        // a club strikes only this close...
+        clubDamage: 1.5,     // ...hurts strangers this much more...
+        clubGuard: 2,        // ...and counts as this many defenders against a predator (a bow, none)
+        knife: 0.85,         // a knife: food per kill (human.efficiency without), and butchering at double speed
+        butcher: 20,         // steps a hunter takes to cut up a kill (the player: play.butcherSteps)
+        basket: 1.5,         // a basket: × what can be carried (tripLoad, carryMax)
+        torch: 3000,         // a torch burns this many steps; a predator does not take its bearer
+        torchReach: 8,       // the player's brandish drives off predators this close
+        // Wear, rarity, crafting.
+        uses: 40,            // uses before a normal item breaks...
+        rareUses: 60,        // ...a rare one
+        rare: 1.25,          // a rare item's trait...
+        legendary: 1.5,      // ...a legend's
+        craftSteps: 150,
+        // What each kind costs to make (from the store).
+        costs: {
+            spear: { wood: 2, flint: 0, hide: 0 },
+            bow: { wood: 3, flint: 0, hide: 1 },
+            club: { wood: 2, flint: 0, hide: 0 },
+            knife: { wood: 0, flint: 1, hide: 0 },
+            basket: { wood: 2, flint: 0, hide: 0 },
+            torch: { wood: 1, flint: 0, hide: 0 },
+        },
+        rareChance: 0.2,     // with a flint more: the chance of rare...
+        rareGain: 0.04,      // ...more with each item the crafter has made...
+        rareMax: 0.6,        // ...up to this
+        spare: 4,            // a tribe puts in a flint more only while it keeps this many back (for knives)
+        tools: 1,            // a tribe makes tools (but knives) only with this many births' worth in store
+        worn: 0.2,           // below this much wear left, a tribe makes a replacement
+        // Lying about.
+        pickReach: 6,        // an item this close is picked up, if better
+        vanish: 3000,        // steps a fallen item lasts (legends: forever)
+        // Legends: the deeds, as thresholds. Legends never wear out or vanish,
+        // so they must stay rare: at the spec's numbers (a predator with 5
+        // kills, 30 kills, one raider) hundreds arose in a long run.
+        famous: 30,          // a predator with this many kills is famous
+        kills: 50,           // an item with this many kills
+        generations: 3,      // borne by this many generations of one line
+        defender: 3,         // raiders an item has killed at its own camp
+        outlived: 10,        // kills an item needs to be remembered when its makers are gone
+        // Weapon skills (the player's, for Spirit).
+        pierce: 2,           // Piercing throw: passes through this many
+        volley: 3,           // Volley: arrows in the fan...
+        volleyFan: 0.17,     // ...this far apart (radians)
+        slam: 8,             // Ground slam: drives off predators this close
+        // The player's other tools.
+        cutReach: 3,         // a knife's quick cut...
+        cutHit: 0.5,         // ...and its chance
+        kit: 2,              // spare weapons, and spare tools, the player keeps
     },
 
     evolution: {

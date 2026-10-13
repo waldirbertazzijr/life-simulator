@@ -20,13 +20,17 @@
 //                                            'auto' {on} (autopilot: the AI runs it while the page is on the map),
 //                                            'call' {kind, x, y} (a call to its tribe: orders.js);
 //                                            the hands': 'attack' {heavy, dx, dy, power, target, lock}, 'butcher' {on, id},
-//                                            'gather' {on}, 'eat', 'store', 'take' (player.js)
+//                                            'gather' {on}, 'eat', 'store', 'take' (player.js); with items:
+//                                            'craft' {kind, flint}, 'skill' {dx, dy, target, lock},
+//                                            'tool' {dx, dy, target}, 'pickup' {item}, 'cycle' {slot}, 'drop' {item}
 //   out  started {gen, hash}                 the new world's first moment, hashed
 //        snapshot {...}                      see pack() below; with `events`, everything that happened
 //                                            since the last one (World.events, oldest first),
 //                                            `player`, the controlled person (playerSnapshot in player.js),
-//                                            `spears` (x, y, vx, vy, progress each) and `carcasses`, the
-//                                            player's spears in flight and kills not yet butchered (spears.js)
+//                                            `spears` (x, y, vx, vy, progress, kind each: kind an ITEM_KINDS
+//                                            code, 1 a spear, 2 an arrow), and `carcasses`, the player's
+//                                            spears in flight and kills not yet butchered (spears.js);
+//                                            items: `items`, `newItems`, `goneItems` (Packer.packItems)
 //        reply {id, value}
 //
 // Snapshots are pulled, not pushed: the main thread asks for one each frame
@@ -36,6 +40,7 @@ import { World } from './world.js';
 import { takeControl, applyInput, applyAct, playerSnapshot } from './player.js';
 import { packCarcasses } from './spears.js';
 import { ORDER_KINDS } from './orders.js';
+import { describe, fraction } from './items.js';
 
 // Steps per second at 1×: a calm pace, at which a person walks about six
 // units (a little over a body length) a second and runs at ten. (It used to
@@ -63,9 +68,17 @@ export const COLUMNS = [
 export const STRIDE = COLUMNS.length + 1; // values per individual, with prev
 
 // What a snapshot carries of each living tribe, as numbers: id, members,
-// adults, store, births; where its camp is (it can move: orders.js); and its
-// standing order: a code (an index into ORDER_KINDS, 0 for none) and its x, y.
-export const TRIBE_STRIDE = 10;
+// adults, store, births; where its camp is (it can move: orders.js); its
+// standing order: a code (an index into ORDER_KINDS, 0 for none) and its x,
+// y; and the wood, flint and hide in its store (items.js).
+export const TRIBE_STRIDE = 13;
+
+// What a snapshot carries of each item (items.js), as numbers: id, bearer (a
+// person's id, 0 if it lies on the ground), x, y (where it lies, when it
+// does), how much use is left in it (0..1; 1 for a legend), and its kills.
+// The rest of an item is described once (newItems), and again when it
+// changes; items gone since the last snapshot are listed in goneItems.
+export const ITEM_STRIDE = 6;
 
 export class Sim {
     // post(message, transferList): how messages leave (postMessage in the worker).
@@ -203,7 +216,9 @@ export class Sim {
         snap.fate = w.fate;
         snap.heir = w.fate && w.fate.id === w.watch ? w.descendant(w.watch) : 0;
         snap.player = playerSnapshot(w);
-        // The player's spears in flight and kills not yet butchered (spears.js).
+        // The player's spears in flight (and their kinds: a spear or an
+        // arrow) and kills not yet butchered (spears.js; with items,
+        // everyone's kills).
         snap.spears = w.spears.n ? w.spears.pack() : NONE;
         snap.carcasses = w.carcasses.size ? packCarcasses(w) : NONE;
         snap.samples = this.samples;
@@ -254,6 +269,9 @@ export class Packer {
         // it (a resend of the same moment keeps blending from the same one).
         this.maps = KINDS.map(() => ({ last: new Map(), before: new Map() }));
         this.described = new Set(); // tribes whose name, flag and camp were already sent
+        this.itemRev = new Map();   // items described, and as of which change (item.rev)
+        this.sent = new Set();      // items in the last snapshot...
+        this.seen = new Set();      // ...and in this one
         this.free = [];             // buffers handed back, to reuse
         this.time = -1;             // the world time last packed
     }
@@ -264,6 +282,8 @@ export class Packer {
             m.before.clear();
         }
         this.described.clear();
+        this.itemRev.clear();
+        this.sent.clear();
         this.time = -1;
     }
 
@@ -322,7 +342,8 @@ export class Packer {
         for (const t of world.tribes) {
             const o = t.order;
             tribes.push(t.id, t.members, t.adults, t.store, t.births, t.camp.x, t.camp.y,
-                o === null ? 0 : ORDER_KINDS.indexOf(o.kind), o === null ? 0 : o.x, o === null ? 0 : o.y);
+                o === null ? 0 : ORDER_KINDS.indexOf(o.kind), o === null ? 0 : o.x, o === null ? 0 : o.y,
+                t.wood, t.flint, t.hide);
         }
         const fallen = [];
         for (const t of world.fallen) fallen.push(t.id, t.ended);
@@ -338,7 +359,43 @@ export class Packer {
                 });
             }
         }
-        return { buffer, size, counts, grassLength: g.length, time: world.time, fresh, tribes, fallen, newTribes };
+        const { items, newItems, goneItems } = this.packItems(world);
+        return { buffer, size, counts, grassLength: g.length, time: world.time, fresh, tribes, fallen, newTribes, items, newItems, goneItems };
+    }
+
+    // Items: every live one as numbers (ITEM_STRIDE each); described when
+    // first sent and whenever its description changes (a legend, a legend's
+    // history); and the ids of those gone since the last snapshot.
+    packItems(world) {
+        const all = world.items;
+        const items = new Float64Array(all.size * ITEM_STRIDE);
+        const newItems = [];
+        const goneItems = [];
+        const seen = this.seen;
+        seen.clear();
+        let o = 0;
+        for (const item of all.values()) {
+            seen.add(item.id);
+            if (this.itemRev.get(item.id) !== item.rev) {
+                this.itemRev.set(item.id, item.rev);
+                newItems.push(describe(item));
+            }
+            items[o] = item.id;
+            items[o + 1] = item.bearer;
+            items[o + 2] = item.x;
+            items[o + 3] = item.y;
+            items[o + 4] = fraction(world, item);
+            items[o + 5] = item.kills;
+            o += ITEM_STRIDE;
+        }
+        for (const id of this.sent) {
+            if (seen.has(id)) continue;
+            goneItems.push(id);
+            this.itemRev.delete(id);
+        }
+        this.seen = this.sent;
+        this.sent = seen;
+        return { items, newItems, goneItems };
     }
 }
 

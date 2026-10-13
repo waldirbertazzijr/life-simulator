@@ -27,6 +27,7 @@
 // without a player.
 import { STATE } from './population.js';
 import { campSite, hitChance } from './humans.js';
+import { KIND, arm, armOf, hitWith, efficiencyOf, killed, credit, wearItem, campMoved } from './items.js';
 
 const wrapDelta = (d, size) => (d > size / 2 ? d - size : d < -size / 2 ? d + size : d);
 // (A position already on the world is kept exactly as it was given.)
@@ -151,21 +152,34 @@ export function follow(world, r, i, tribe, e, c) {
     const gy = j >= 0 ? wrapDelta(G.y[j] - y[i], H) : 0;
     const d2 = gx * gx + gy * gy;
     const sense = P.sense * pop.senseGene[i];
-    if (j >= 0 && G.energy[j] > 0 && d2 < sense * sense) {
+    // (Items: with what it holds; the unarmed only keep up.)
+    const items = world.itemsOn;
+    const reach2 = items ? (armOf(world, i) ? arm.range2 : -1) : P.throwRange * P.throwRange;
+    if (j >= 0 && G.energy[j] > 0 && d2 < sense * sense && reach2 >= 0) {
         s = STATE.HUNTING;
         focus[i] = G.id[j];
-        if (d2 > P.throwRange * P.throwRange) {
+        if (d2 > reach2) {
             const d = Math.sqrt(d2);
             led.dx = gx / d;
             led.dy = gy / d;
             led.v = top * P.cruise;
         } else if (pop.timer[i] === 0) {
-            pop.timer[i] = P.reload;
+            pop.timer[i] = items ? arm.reload : P.reload;
             const mates = world.humanHash.count(x[i], y[i], P.groupRadius, i, pop.tribe, pop.tribe[i], true);
-            const hit = world.rng.next() < hitChance(P, tribe, mates);
+            const hit = world.rng.next() < (items ? hitWith(P, tribe, mates, arm.hit) : hitChance(P, tribe, mates));
             // (For the page, which draws the spear: nothing reads it here.)
-            world.events.push({ type: 'throw', id: pop.id[i], x: x[i], y: y[i], tx: G.x[j], ty: G.y[j], hit, time: world.time });
-            if (hit) {
+            world.events.push({
+                type: items && arm.kind === KIND.CLUB ? 'swing' : 'throw', id: pop.id[i], x: x[i], y: y[i], tx: G.x[j], ty: G.y[j],
+                hit, time: world.time, weapon: items ? arm.kind : KIND.SPEAR,
+            });
+            const weapon = items ? arm.item : null;
+            if (hit && items) {
+                // The kill waits to be cut up (items.js).
+                killed(world, i, G, j, efficiencyOf(world, pop, i));
+                credit(world, weapon, G, j);
+                world.die(G, j, 'hunted', pop.id[i]);
+                pop.kills[i]++;
+            } else if (hit) {
                 const food = G.energy[j] * P.efficiency;
                 world.die(G, j, 'hunted', pop.id[i]);
                 pop.kills[i]++;
@@ -175,6 +189,7 @@ export function follow(world, r, i, tribe, e, c) {
                 e += eat;
                 c += food - eat;
             }
+            if (items) wearItem(world, i, weapon);
         }
     } else {
         // Its place: `close` from the leader, on a bearing of its own.
@@ -235,6 +250,7 @@ export function issueOrder(world, tribe, { kind, x, y }) {
             // their way there as they come home (humans.js).
             tribe.camp = { x, y };
             tribe.paths = terrain ? terrain.pathField(x, y) : null;
+            if (world.itemsOn) campMoved(world, tribe); // its goods go too; new spots for wood and flint (items.js)
             tribe.nextMove = time + O.moveCooldown;
             tribe.order = null;
             world.events.push({ type: 'call', tribe: tribe.id, kind, x, y, time });
@@ -257,8 +273,15 @@ export const hungry = (p, tribe) => tribe.store < p.orders.surplus * (p.human.bi
 // hunting and the store, and births on the store: held for long, either
 // order stopped the births of every tribe, and random orders to every tribe
 // ended the people on every seed: headless/orders.mjs.) Hunt here only moves
-// where people forage, and Move camp is done at once: those always stand.
-export const setAside = (p, tribe) => tribe.order !== null && (tribe.order.kind === 'gather' || tribe.order.kind === 'defend') && hungry(p, tribe);
+// where people forage: it stands unless the camp is nearly empty (below
+// orders.starving a member: with items, far hunts held through such times
+// ended the people of half the worlds). Move camp is done at once.
+export const setAside = (p, tribe) => {
+    const o = tribe.order;
+    if (o === null) return false;
+    if (o.kind === 'gather' || o.kind === 'defend') return hungry(p, tribe);
+    return o.kind === 'hunt' && tribe.store < p.orders.starving * tribe.members;
+};
 
 // The order a tribe's people follow in what they do (humans.js): its
 // standing order, or null when it has none or has set it aside.

@@ -19,6 +19,7 @@ import { seedTribes, stepHumans, stepTribes, driveOff } from './humans.js';
 import { caught, afterStep } from './player.js';
 import { Spears, stepSpears, spoilCarcasses } from './spears.js';
 import { fighting } from './orders.js';
+import { initItems, stepItems, bequeath, shielded, creditHolder, TASK } from './items.js';
 
 export { STATE, STATE_LABEL } from './population.js';
 
@@ -57,9 +58,13 @@ export class World {
         // then the world runs exactly as if player.js did not exist.
         this.player = null;
         // The player's spears in flight, and its kills waiting to be butchered
-        // (src/spears.js): empty unless someone is played.
+        // (src/spears.js): empty unless someone is played. With items, every
+        // hunter's kills wait to be butchered too.
         this.spears = new Spears();
         this.carcasses = new Map(); // the dead creature's id → its carcass
+        // Items (src/items.js): world.items, and world.itemsOn, false when
+        // params.items.enabled is off (then nothing about items ever runs).
+        initItems(this);
 
         this.terrain = params.terrain.enabled ? new Terrain(width, height, params.terrain, this.rng) : null;
         // Biomes draw from a random stream of their own, so the land and the
@@ -144,6 +149,16 @@ export class World {
             type: 'death', kind, id: pop.id[i], x: pop.x[i], y: pop.y[i], heading: pop.heading[i], cause, by, time: this.time,
             tribe: pop === this.humans ? pop.tribe[i] : 0, child: pop.age[i] < this.p[kind].maturity,
         });
+        if (this.itemsOn && pop === this.humans) {
+            // What it held is handed down or left lying (items.js); and a death
+            // at a kill being butchered is counted, for the checks.
+            if (pop.task[i] === TASK.BUTCHER) this.itemStats.butcherDeaths[cause] = (this.itemStats.butcherDeaths[cause] || 0) + 1;
+            if (cause === 'eaten') {
+                this.itemStats.eatenAt[pop.task[i]]++;
+                this.itemStats.eatenArm[pop.gear[i] >> 3]++;
+            }
+            bequeath(this, i);
+        }
         if (pop.id[i] !== this.watch) return;
         this.fate = {
             id: pop.id[i],
@@ -241,6 +256,7 @@ export class World {
         this.carnivores.compact();
         this.humans.compact();
         if (this.tribes.length) stepTribes(this);
+        if (this.itemsOn) stepItems(this);               // torches burn out, lost items go, tribes reckon their needs
         if (this.player !== null) afterStep(this); // if the controlled person died: its heir (player.js)
         this.time++;
     }
@@ -432,12 +448,18 @@ export class World {
                     state[i] = STATE.CHASING;
                     focus[i] = victims.id[j];
                     if (d - v <= P.catchRadius) {
-                        if (victims === humans && driveOff(this, j)) {
+                        if (victims === humans && this.itemsOn && shielded(this, j)) {
+                            // A burning torch (items.js): it will not take the
+                            // one who bears it, and backs off.
+                            timer[i] = P.rest;
+                            state[i] = STATE.RESTING;
+                        } else if (victims === humans && driveOff(this, j)) {
                             // The person's tribe-mates drive it off, and may kill it.
                             timer[i] = P.rest;
                             state[i] = STATE.RESTING;
                             const tribe = this.tribeById.get(humans.tribe[j]);
                             if (rng.next() < fighting(tribe) * this.p.human.killPredator) { // (defending a camp: fiercer, orders.js)
+                                if (this.itemsOn) creditHolder(this, j, pop, i); // (the kill of the weapon it went for)
                                 this.die(pop, i, 'killed', humans.id[j]);
                                 humans.kills[j]++;
                                 continue;

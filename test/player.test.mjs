@@ -903,7 +903,8 @@ test('autopilot off snaps the page to the body', () => {
     assert.equal(away.auto, true);
     assert.equal(away.snap, false);
     assert.ok(Math.hypot(away.x - start.x, away.y - start.y) > 1, 'the AI walked it somewhere');
-    assert.equal(w.humans.state[at(w, id)] < STATE.WALKING, true, 'in a state of the AI');
+    const s = w.humans.state[at(w, id)];
+    assert.equal(s < STATE.WALKING || s > STATE.ROLLING, true, 'in a state of the AI');
 
     sim.handle({ type: 'act', seq: 52, action: 'auto', on: false });
     const back = snapshot().player;

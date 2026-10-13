@@ -139,7 +139,7 @@ export class Thrown {
         if (s && s.length) {
             const Q = world.p.play;
             const ago = (world.spearsAt ?? world.time) - (world.shown ?? world.time);
-            for (let k = 0; k + 4 < s.length; k += 5) {
+            for (let k = 0; k + 5 < s.length; k += 6) { // (six numbers each: the sixth, its kind, for package 3b to draw arrows)
                 const vx = s[k + 2];
                 const vy = s[k + 3];
                 const speed = Math.hypot(vx, vy);

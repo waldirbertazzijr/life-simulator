@@ -10,6 +10,10 @@
 // control(), input() and act(), follows and reports on it (`player`, and its
 // spears in flight and kills: `spears`, `carcasses`).
 //
+// Items (items.js) come like tribes: each described once (and again when it
+// changes), then only numbers. The Mirror keeps `items` (id → item), who
+// holds what (`byBearer`), and the `legends`, newest first.
+//
 // The land never changes, so it is not sent at all: it is a pure function of
 // the seed and the parameters, and reset() builds the same World here, keeps
 // its terrain and grass grid, and checks it against the simulation's own
@@ -27,8 +31,9 @@
 // (it adapts, see update()). Interpolation is display-only: positions and
 // headings are blended into arrays of our own; the snapshots are untouched.
 import { World } from './world.js';
-import { Packer, KINDS, COLUMNS, TRIBE_STRIDE, startHash, setParam } from './sim.js';
+import { Packer, KINDS, COLUMNS, TRIBE_STRIDE, ITEM_STRIDE, startHash, setParam } from './sim.js';
 import { ORDER_KINDS } from './orders.js';
+import { isWeapon } from './items.js';
 
 const TAU = Math.PI * 2;
 const MAX_KEPT = 32;   // snapshots kept at most (normally 2–5: until the moment drawn has passed them)
@@ -91,12 +96,25 @@ export class Mirror {
         // drawn there instead of where the snapshots have it. Null: nobody.
         this.pose = null;
         this.posed = false;     // the blended positions hold a pose
-        // The player's spears in flight (five numbers each: x, y, vx, vy,
-        // progress), as of step `spearsAt`, and its kills not yet butchered
-        // ([{id, kind, x, y, meat, cut}]): the latest snapshot's (spears.js).
+        // The player's spears and arrows in flight (six numbers each: x, y,
+        // vx, vy, progress, kind: an ITEM_KINDS code), as of step `spearsAt`,
+        // and the kills not yet butchered ([{id, kind, x, y, meat, cut, by}]):
+        // the latest snapshot's (spears.js).
         this.spears = NO_EVENTS;
         this.spearsAt = 0;
         this.carcasses = NO_EVENTS;
+        // Items (items.js), as of the snapshot shown: id → {id, kind, rarity,
+        // trait, mult, maker, tribe, made, legend, bearer, x, y, wear (0..1),
+        // kills}; who holds what (person id → {weapon, tool}, each an item or
+        // undefined; for the player, what is in its hands, not its spares);
+        // and the legends, newest first.
+        this.items = new Map();
+        this.byBearer = new Map();
+        this.legends = [];
+        this.itemInfo = new Map();  // every item described so far (the same objects as in items)
+        this.goneItems = [];        // [time, ids] of snapshots received: descriptions to forget once shown
+        this.legendsDirty = false;
+        this.hands = [];            // spare {weapon, tool} objects for byBearer
 
         // Plumbing.
         this.pops = [this.herbivores, this.carnivores, this.humans];
@@ -227,6 +245,12 @@ export class Mirror {
         this.spears = NO_EVENTS;
         this.spearsAt = 0;
         this.carcasses = NO_EVENTS;
+        this.items = new Map();
+        this.byBearer = new Map();
+        this.legends = [];
+        this.itemInfo = new Map();
+        this.goneItems = [];
+        this.legendsDirty = false;
         this.base = null;
         this.known = new Map();
         this.watch = 0;
@@ -298,8 +322,18 @@ export class Mirror {
         });
         snap.g = f.subarray(o, o + snap.grassLength);
         for (const d of snap.newTribes) {
-            this.known.set(d.id, { ...d, camp: { ...d.camp }, store: 0, members: 0, adults: 0, births: 0, alive: true, order: null });
+            this.known.set(d.id, { ...d, camp: { ...d.camp }, store: 0, members: 0, adults: 0, births: 0, alive: true, order: null, wood: 0, flint: 0, hide: 0 });
         }
+        // Items described (again, when they change: a legend), and those gone.
+        if (snap.newItems) {
+            for (const d of snap.newItems) {
+                const had = this.itemInfo.get(d.id);
+                if (had) Object.assign(had, d);
+                else this.itemInfo.set(d.id, { ...d, bearer: 0, x: 0, y: 0, wear: 1, kills: 0 });
+                if (d.legend) this.legendsDirty = true;
+            }
+        }
+        if (snap.goneItems?.length) this.goneItems.push(snap.time, snap.goneItems);
         if (snap.samples.length && this.onSamples) this.onSamples(snap.samples);
         if (snap.events?.length) {
             // Each comes into view with the step it happened in (World.events
@@ -429,6 +463,10 @@ export class Mirror {
             t.camp.x = s.tribes[q + 5];
             t.camp.y = s.tribes[q + 6];
             t.order = orderAt(s.tribes, q + 7, t.order);
+            // Materials in store (items.js).
+            t.wood = s.tribes[q + 10];
+            t.flint = s.tribes[q + 11];
+            t.hide = s.tribes[q + 12];
             t.alive = true;
             tribes.push(t);
             this.tribeById.set(t.id, t);
@@ -444,12 +482,65 @@ export class Mirror {
             fallen.push(t);
         }
         this.fallen = fallen;
+        this.showItems(s);
 
         // A snapshot taken before our last follow() still has the old one's fate.
         if (s.seq === this.asked) {
             this.watch = s.watch;
             this.fate = s.fate;
             this.heir = s.heir;
+        }
+    }
+
+    // The items of snapshot s: where each is and who holds it, who holds
+    // what, and the legends. Descriptions of items gone by s are forgotten.
+    showItems(s) {
+        const gone = this.goneItems;
+        while (gone.length && gone[0] <= s.time) {
+            for (const id of gone[1]) this.itemInfo.delete(id);
+            gone.splice(0, 2);
+            this.legendsDirty = true;
+        }
+        const items = this.items;
+        const byBearer = this.byBearer;
+        for (const h of byBearer.values()) this.hands.push(h);
+        byBearer.clear();
+        items.clear();
+        const nums = s.items;
+        if (!nums) return;
+        let legends = 0;
+        for (let q = 0; q < nums.length; q += ITEM_STRIDE) {
+            const item = this.itemInfo.get(nums[q]);
+            if (!item) continue;
+            item.bearer = nums[q + 1];
+            item.x = nums[q + 2];
+            item.y = nums[q + 3];
+            item.wear = nums[q + 4];
+            item.kills = nums[q + 5];
+            items.set(item.id, item);
+            if (item.legend) legends++;
+            if (!item.bearer) continue;
+            let h = byBearer.get(item.bearer);
+            if (!h) {
+                h = this.hands.pop() ?? { weapon: undefined, tool: undefined };
+                h.weapon = undefined;
+                h.tool = undefined;
+                byBearer.set(item.bearer, h);
+            }
+            if (isWeapon(item.kind)) {
+                if (!h.weapon) h.weapon = item;
+            } else if (!h.tool) h.tool = item;
+        }
+        // The player's hands are what it holds, not its spares.
+        const p = this.player;
+        if (p && p.id && byBearer.has(p.id)) {
+            const h = byBearer.get(p.id);
+            h.weapon = p.weapon ? items.get(p.weapon) : undefined;
+            h.tool = p.tool ? items.get(p.tool) : undefined;
+        }
+        if (this.legendsDirty || legends !== this.legends.length) {
+            this.legendsDirty = false;
+            this.legends = [...items.values()].filter((it) => it.legend).sort((a, b) => b.legend.time - a.legend.time);
         }
     }
 

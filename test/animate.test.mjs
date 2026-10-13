@@ -634,7 +634,7 @@ test("the player's spears are drawn where they are at the moment shown", () => {
     const m = motion();
     const t = thrown();
     const v = view();
-    const s = [110, 100, 3, 0, 0.45]; // as of step 10: 9 of its 20 units out
+    const s = [110, 100, 3, 0, 0.45, 1]; // as of step 10: 9 of its 20 units out (a spear)
     t.update(spearWorld(s, 10, 9), v, () => 0, m.clock);
     assert.equal(t.mesh.count, 1);
     assert.ok(Math.abs(placed(t)[0] - 7) < 1e-9, 'a step back along its flight');
