@@ -91,12 +91,36 @@ export function atMoment(c, seed, text) {
 
 let atCache = { seed: NaN, offset: 0 };
 
+// ---- The home screen's dawn ----
+
+// While the home screen is up (home/home.js), the page shows a dawn of its
+// own, whatever the world's hour: `setShift(steps)` moves the page's clock,
+// so the sky, the land and every other reader of clockOf agree, and
+// heldDawn says where to. Leaving, home.js eases the shift back to 0, and
+// the sky catches up with the world. (`?at=` wins over it.)
+let shift = 0;
+export function setShift(steps) {
+    shift = steps;
+}
+
+// The dawn: from `from` of the way through it (the sun rises halfway), at
+// `pace` of the world's pace, held at `to`.
+export const DAWN = { from: 0.42, to: 0.85, pace: 0.08 };
+
+// The moment to show for a home screen opened when the world was at
+// `opened`, the world now at `time`: that day's dawn, drawn out.
+export function heldDawn(c, opened, time) {
+    const day = Math.floor(opened / c.day) * c.day;
+    const u = Math.min(DAWN.to, DAWN.from + (Math.max(0, time - opened) * DAWN.pace) / c.dawn);
+    return day + c.dawn * u;
+}
+
 // The moment the page shows, in steps (fractional): the Mirror's drawn
 // moment (`shown`, between snapshots) or the World's `time`. (With `?at=`,
 // that moment is shown first, and the world's time runs on from it.)
 export function clockOf(world) {
     const base = world.shown ?? world.time ?? 0;
-    if (!AT || !world.p?.calendar) return base;
+    if (!AT || !world.p?.calendar) return base + shift;
     if (atCache.seed !== world.seed) {
         const at = atMoment(world.p.calendar, world.seed, AT);
         atCache = { seed: world.seed, offset: at === null ? 0 : at - base };

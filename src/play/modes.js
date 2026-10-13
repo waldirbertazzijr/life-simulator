@@ -56,6 +56,7 @@ import { Kit } from './kit.js';
 import { Lead } from './lead.js';
 import { Pouch } from './pouch.js';
 import { fillHud } from './hud-state.js';
+import { factsOf } from '../home/hints.js';
 import { nightNow, restSpeed, SLEEP_SPEED } from './sleep.js';
 import { clamp, wrapDelta, angleDelta } from '../view3d/util.js';
 
@@ -105,6 +106,7 @@ export function pickHeir(world, dead) {
 }
 
 const freshStory = () => ({ played: new Map() });
+const OUT_OF_BODY = Object.freeze({ inBody: false }); // (the hints' facts, away from a body)
 
 export class Modes {
     constructor(env) {
@@ -146,6 +148,7 @@ export class Modes {
         this.kit = new Kit(this);     // items in hand, the craft menu (kit.js)
         this.lead = new Lead(this);   // leading your tribe (lead.js)
         this.pouch = new Pouch();     // what the pouch's slot shows (pouch.js)
+        this.hints = env.hints ?? null; // first steps (home/hints.js), shown on the HUD
         this.input.onAction = (name, info) => this.action(name, info);
     }
 
@@ -180,11 +183,12 @@ export class Modes {
         return this.enter(true);
     }
 
-    // Play: lead this tribe, as its most experienced adult.
-    startPlay(tribeId) {
+    // Play: lead this tribe, as `chosen` (Begin a life: home/home.js) or else
+    // as its most experienced adult.
+    startPlay(tribeId, chosen = 0) {
         if (this.dying) return false;
-        const id = mostExperienced(this.world, tribeId) || eldestOf(this.world, tribeId);
-        if (!id) return false;
+        const id = chosen || mostExperienced(this.world, tribeId) || eldestOf(this.world, tribeId);
+        if (!id || !this.world.find(id)) return false;
         this.over = false;
         this.hud.hideSummary();
         this.story = freshStory();
@@ -570,6 +574,7 @@ export class Modes {
             this.tribe = f.pop.tribe[f.i];
             this.record(f);
         }
+        this.hints?.update(this.inBody && !this.dying ? factsOf(this) : OUT_OF_BODY, dt);
         // Lock-on: kept while the target lives and is near, the look turned to it.
         if (this.lock) this.lock = this.inBody ? keepLock(w, this.body, this.lock, this.view, dt) : 0;
         const rig = this.env.rig();
@@ -585,6 +590,7 @@ export class Modes {
 
     // One of this frame's events (the Mirror's), to whichever part it is about.
     event(e) {
+        this.hints?.event(e, this.self, this.tribe);
         switch (e.type) {
             case 'bite':
                 if (e.id !== this.self || !this.self) break;

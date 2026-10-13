@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Life Simulator</title>
+    <title>Hearthline</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23101211'/%3E%3Ccircle cx='6' cy='9' r='2.2' fill='%23ece6d6'/%3E%3Cpath d='M13 5 9 7.2l1.6 1.6z' fill='%23e4664f'/%3E%3C/svg%3E">
     <style>
         :root {
@@ -520,8 +520,156 @@
         .console-line span { color: var(--muted); }
         #console-input { flex: 1; min-width: 0; font: inherit; color: var(--text); background: none; border: 0; outline: none; caret-color: var(--accent); }
         /* Play: admin commands were used in this game. */
-        #hud-admin { position: absolute; top: 24px; right: 30px; font-size: 14px; font-style: italic; letter-spacing: 0.06em; color: var(--hud-muted); }
+        #hud-admin { position: absolute; top: 24px; right: 64px; font-size: 14px; font-style: italic; letter-spacing: 0.06em; color: var(--hud-muted); }
         #hud-admin[hidden] { display: none; }
+
+        /* First steps (home/hints.js): under the prompt, the HUD's band and
+           keys; it fades in, and out once done. */
+        #hud-hint { position: absolute; left: 50%; bottom: 60px; transform: translateX(-50%); padding: 7px 70px; font-size: 18px; white-space: nowrap; opacity: 0; transition: opacity 1.2s ease; }
+        #hud-hint.on { opacity: 1; transition: opacity 0.6s ease; }
+        #hud-hint kbd, .home-keys kbd {
+            display: inline-block; min-width: 22px; margin: 0 6px; padding: 0 6px; line-height: 21px; text-align: center;
+            font: 500 14px var(--serif); border: 1px solid var(--hud-line); border-radius: 2px; background: rgba(8, 9, 9, 0.4);
+        }
+        #hud-hint kbd + kbd { margin-left: -2px; }
+
+        /* ---- The home screen (home/home.js): the HUD's face over the
+           living world. The panel shows only in the God view. ---- */
+        body.home #panel, body.home #notice, body.home #hud { display: none; }
+        #home {
+            position: fixed; inset: 0; z-index: 20; overflow: hidden; user-select: none; -webkit-user-select: none;
+            font-family: var(--serif); color: var(--hud-text);
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85), 0 0 10px rgba(0, 0, 0, 0.45);
+        }
+        #home[hidden], .home-page[hidden] { display: none; }
+        .home-shade {
+            position: absolute; inset: 0; pointer-events: none; transition: background 0.9s ease;
+            background: linear-gradient(rgba(6, 7, 7, 0.3), transparent 26%, transparent 50%, rgba(6, 7, 7, 0.62));
+        }
+        #home[data-page="people"] .home-shade, #home[data-page="who"] .home-shade { background: linear-gradient(rgba(6, 7, 7, 0.45), transparent 22%, transparent 55%, rgba(6, 7, 7, 0.7)); }
+        #home[data-page="look"] .home-shade { background: rgba(6, 7, 7, 0.2); }
+        #home[data-page="settings"] .home-shade, #home[data-page="credits"] .home-shade { background: rgba(6, 7, 7, 0.45); }
+        #home[data-page="promise"] .home-shade { background: rgba(6, 7, 7, 0.74); }
+        .home-page { position: absolute; inset: 0; }
+        #home button { font-family: var(--serif); color: var(--hud-text); text-shadow: inherit; }
+        #home button:hover { background: none; color: var(--hud-text); }
+        #home button:focus-visible { outline: 1px solid var(--hud-line); outline-offset: 2px; }
+        /* A band that fades at both ends, with hairlines that do too (the craft menu's). */
+        .home-band.on, #home-menu button.on, .set-row.on {
+            background: linear-gradient(90deg, transparent, rgba(238, 232, 218, 0.11) 20%, rgba(238, 232, 218, 0.11) 80%, transparent);
+            box-shadow: inset 0 1px 0 rgba(238, 232, 218, 0.16), inset 0 -1px 0 rgba(238, 232, 218, 0.16);
+        }
+
+        /* The title, and the menu. */
+        .home-brand { position: absolute; left: 0; right: 0; top: 16vh; text-align: center; animation: rise 2.6s ease both; }
+        .home-name {
+            font-weight: 500; font-size: clamp(56px, 9.5vw, 128px); line-height: 1; letter-spacing: 0.07em;
+            color: #f4ecd9; text-shadow: 0 2px 4px rgba(0, 0, 0, 0.55), 0 0 34px rgba(0, 0, 0, 0.35);
+        }
+        .home-tagline { display: flex; align-items: center; justify-content: center; gap: 18px; margin-top: 16px; font-style: italic; font-size: clamp(19px, 2vw, 25px); color: rgba(238, 232, 218, 0.78); }
+        .home-tagline::before, .home-tagline::after { content: ""; width: clamp(36px, 9vw, 130px); height: 1px; background: linear-gradient(90deg, transparent, rgba(238, 232, 218, 0.4)); }
+        .home-tagline::after { transform: scaleX(-1); }
+        #home-menu {
+            position: absolute; left: 50%; top: max(50vh, 330px); transform: translateX(-50%);
+            width: min(440px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 2px; animation: rise 2.2s ease 0.6s both;
+        }
+        #home-menu button {
+            display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; height: auto; min-height: 44px;
+            padding: 5px 0; border: 0; border-radius: 0; font-size: 22px; line-height: 1.2; letter-spacing: 0.04em;
+        }
+        #home-menu button:disabled { opacity: 0.42; }
+        #home-menu .sub { font-size: 15px; font-style: italic; letter-spacing: 0.01em; color: var(--hud-muted); margin-top: 1px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .home-keys { position: absolute; left: 0; right: 0; bottom: 20px; text-align: center; font-size: 15px; font-style: italic; color: var(--hud-muted); }
+        .home-keys kbd { margin: 0 4px; font-style: normal; }
+
+        /* Begin a life: a heading at the top, the cards along the foot. */
+        .home-step { position: absolute; left: 0; right: 0; top: 26px; display: flex; flex-direction: column; align-items: center; gap: 2px; animation: rise 1s ease both; }
+        .home-head { font-size: clamp(26px, 3vw, 36px); letter-spacing: 0.05em; }
+        .home-sub { display: flex; align-items: center; gap: 9px; font-style: italic; font-size: 18px; color: var(--hud-muted); }
+        .home-sub canvas { width: 27px; height: 18px; box-shadow: 0 0 0 1px var(--hud-line); }
+        .home-cards {
+            position: absolute; left: 0; right: 0; bottom: 112px; display: flex; justify-content: safe center; gap: 14px;
+            padding: 10px 24px 8px; overflow-x: auto; scroll-snap-type: x proximity; scrollbar-width: none; animation: rise 1s ease both;
+        }
+        .home-cards::-webkit-scrollbar { display: none; }
+        #home .card {
+            flex: none; scroll-snap-align: center; display: flex; gap: 14px; align-items: flex-start; width: 300px; height: auto;
+            padding: 14px 18px 13px; text-align: left; border: 0; border-radius: 0; font-size: 16px; line-height: 1.3;
+            background: rgba(10, 11, 11, 0.62); box-shadow: 0 0 0 1px var(--hud-line), 0 8px 24px rgba(0, 0, 0, 0.35);
+            backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+            transition: transform 0.25s ease, box-shadow 0.25s ease, background 0.25s ease;
+        }
+        #home .card:hover { background: rgba(14, 15, 14, 0.7); }
+        #home .card.on {
+            background: rgba(14, 15, 14, 0.8); transform: translateY(-6px);
+            box-shadow: 0 0 0 1px rgba(226, 193, 111, 0.62), 0 0 22px rgba(226, 193, 111, 0.16), 0 10px 26px rgba(0, 0, 0, 0.42);
+        }
+        .card canvas { flex: none; width: 48px; height: 32px; margin-top: 4px; box-shadow: 0 0 0 1px var(--hud-line); }
+        .card .card-text { display: flex; flex-direction: column; min-width: 0; }
+        .card span { display: block; }
+        .card .name { font-size: 25px; line-height: 1.15; }
+        .card .culture { font-style: italic; font-size: 18px; color: #e8d9b2; }
+        .card .size, .card .land, .card .age, .card .deeds { color: var(--hud-muted); }
+        .card .land { font-style: italic; }
+        .card .traits { font-style: italic; color: #e8d9b2; }
+        #home .adult-card { display: block; width: 200px; }
+        .adult-card .tag { display: inline; margin-left: 9px; font-size: 13px; font-style: italic; letter-spacing: 0.04em; color: var(--legend); vertical-align: 3px; }
+        .home-acts { position: absolute; left: 0; right: 0; bottom: 58px; display: flex; justify-content: center; gap: 12px; }
+        #home .home-acts button, #home .home-foot button, #home-promise-begin, #leave button {
+            height: 36px; padding: 0 22px; font: 19px var(--serif); color: var(--hud-text); border: 1px solid var(--hud-line); border-radius: 2px; background: rgba(8, 9, 9, 0.45);
+        }
+        #home .home-acts button.main, #home-promise-begin, #leave button.main { border-color: rgba(226, 193, 111, 0.6); }
+        #home .home-acts button:hover, #home .home-foot button:hover, #home-promise-begin:hover, #leave button:hover { background: rgba(238, 232, 218, 0.08); }
+
+        /* Settings and credits: a dark box in the middle, as the craft menu. */
+        .home-page.home-box {
+            inset: auto; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 48px);
+            overflow-y: auto; padding: 18px 26px 16px; background: rgba(10, 11, 11, 0.84);
+            box-shadow: 0 0 0 1px var(--hud-line), 0 8px 30px rgba(0, 0, 0, 0.45); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+        }
+        .home-box .home-head { display: block; padding-bottom: 10px; text-align: center; border-bottom: 1px solid var(--hud-line); }
+        .set-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 14px; padding: 10px 8px; border-bottom: 1px solid rgba(238, 232, 218, 0.1); font-size: 20px; }
+        .set-opts { display: flex; gap: 4px; }
+        #home .set-opts button { min-width: 0; height: 30px; padding: 0 12px; font-size: 17px; color: var(--hud-muted); border: 1px solid transparent; border-radius: 2px; }
+        #home .set-opts button[aria-pressed="true"] { color: var(--hud-text); border-color: var(--hud-line); background: rgba(238, 232, 218, 0.08); }
+        #home .set-again { grid-column: 1 / -1; justify-self: start; height: auto; padding: 0; border: 0; font-size: 15px; font-style: italic; color: var(--hud-muted); text-decoration: underline; text-decoration-color: rgba(238, 232, 218, 0.25); text-underline-offset: 3px; }
+        .home-foot { display: flex; justify-content: center; padding-top: 14px; }
+        #home-credit-list .credit { padding: 9px 2px; border-bottom: 1px solid rgba(238, 232, 218, 0.1); font-size: 16px; line-height: 1.35; color: var(--hud-muted); }
+        #home-credit-list .t { color: var(--hud-text); font-size: 18px; }
+        #home-credit-list a { color: var(--hud-muted); text-decoration: underline; text-decoration-color: rgba(238, 232, 218, 0.25); text-underline-offset: 2px; }
+        #home-credit-list a:hover { color: var(--hud-text); }
+
+        /* The promise: one page, line by line. */
+        .promise { position: absolute; left: 50%; top: 47%; transform: translate(-50%, -50%); width: min(660px, calc(100vw - 32px)); text-align: center; }
+        .promise-who { display: flex; align-items: center; justify-content: center; gap: 16px; margin-bottom: 26px; font-size: 19px; font-style: italic; letter-spacing: 0.03em; color: rgba(238, 232, 218, 0.78); animation: rise 1.2s ease both; }
+        .promise-who::before, .promise-who::after { content: ""; width: 70px; height: 1px; background: linear-gradient(90deg, transparent, rgba(238, 232, 218, 0.4)); }
+        .promise-who::after { transform: scaleX(-1); }
+        #home-promise-lines p { font-size: clamp(22px, 2.6vw, 31px); line-height: 1.6; animation: rise 1.4s ease both; }
+        #home-promise-lines p:last-child { margin-top: 14px; font-style: italic; color: #ecdcb4; }
+        #home-promise-begin { margin-top: 34px; animation: rise 1.2s ease both; }
+
+        /* The way home, from anywhere: a small mark at the top right. */
+        #home-mark {
+            position: fixed; top: 14px; right: 14px; z-index: 18; width: 34px; height: 34px; min-width: 0; padding: 0;
+            display: grid; place-items: center; color: rgba(238, 232, 218, 0.62); background: rgba(8, 9, 9, 0.32);
+            border: 1px solid rgba(238, 232, 218, 0.16); border-radius: 50%;
+        }
+        #home-mark:hover { color: #eee8da; background: rgba(8, 9, 9, 0.6); }
+        #home-mark[hidden] { display: none; }
+        #home-mark svg { width: 18px; height: 18px; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
+        /* Going home with a life not saved: ask first. */
+        #leave {
+            position: fixed; left: 50%; top: 42%; transform: translate(-50%, -50%); z-index: 27; width: min(460px, calc(100vw - 32px));
+            padding: 18px 24px 16px; text-align: center; font-family: var(--serif); color: var(--hud-text);
+            background: rgba(10, 11, 11, 0.9); box-shadow: 0 0 0 1px var(--hud-line), 0 8px 30px rgba(0, 0, 0, 0.45);
+            backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+        }
+        #leave[hidden] { display: none; }
+        #leave .title { font-size: 27px; letter-spacing: 0.03em; }
+        #leave p { margin-top: 6px; font-size: 17px; font-style: italic; color: var(--hud-muted); }
+        #leave .acts { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 16px; }
+        #leave-status { margin-top: 8px; font-size: 14px; color: #e3b2a6; }
+        #leave-status:empty { display: none; }
     </style>
 </head>
 <body>
@@ -529,7 +677,7 @@
 
     <aside id="panel">
         <header>
-            <h1>Life Simulator</h1>
+            <h1>Hearthline</h1>
             <button id="play" hidden title="Lead a tribe: play as its people">Play</button>
             <button id="blood" aria-pressed="true" title="Blood: on"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2.2C6.2 5 4.5 7.2 4.5 9.6a3.5 3.5 0 0 0 7 0C11.5 7.2 9.8 5 8 2.2z"/><path class="off" d="M3 13 13 3"/></svg></button>
             <button id="console-open" title="Admin console (` or F2)"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4.5 6.5 8 3 11.5"/><path d="M8.5 11.5H13"/></svg></button>
@@ -677,6 +825,8 @@
         </div>
         <div id="hud-work"><span class="what"></span><span class="bar"><span></span></span></div>
         <div id="hud-prompt" class="fade-band" hidden></div>
+        <!-- First steps (home/hints.js): a hint at the foot of the screen, once each. -->
+        <div id="hud-hint" class="fade-band" aria-live="polite"></div>
         <div class="hud-store fade-band" title="Your tribe's store of food"><span class="muted">store</span><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M11.5 3.5c3 0 5 2.2 5 4.8 0 3.2-3 5.2-6 5.2-1.6 0-2.6.6-3.3 1.4"/><path d="M11.5 3.5c-3 0-5.5 2.4-5.5 5.4 0 1.5.5 2.6 1.2 3.4"/><path d="M7.2 14.9 5 17.1"/><circle cx="4.2" cy="16.2" r="1.2"/><circle cx="5.9" cy="17.9" r="1.2"/></svg><span id="hud-store">0</span><span class="mats" id="hud-mats" hidden><span class="mat" title="Wood"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 13.5 13 4"/><path d="M7 17 16.5 7.5"/><circle cx="14.75" cy="5.75" r="2.47"/><circle cx="5.25" cy="15.25" r="2.47"/></svg><span id="hud-wood">0</span></span><span class="mat" title="Flint"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 13.5 7.5 5l6.5-1.5 3 7-4.5 6.5L6 17z"/><path d="M7.5 5l2 6 4.5-7.5M9.5 11l3 6.5"/></svg><span id="hud-flint">0</span></span><span class="mat" title="Hide"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 3.5c1.5 1 6.5 1 8 0 .5 2 2.5 3 3 4.5-1.5 1-1.5 3 0 4.5-1 1.5-2.5 2.5-3 4.5-1.5-1-6.5-1-8 0-.5-2-2-3-3-4.5 1.5-1.5 1.5-3.5 0-4.5.5-1.5 2.5-2.5 3-4.5z"/></svg><span id="hud-hide">0</span></span></span></div>
         <div class="hud-dot"></div>
         <div id="hud-ring" hidden></div>
@@ -724,6 +874,57 @@
     <section id="console" aria-label="Admin console" aria-hidden="true">
         <div id="console-log" role="log" aria-live="polite"></div>
         <label class="console-line"><span>›</span><input id="console-input" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Command"></label>
+    </section>
+
+    <!-- The home screen (home/home.js): the title and menu, Settings, Credits,
+         and Begin a life (your people, who you are, the promise). -->
+    <section id="home" hidden aria-label="Hearthline">
+        <div class="home-shade"></div>
+        <div id="home-title" class="home-page">
+            <div class="home-brand">
+                <div class="home-name">Hearthline</div>
+                <div class="home-tagline">A life well lived</div>
+            </div>
+            <nav id="home-menu" aria-label="Menu"></nav>
+        </div>
+        <div id="home-settings" class="home-page home-box" hidden>
+            <div class="home-head">Settings</div>
+            <div id="home-settings-rows"></div>
+            <div class="home-foot"><button type="button" data-back>Back</button></div>
+        </div>
+        <div id="home-credits" class="home-page home-box" hidden>
+            <div class="home-head">Credits</div>
+            <div id="home-credit-list"></div>
+            <div class="home-foot"><button type="button" data-back>Back</button></div>
+        </div>
+        <div id="home-people" class="home-page" hidden>
+            <div class="home-step"><span class="home-head">Choose your people</span><span class="home-sub">where your life begins</span></div>
+            <div class="home-cards" id="home-people-cards"></div>
+            <div class="home-acts"><button type="button" data-back>Back</button><button type="button" id="home-people-choose" class="main"></button></div>
+            <div class="home-keys"><kbd>←</kbd><kbd>→</kbd> browse · <kbd>Enter</kbd> choose · <kbd>Esc</kbd> back</div>
+        </div>
+        <div id="home-who" class="home-page" hidden>
+            <div class="home-step"><span class="home-head">Choose who you are</span><span class="home-sub"><canvas id="home-who-flag" width="54" height="36"></canvas><span id="home-who-tribe"></span></span></div>
+            <div class="home-cards" id="home-who-cards"></div>
+            <div class="home-acts"><button type="button" data-back>Back</button><button type="button" id="home-who-choose" class="main"></button></div>
+            <div class="home-keys"><kbd>←</kbd><kbd>→</kbd> browse · <kbd>Enter</kbd> choose · <kbd>Esc</kbd> back</div>
+        </div>
+        <div id="home-promise" class="home-page" hidden>
+            <div class="promise">
+                <div class="promise-who" id="home-promise-who"></div>
+                <div id="home-promise-lines"></div>
+                <button type="button" id="home-promise-begin">Begin</button>
+            </div>
+            <div class="home-keys"><kbd>Enter</kbd> begin · <kbd>Esc</kbd> back</div>
+        </div>
+    </section>
+    <!-- The way home, from the God view or a body. -->
+    <button id="home-mark" type="button" hidden title="Home" aria-label="Home"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M3.5 16.5h13"/><path d="M5 16.5V10a5 5 0 0 1 10 0v6.5"/><path d="M10 15.2c-1.5 0-2.4-.9-2.4-2.2 0-1.5 1.3-2.1 1.5-3.7 1.3.9 3.3 2.2 3.3 3.9 0 1.2-.9 2-2.4 2z"/></svg></button>
+    <section id="leave" hidden aria-label="Return home">
+        <div class="title">Return home?</div>
+        <p id="leave-text"></p>
+        <div class="acts"><button type="button" id="leave-save" class="main">Save and return</button><button type="button" id="leave-go">Return without saving</button><button type="button" id="leave-stay">Stay</button></div>
+        <div id="leave-status" aria-live="polite"></div>
     </section>
 
     <script type="importmap">{ "imports": { "three": "./vendor/three/three.module.min.js" } }</script>

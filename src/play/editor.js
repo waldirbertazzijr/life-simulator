@@ -35,6 +35,7 @@ export class Editor {
         this.openedAt = 0; // (performance.now() when it opened)
         this.preview = null;
         this.root = null;
+        this.onClose = null; // once closed, this is called (the home screen goes on to the promise)
         if (env.doc) this.bind(env.doc, env.win);
     }
 
@@ -111,6 +112,7 @@ export class Editor {
         if (this.env.input) this.env.input.blocked = false;
         if (this.root) this.root.hidden = true;
         this.preview?.stop();
+        this.onClose?.();
     }
 
     toggle(id) {

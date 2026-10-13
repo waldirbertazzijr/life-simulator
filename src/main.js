@@ -35,6 +35,10 @@ import { Editor } from './play/editor.js';
 import { setAside } from './orders.js';
 import { SaveStore } from './save-store.js';
 import { Saves, looksOf, putLooks } from './panel/saves.js';
+import { Home } from './home/home.js';
+import { HintStore, Hints } from './home/hints.js';
+import { Cinema } from './view3d/cinema.js';
+import { personName } from './play/names.js';
 
 const VIEWS = ['map', 'follow', 'first'];
 const BLOOD_KEY = 'life-simulator.blood';
@@ -57,6 +61,12 @@ const newRun = () => `${Date.now().toString(36)}-${Math.floor(Math.random() * 1e
 // at all, and may play.)
 const touchOnly = matchMedia('(pointer: coarse)').matches && !matchMedia('(any-pointer: fine)').matches;
 const canPlay = !!renderer.rig && !touchOnly;
+// The home screen (home/home.js) greets the page, unless `?oversee` (straight
+// to the God view, as automation wants) or `?poses` (a dev aid).
+const skipHome = query.has('oversee') || query.has('poses');
+// First steps in a body (home/hints.js), remembered by this browser.
+const hintStore = new HintStore(storage());
+const hints = new Hints(hintStore);
 
 // A Web Worker running the simulation, or (?noworker) the same simulation here.
 function createHost() {
@@ -259,6 +269,8 @@ const page = {
     },
     pauseMenu: () => saves.toggle(true),
     succession: () => saves.succession(),
+    hints,
+    beginLife: () => home.beginLife(),
 };
 const modes = new Modes(modesEnv(page));
 
@@ -293,6 +305,55 @@ const saves = new Saves({
     playing: () => !!modes.self,
     getPaused: () => paused,
     setPaused,
+    quiet: () => home.isOpen, // (the world behind the title is nobody's game)
+    closed: () => home.refresh(),
+});
+
+// The home screen (home/home.js): the title over the living world, Begin a
+// life, Oversee, Load, Settings and Credits; and the mark that comes back
+// to it. Its camera (view3d/cinema.js) steers the map's.
+const cinema = renderer.rig ? new Cinema(renderer.rig) : null;
+const home = new Home({
+    doc: document, win: window, world, saves, editor, cinema, input,
+    canPlay,
+    why: renderer.rig ? 'it needs a keyboard and a mouse' : 'it needs the 3D view',
+    settings: [
+        {
+            id: 'hints', label: 'Hints', options: [['on', 'On'], ['off', 'Off']],
+            get: () => (hintStore.on ? 'on' : 'off'), set: (v) => hintStore.setOn(v === 'on'),
+            again: () => hintStore.again(), againShown: () => hintStore.seen.size > 0, againLabel: 'show them all again',
+        },
+        { id: 'blood', label: 'Blood', options: [['on', 'On'], ['off', 'Off']], get: () => (blood ? 'on' : 'off'), set: (v) => setBlood(v === 'on') },
+        // GRAPHICS (connect at merge): the High/Medium/Low setting (view3d/graphics.js) goes here, e.g.
+        // { id: 'graphics', label: 'Graphics', options: QUALITIES.map((q) => [q, q[0].toUpperCase() + q.slice(1)]), get: getQuality, set: setQuality },
+    ],
+    // Into the chosen person's body, in Play mode.
+    life(tribeId, id) {
+        if (!modes.startPlay(tribeId, id)) return false;
+        input.lock(); // (the click or key that began it lets the pointer be locked)
+        return true;
+    },
+    oversee() {
+        setView('map');
+    },
+    // Home from a life: let go of it, and a fresh world dawns behind the title.
+    leave(hadLife) {
+        modes.stop();
+        if (hadLife) start(Math.floor(Math.random() * 1e6));
+    },
+    playing: () => !!modes.self && !modes.over,
+    name: () => personName(modes.self),
+    // On the home screen: no panel, nobody followed, the map's camera, the world at 1×.
+    shown(on) {
+        document.body.classList.toggle('home', on);
+        panel.suspend(on);
+        if (!on) return;
+        unfollow();
+        setSpeed(1);
+        setPaused(false);
+    },
+    setPaused,
+    getPaused: () => paused,
 });
 
 // What the page keeps with a save, besides the world: which game it is,
@@ -317,6 +378,7 @@ function record() {
 function resume(kept) {
     const page = kept.page ?? {};
     world.load(kept.data);
+    home.resumed();
     run = typeof page.run === 'string' ? page.run : newRun();
     putLooks(storage(), world.seed, page.looks);
     if (renderer.looks) renderer.looks.kept = renderer.looks.load(); // (attach lets go of the looks drawn so far)
@@ -377,6 +439,7 @@ function start(seed, p = params) {
     modes.reset();
     unfollow();
     keepSeed(seed);
+    home.newWorld();
 }
 
 // Keep ?seed= in the address, so reloading or sharing it gives this world
@@ -439,6 +502,7 @@ function frame(now) {
     terminal.frame();
 
     const target = followId ? world.find(followId) : null;
+    home.frame(dt / 1000); // (the home screen's dawn and camera, before the camera moves)
     const t1 = performance.now();
     renderer.updateCamera(world, target, dt / 1000);
     if (modes.inBody) {
@@ -468,8 +532,9 @@ const seedParam = Number(query.get('seed'));
 start(Number.isInteger(seedParam) && seedParam > 0 ? seedParam : Math.floor(Math.random() * 1e6));
 setSpeed(speed);
 setPaused(paused);
+if (!skipHome) home.open('title', { cut: true });
 window.addEventListener('resize', () => renderer.resize(world));
-saves.start(); // (what is kept; "continue" if there is an autosave)
+saves.start().then(() => home.refresh()); // (what is kept; "continue" if there is an autosave)
 requestAnimationFrame(frame);
 
 // For tinkering from the browser console:
@@ -485,6 +550,7 @@ requestAnimationFrame(frame);
 //   sim.run(steps)   test hook: step now; resolves to {time, counts, digest}
 //   sim.console      the admin console: sim.console.run('give bow legendary'), .lines (its log)
 //   sim.saves        saving and loading (panel/saves.js): sim.saves.save(1), .load(1), .open(), .last (timings)
+//   sim.home         the home screen (home/home.js): sim.home.open('people'), .go('oversee'), .setFocus(k), .choose(), .back(), .begin()
 //   sim.renderer
 window.sim = {
     get world() { return world; },
@@ -501,6 +567,7 @@ window.sim = {
     get timing() { return world.timing(); },
     console: terminal,
     saves,
+    home,
     renderer,
 };
 

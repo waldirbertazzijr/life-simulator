@@ -7,7 +7,8 @@
 // hud, follow(id, keepView), followed(), setView(v), setSpeed(s),
 // getSpeed(), setPaused(p), getPaused(), changed() (the panel's play bar
 // is out of date), editLook(id, heir) (the character editor), pauseMenu() (P: the
-// save menu, paused) and succession() (your heir took over: an autosave) }.
+// save menu, paused), succession() (your heir took over: an autosave), hints (the
+// first steps: home/hints.js) and beginLife() (the home screen's Begin a life) }.
 import { personName } from './names.js';
 
 // What modes.js is given as `env`.
@@ -31,11 +32,14 @@ export function modesEnv(page) {
             // The panel's buttons would otherwise keep the keyboard's focus.
             if (on && document.activeElement instanceof HTMLElement) document.activeElement.blur();
         },
-        openPicker: () => panel.openPicker(world),
+        // Play again (the story's button): Begin a life on the home screen, or the panel's picker.
+        openPicker: () => (page.beginLife ? page.beginLife() : panel.openPicker(world)),
         changed: page.changed,
         // P in a body: pause, with the save menu (panel/saves.js); and your heir has taken over (an autosave).
         pauseMenu: page.pauseMenu,
         succession: page.succession,
+        // First steps (home/hints.js), or null.
+        hints: page.hints ?? null,
         // The character editor (editor.js) for a person (`heir`: just become them).
         editLook: (id, heir) => page.editLook?.(id, heir),
         // Poses on bodies (the 3D view's; the flat one has none).
@@ -69,7 +73,8 @@ export function modesEnv(page) {
 //                        →, ← or ↓, right click, Shift + right click, C (keys
 //                        in the craft menu: play.press('ArrowDown'), ...)
 //   play.editor          the character editor (open(id), pick(field, value), close())
-//   play.state           who, where, stamina, snaps (moves turned down), the hands, the items...
+//   play.state           who, where, stamina, snaps (moves turned down), the hands, the items,
+//                        the hint shown...
 //   play.modes
 export function windowPlay(page, modes) {
     const { world, renderer, canvas, panel, hud } = page;
@@ -128,6 +133,7 @@ export function windowPlay(page, modes) {
                 stamina: Math.round(modes.body.stamina), x: +modes.body.x.toFixed(2), y: +modes.body.y.toFixed(2),
                 snaps: modes.stats.snaps, placed: modes.stats.placed, speed: page.getSpeed(), paused: page.getPaused(),
                 call: modes.calls.call.kind, armed: modes.calls.armed,
+                hint: modes.hints?.current?.id ?? null,
                 player: p ? { id: p.id, x: +p.x.toFixed(2), y: +p.y.toFixed(2), auto: p.auto, spirit: +p.spirit.toFixed(1), resting: p.resting } : null,
                 hands: p ? {
                     carry: +p.carry.toFixed(1), energy: +p.energy.toFixed(1), reload: p.reload, gathering: p.gathering, butchering: p.butchering,

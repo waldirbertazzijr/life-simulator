@@ -61,6 +61,7 @@ export function fillHud(m, s) {
     s.materials = s.gear.on && tribe ? { wood: tribe.wood ?? 0, flint: tribe.flint ?? 0, hide: tribe.hide ?? 0 } : null;
     s.item = crossName(s.gear, s.pouch);
     s.work = m.dying ? null : m.asleep ? sleepWork(w) : workOf(w, p, s.gear, pouch);
+    s.hint = m.hints?.shown ?? null; // first steps (home/hints.js)
     if (m.kit.menu) m.kit.showCraft();
     s.ring = null;
     s.target = null;

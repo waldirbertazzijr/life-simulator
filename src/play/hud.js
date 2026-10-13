@@ -118,7 +118,7 @@ export class Hud {
             const el = this.root.querySelector(`.vbar.${k}`);
             this.bars[k] = { bar: new TrailBar(), fill: el.querySelector('.fill'), trail: el.querySelector('.trail') };
         }
-        this.shown = { name: null, age: null, date: null, flag: null, store: null, prompt: null, reload: null, charge: null, call: null, gear: null, item: null, mats: null, pouch: null, work: null };
+        this.shown = { name: null, age: null, date: null, flag: null, store: null, prompt: null, reload: null, charge: null, call: null, gear: null, item: null, mats: null, pouch: null, work: null, hint: '' };
         this.toolSlot = $('hud-tool');
         this.pouchSlot = $('hud-pouch');
         this.workEl = $('hud-work');
@@ -195,7 +195,26 @@ export class Hud {
         this.showItem(s.item);
         this.showMaterials(s.materials);
         this.work(s.work);
+        this.hint(s.hint);
         this.drawCompass(s);
+    }
+
+    // A first-steps hint at the foot of the screen (home/hints.js): { id,
+    // parts (text, and keys as { key }) } or null. It fades in, and out with
+    // what it last said.
+    hint(h) {
+        const id = h ? h.id : '';
+        if (id === this.shown.hint) return;
+        this.shown.hint = id;
+        const el = this.$('hud-hint');
+        el.classList.toggle('on', !!h);
+        if (!h) return;
+        el.replaceChildren(...h.parts.map((p) => {
+            if (typeof p === 'string') return this.doc.createTextNode(p);
+            const kbd = this.doc.createElement('kbd');
+            kbd.textContent = p.key;
+            return kbd;
+        }));
     }
 
     // The work bar, centred just above the prompt: what your person is at

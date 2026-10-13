@@ -35,8 +35,13 @@
 //   playing()    someone is played: the "continue" offer goes
 //   getPaused(), setPaused(p)
 //   input        play/input.js (let go of while open)
+//   quiet()      the home screen is up (home/home.js): nothing is played, nothing autosaved
+//   closed()     the menu has closed (the home screen's Continue may have changed)
 //   doc, win     the DOM (none in tests)
 // }
+//
+// From the home screen the menu opens for loading only (open(false, 'load')):
+// no saving to a slot, no export of the world behind the title.
 import { packFile, unpackFile, SaveError, SAVE_VERSION } from '../save.js';
 import { dateLabel } from '../calendar.js';
 import { StorageError } from '../save-store.js';
@@ -115,8 +120,10 @@ export class Saves {
         this.day = null;        // the world's day at the last look (dawn: a new one)
         this.lastDawn = -Infinity;
         this.lastAuto = -1;     // the world time of the last autosave
+        this.keptAt = -Infinity; // the world time of this game's latest save (any slot), or of the save loaded
         this.last = null;       // the latest save: {slot, ms (in the simulation), bytes, captureMs, storeMs, reason}
         this.confirming = null; // {slot, act, until}
+        this.only = null;       // 'load': the menu opened from the home screen, for loading
         this.status = '';
         if (env.doc) this.bind(env.doc, env.win);
     }
@@ -129,6 +136,7 @@ export class Saves {
         this.subEl = $('sv-sub');
         this.statusEl = $('sv-status');
         this.fileEl = $('sv-file');
+        this.exportEl = $('sv-export');
         this.continueEl = $('continue');
         $('sv-close').addEventListener('click', () => this.close());
         $('sv-export').addEventListener('click', () => this.exportNow());
@@ -209,6 +217,13 @@ export class Saves {
     newWorld() {
         this.day = null;
         this.lastAuto = -1;
+        this.keptAt = -Infinity;
+    }
+
+    // Has the world moved on since this game was last saved (or loaded), by
+    // more than `grace` steps (10 s at 1×)? The home mark asks first if so.
+    unsaved(grace = 150) {
+        return !(this.world.time - this.keptAt <= grace);
     }
 
     // Every few frames (main.js): the dawn's autosave, and the offer.
@@ -251,13 +266,15 @@ export class Saves {
         this.last.storeMs = performance.now() - t0;
         const { data, ...summary } = kept;
         this.slots.set(kept.slot, summary);
+        this.keptAt = kept.meta.time;
         this.problem = null;
     }
 
-    // The autosave, for `reason` ('dawn', 'hidden', 'closed', 'heir'): not
-    // while "continue" is offered, nor twice for the same moment.
+    // The autosave, for `reason` ('dawn', 'hidden', 'closed', 'heir', 'home'): not
+    // while "continue" is offered, nor on the home screen, nor twice for the
+    // same moment.
     async autosave(reason) {
-        if (this.offered || this.busy || !this.world.p || this.world.time === this.lastAuto) return false;
+        if (this.offered || this.busy || this.env.quiet?.() || !this.world.p || this.world.time === this.lastAuto) return false;
         this.busy = true;
         try {
             const kept = await this.capture('auto');
@@ -309,6 +326,7 @@ export class Saves {
         this.dismiss();
         this.newWorld();
         this.lastAuto = kept.meta.time; // (nothing new to autosave yet)
+        this.keptAt = kept.meta.time;
         if (this.isOpen) this.close(false);
     }
 
@@ -355,10 +373,13 @@ export class Saves {
         else this.open(fromBody);
     }
 
-    // Open it; from a body (P), the world waits until it closes.
-    open(fromBody = false) {
+    // Open it; from a body (P), the world waits until it closes. `only`
+    // 'load': for loading alone (from the home screen).
+    open(fromBody = false, only = null) {
         if (this.isOpen) return;
         this.isOpen = true;
+        this.only = only;
+        if (this.exportEl) this.exportEl.hidden = only === 'load';
         this.openedAt = typeof performance !== 'undefined' ? performance.now() : 0;
         this.paused = fromBody && !this.env.getPaused();
         if (this.paused) this.env.setPaused(true);
@@ -383,6 +404,7 @@ export class Saves {
         if (this.paused && resume) this.env.setPaused(false);
         this.paused = false;
         this.confirming = null;
+        this.env.closed?.();
     }
 
     async refresh() {
@@ -450,7 +472,7 @@ export class Saves {
             const kept = this.slots.get(slot) ?? null;
             if (slot === 'previous' && !kept) continue;
             const acts = kept ? ['load', 'export', 'delete'] : [];
-            if (MANUAL.includes(slot)) acts.unshift('save');
+            if (MANUAL.includes(slot) && this.only !== 'load') acts.unshift('save');
             out.push({ slot, name: NAMES[slot], kept, acts });
         }
         return out;
@@ -460,7 +482,8 @@ export class Saves {
         if (!this.root) return;
         const doc = this.doc;
         const w = this.world;
-        this.subEl.textContent = w.p ? `this game: ${dateLabel(w.p.calendar, w.time)} · seed ${w.seed}` : '';
+        this.subEl.textContent = this.only === 'load' ? 'carry on a game'
+            : w.p ? `this game: ${dateLabel(w.p.calendar, w.time)} · seed ${w.seed}` : '';
         const rows = this.rows().map(({ slot, name, kept, acts }) => {
             const row = doc.createElement('div');
             row.className = `sv-row${kept ? '' : ' empty'}`;

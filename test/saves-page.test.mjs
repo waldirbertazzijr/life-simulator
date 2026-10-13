@@ -249,3 +249,25 @@ test('the console: save and load are the page\'s, with their slots', async () =>
     assert.ok(text.includes('error: slot 3 is empty'));
     assert.ok(text.includes('error: no such slot: auto (1, 2, 3)'));
 });
+
+test('the home screen: nothing is autosaved behind the title; the menu loads only; a game saved lately is not "unsaved"', async () => {
+    let home = true;
+    const { s, world, store } = saves({ quiet: () => home });
+    assert.equal(await s.autosave('dawn'), false, 'not behind the title');
+    assert.equal(store.writes, 0);
+    home = false;
+    world.time = 1000;
+    assert.equal(s.unsaved(), true, 'never saved');
+    assert.equal(await s.autosave('home'), true);
+    assert.equal(s.unsaved(), false, 'just saved');
+    world.time = 1000 + 151;
+    assert.equal(s.unsaved(), true, 'the world has moved on');
+    s.newWorld();
+    assert.equal(s.unsaved(), true);
+    s.open(false, 'load');
+    assert.ok(s.rows().every((r) => !r.acts.includes('save')), 'loading only');
+    s.close();
+    s.open(false);
+    assert.ok(s.rows().some((r) => r.acts.includes('save')));
+    s.close();
+});

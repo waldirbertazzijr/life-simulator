@@ -14,6 +14,7 @@
 //   make shot ARGS="--query '?seed=3&2d'"
 //   make shot ARGS="--eval 'sim.saves.save(1)' --reload-eval 'sim.saves.offered'"   # then reload, and look again
 //   make shot ARGS="--url https://waldirbertazzijr.github.io/life-simulator/?seed=7"
+//   make shot ARGS="--home"                           # the home screen (else `oversee` is added: the God view)
 import { spawn } from 'node:child_process';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -27,7 +28,11 @@ const opt = (name, fallback) => {
 const [W, H] = opt('size', '1440x900').split('x').map(Number);
 const DPR = Number(opt('dpr', '1'));
 const MOBILE = args.includes('--mobile');
-const QUERY = opt('query', '?seed=7');
+// The page opens on its home screen; `oversee` skips it (straight to the God
+// view, as before), unless --home asks for the home screen.
+const HOME = args.includes('--home');
+const ASKED = opt('query', '?seed=7');
+const QUERY = HOME || /[?&]oversee\b/.test(ASKED) ? ASKED : `${ASKED}${ASKED.includes('?') ? '&' : '?'}oversee`;
 const SPEED = opt('speed', '');
 const MARKS = opt('at', '4000').split(',').map(Number);
 const EVAL = opt('eval', '');
