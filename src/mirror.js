@@ -18,7 +18,9 @@
 // the seed and the parameters, and reset() builds the same World here, keeps
 // its terrain and grass grid, and checks it against the simulation's own
 // (startHash). That World's first moment is also shown until the
-// simulation's first snapshot arrives; it is the same moment.
+// simulation's first snapshot arrives; it is the same moment. A saved world
+// comes the same way: load() builds it here too (save.js loadWorld), and
+// sends the save to the simulation to carry on from.
 //
 // Interpolation. At 1× a step lasts four frames of a 60 Hz screen; at 64× a
 // frame holds about 16 steps, give or take, as snapshots never arrive exactly
@@ -34,6 +36,9 @@ import { World } from './world.js';
 import { Packer, KINDS, COLUMNS, TRIBE_STRIDE, ITEM_STRIDE, startHash, setParam } from './sim.js';
 import { ORDER_KINDS } from './orders.js';
 import { isWeapon } from './items.js';
+import { playerSnapshot } from './player.js';
+import { packCarcasses } from './spears.js';
+import { loadWorld, transferOf } from './save.js';
 
 const TAU = Math.PI * 2;
 const MAX_KEPT = 32;   // snapshots kept at most (normally 2–5: until the moment drawn has passed them)
@@ -185,8 +190,13 @@ export class Mirror {
     }
 
     setPaused(paused) {
-        if (!paused) this.resync = true;
         this.host.send({ type: 'pause', paused });
+        if (paused) return;
+        this.resync = true;
+        // Ask afresh: the snapshot asked for while paused never came (nothing
+        // was new), and the worker rests once nothing has been asked for in a
+        // while, so without a new ask it would never step again.
+        this.waiting = false;
     }
 
     // Change a parameter in the running simulation, e.g. set('herbivore.speed', 0.7).
@@ -223,10 +233,39 @@ export class Mirror {
         });
     }
 
+    // Save the simulation's world now (save.js): resolves to the `saved`
+    // message, {slot, data, ms, bytes}.
+    save(slot) {
+        const id = this.nextReply++;
+        return new Promise((resolve) => {
+            this.replies.set(id, resolve);
+            this.host.send({ type: 'save', slot, id });
+        });
+    }
+
     // A new world. The land and the first moment are built here (the same
     // World the simulation builds); everything after comes in snapshots.
     reset(params, seed, aspect) {
-        const world = new World(params, { seed, aspect });
+        this.begin(new World(params, { seed, aspect }));
+        // (After the above: with ?noworker the answer can come back at once.)
+        this.host.send({ type: 'start', gen: this.gen, seed, aspect, params });
+    }
+
+    // The world of a save (save.js): built here too, as a new one is (its
+    // land, and its first moment, checked against the simulation's own), and
+    // sent to the simulation to carry on from. A save that cannot be loaded
+    // throws a SaveError here, before anything has changed.
+    load(data) {
+        const world = loadWorld(data, { paths: false });
+        this.begin(world);
+        this.host.send({ type: 'load', gen: this.gen, data }, transferOf(data)); // (its arrays are copied into the world here)
+        return world;
+    }
+
+    // Show `world` (just built, as the simulation builds it) until the
+    // simulation's own first snapshot of it comes.
+    begin(world) {
+        const seed = world.seed;
         this.gen++;
         this.p = world.p; // (the numbers the world lives by: config.js)
         this.seed = seed;
@@ -260,20 +299,22 @@ export class Mirror {
         this.heir = 0;
         this.resync = true;
         const first = new Packer().pack(world);
-        Object.assign(first, { gen: this.gen, seq: this.asked, due: NaN, watch: 0, fate: null, heir: 0, samples: [] });
+        Object.assign(first, {
+            gen: this.gen, seq: this.asked, due: NaN, watch: world.watch, fate: world.fate, heir: 0, samples: [],
+            player: playerSnapshot(world), spears: world.spears.n ? world.spears.pack() : NO_EVENTS,
+            carcasses: world.carcasses.size ? packCarcasses(world) : NO_EVENTS,
+        });
         this.accept(first, performance.now());
         this.show(first);
         this.blend(null, first, 1);
-        this.shown = 0;
-        // (After the above: with ?noworker the answer can come back at once.)
-        this.host.send({ type: 'start', gen: this.gen, seed, aspect, params });
+        this.shown = first.time;
     }
 
     // ---- Snapshots in ----
 
     receive(msg) {
-        if (msg.type === 'reply') {
-            this.replies.get(msg.id)?.(msg.value);
+        if (msg.type === 'reply' || msg.type === 'saved') {
+            this.replies.get(msg.id)?.(msg.type === 'reply' ? msg.value : msg);
             this.replies.delete(msg.id);
             return;
         }
@@ -281,6 +322,11 @@ export class Mirror {
             if (msg.gen !== this.gen) return;
             this.startCheck = msg.hash === this.hash ? 'same' : 'DIFFERENT';
             if (msg.hash !== this.hash) console.error(`The simulation's world differs from the one drawn here (start hash ${msg.hash} vs ${this.hash}).`);
+            return;
+        }
+        if (msg.type === 'loadFailed') {
+            // (The page checked the save before sending it, with the same code: this should not happen.)
+            if (msg.gen === this.gen) console.error(`The simulation could not load the save: ${msg.error}`);
             return;
         }
         if (msg.type !== 'snapshot') return;

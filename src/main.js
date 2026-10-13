@@ -13,6 +13,12 @@
 // or from its eyes, the HUD shows (play/hud.js), and play/modes.js keeps
 // who you are and what happens to you. play/env.js wires play to this page
 // (and makes window.play).
+//
+// Saving (panel/saves.js; the simulation's side is save.js): the panel's
+// save button or P in a body opens the save menu; the autosave comes at
+// dawn, when the tab is hidden or closed, and after a succession; "continue"
+// is offered when an autosave waits. A save keeps the page's own state too
+// (record), and loading one puts it back (resume).
 import { params } from './config.js';
 import { Renderer } from './render.js';
 import { Panel } from './ui.js';
@@ -27,6 +33,8 @@ import { CraftMenu } from './play/craft.js';
 import { Console } from './play/console.js';
 import { Editor } from './play/editor.js';
 import { setAside } from './orders.js';
+import { SaveStore } from './save-store.js';
+import { Saves, looksOf, putLooks } from './panel/saves.js';
 
 const VIEWS = ['map', 'follow', 'first'];
 const BLOOD_KEY = 'life-simulator.blood';
@@ -40,6 +48,10 @@ let speed = 1;
 let paused = false;
 let followId = 0;
 let followKind = 'herbivore';
+// Which game this is: each new world is a new one; a loaded save carries on
+// its own (the autosave keeps another game's one game back: panel/saves.js).
+let run = '';
+const newRun = () => `${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}`;
 // You can play in the 3D view, on anything but a touch-only device (desktop
 // first: touch controls are for later). (A headless browser has no pointer
 // at all, and may play.)
@@ -99,6 +111,15 @@ function unfollow() {
     world.follow(0);
     setView('map');
     panel.showFollow(world, 0, null);
+}
+
+// Who a loaded world follows (its own `watch`): on the page only, since the
+// simulation follows it already.
+function adopt(id) {
+    const found = id ? world.find(id) : null;
+    followId = id;
+    followKind = found?.kind ?? 'herbivore';
+    panel.showFollow(world, followId, found);
 }
 
 // A random living individual, preferably of the kind we were watching.
@@ -209,6 +230,9 @@ const panel = new Panel({
         modes.armCall(kind);
     },
     setBlood,
+    saves() {
+        saves.toggle(false);
+    },
 });
 panel.setBlood(blood);
 renderer.setBlood?.(blood);
@@ -233,6 +257,8 @@ const page = {
         if (editor.isOpen && editor.id === id && !heir) editor.close();
         else editor.open(id, heir);
     },
+    pauseMenu: () => saves.toggle(true),
+    succession: () => saves.succession(),
 };
 const modes = new Modes(modesEnv(page));
 
@@ -254,7 +280,69 @@ const terminal = new Console({
     target: () => modes.lock || (modes.inBody ? modes.env.aimed(SIGHT_PX, (id) => id === modes.self) : 0),
     params: () => world.p,
     events: () => world.events,
+    save: (slot) => saves.save(slot),
+    load: (slot) => saves.load(slot),
 });
+
+// Saving and loading (panel/saves.js; the simulation's side is save.js): the
+// menu (the panel's save button, P in a body), the autosave, and "continue".
+const saves = new Saves({
+    world, store: new SaveStore(), input, doc: document, win: window,
+    record,
+    resume,
+    playing: () => !!modes.self,
+    getPaused: () => paused,
+    setPaused,
+});
+
+// What the page keeps with a save, besides the world: which game it is,
+// the speed, the view (who is followed is the world's own `watch`), who you
+// are (modes.js), the map camera, the looks chosen in this world (the
+// character editor) and the sparklines.
+function record() {
+    const rig = renderer.rig;
+    return {
+        run, speed, view: renderer.mode,
+        modes: modes.snapshot(),
+        admin: terminal.marked !== null && terminal.marked === modes.story,
+        camera: rig?.map ? { ...rig.map } : null,
+        looks: looksOf(storage(), world.seed),
+        sparks: panel.sparks(),
+    };
+}
+
+// Carry on from a kept save ({data, page}, panel/saves.js): the world is
+// built (here and in the simulation: mirror.js load), then the page is put
+// back as it was. Throws a SaveError, changing nothing, if it cannot be.
+function resume(kept) {
+    const page = kept.page ?? {};
+    world.load(kept.data);
+    run = typeof page.run === 'string' ? page.run : newRun();
+    putLooks(storage(), world.seed, page.looks);
+    if (renderer.looks) renderer.looks.kept = renderer.looks.load(); // (attach lets go of the looks drawn so far)
+    editor?.close();
+    renderer.attach(world);
+    panel.reset(world);
+    panel.restoreSparks(page.sparks);
+    modes.reset();
+    adopt(world.watch);
+    modes.resume(page.modes, world.player);
+    if (page.admin) terminal.marked = modes.story;
+    if (!modes.inBody) setView(['map', 'follow', 'first'].includes(page.view) ? page.view : 'map');
+    if (page.camera && renderer.rig?.map) Object.assign(renderer.rig.map, page.camera);
+    setSpeed(Number.isFinite(page.speed) && page.speed > 0 ? page.speed : 1);
+    setPaused(false);
+    showPlay();
+    keepSeed(world.seed);
+}
+
+function storage() {
+    try {
+        return localStorage;
+    } catch {
+        return null;
+    }
+}
 
 function showPlay() {
     const tribe = world.tribeById.get(modes.tribe) ?? null;
@@ -281,13 +369,19 @@ world.onSamples = (s) => {
 
 function start(seed, p = params) {
     world.reset(p, seed, window.innerWidth / window.innerHeight);
+    run = newRun();
+    saves.newWorld();
     editor?.close();
     renderer.attach(world);
     panel.reset(world);
     modes.reset();
     unfollow();
-    // Keep ?seed= in the address, so reloading or sharing it gives this world
-    // (other flags, such as ?2d, stay as they were typed).
+    keepSeed(seed);
+}
+
+// Keep ?seed= in the address, so reloading or sharing it gives this world
+// (other flags, such as ?2d, stay as they were typed).
+function keepSeed(seed) {
     const rest = location.search.slice(1).split('&').filter((s) => s && !s.startsWith('seed='));
     history.replaceState(null, '', `${location.pathname}?${[`seed=${seed}`, ...rest].join('&')}${location.hash}`);
 }
@@ -363,6 +457,7 @@ function frame(now) {
         panel.update(world);
         panel.showFollow(world, followId, target);
         showPlay();
+        saves.tick(now); // (the dawn's autosave)
         lastUi = now;
     }
     mainMs += (performance.now() - t0 - mainMs) * 0.05;
@@ -374,6 +469,7 @@ start(Number.isInteger(seedParam) && seedParam > 0 ? seedParam : Math.floor(Math
 setSpeed(speed);
 setPaused(paused);
 window.addEventListener('resize', () => renderer.resize(world));
+saves.start(); // (what is kept; "continue" if there is an autosave)
 requestAnimationFrame(frame);
 
 // For tinkering from the browser console:
@@ -388,6 +484,7 @@ requestAnimationFrame(frame);
 //   sim.timing       how the snapshots flow (interpolation delay, size)
 //   sim.run(steps)   test hook: step now; resolves to {time, counts, digest}
 //   sim.console      the admin console: sim.console.run('give bow legendary'), .lines (its log)
+//   sim.saves        saving and loading (panel/saves.js): sim.saves.save(1), .load(1), .open(), .last (timings)
 //   sim.renderer
 window.sim = {
     get world() { return world; },
@@ -403,6 +500,7 @@ window.sim = {
     get worker() { return !world.host.local; },
     get timing() { return world.timing(); },
     console: terminal,
+    saves,
     renderer,
 };
 

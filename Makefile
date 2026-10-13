@@ -4,7 +4,7 @@ PLAYWRIGHT := mcr.microsoft.com/playwright@sha256:06a9939e57531807f8d5fd76ce44b5
 DOCKER     := docker run --rm -v "$(CURDIR)":/app:ro -w /app
 PORT       ?= 8000
 
-.PHONY: serve check shot fingerprint test bot orders bake
+.PHONY: serve check shot fingerprint test saves bot orders bake
 
 # Serve the app at http://localhost:$(PORT)
 serve:
@@ -32,6 +32,11 @@ fingerprint:
 # Unit tests (node:test), e.g. make test ARGS="test/events.test.mjs"
 test:
 	$(DOCKER) $(NODE) node --test $(or $(ARGS),'test/*.test.mjs')
+
+# The save system alone: saved, loaded and run on = run straight, to the bit (seeds, items on and off,
+# a person played mid-hunt), and the page's slots, autosave and console (also part of make test)
+saves:
+	$(DOCKER) $(NODE) node --test test/save.test.mjs test/saves-page.test.mjs
 
 # Headless-browser screenshots into .shots/, e.g. make shot ARGS="--speed 16 --at 4000,20000"
 shot:

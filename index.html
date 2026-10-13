@@ -453,6 +453,45 @@
         #editor .keys { margin-right: auto; color: var(--muted); font-size: 11px; }
         #ed-done { border-color: var(--line); color: var(--text); }
         @media (max-width: 460px) { #editor .cols { flex-direction: column; align-items: center; } #ed-preview { width: 120px; height: 170px; } }
+
+        /* Saving and loading (panel/saves.js): the panel's button, "continue"
+           while an autosave waits, and the menu, in the editor's manner. */
+        #saves-open { float: right; min-width: 0; height: 18px; margin: 0 4px 0 6px; padding: 0 6px; font-size: 11px; line-height: 16px; color: var(--text); border-color: var(--line); }
+        #continue { display: grid; width: 100%; height: auto; margin-top: 8px; padding: 5px 8px; text-align: left; line-height: 1.3; color: var(--text); border-color: var(--line); }
+        #continue[hidden] { display: none; }
+        #continue > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        #continue .muted { color: var(--muted); font-size: 11px; }
+        #saves {
+            position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 26;
+            width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow-y: auto; padding: 14px 16px 12px;
+            background: rgba(16, 18, 17, 0.92); border: 1px solid var(--line); border-radius: 10px;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+            color: var(--text); text-shadow: none; font-variant-numeric: tabular-nums;
+        }
+        #saves[hidden] { display: none; }
+        #saves .head { display: flex; align-items: baseline; gap: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+        #saves .title { font: 500 24px/1.1 var(--serif); letter-spacing: 0.02em; }
+        #saves .sub { font: italic 16px var(--serif); color: var(--muted); margin-right: auto; }
+        #saves .head button { align-self: center; }
+        .sv-row { display: grid; grid-template-columns: 92px 1fr auto; align-items: center; gap: 4px 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+        .sv-name { color: var(--muted); font-size: 12px; }
+        .sv-info { min-width: 0; line-height: 1.35; }
+        .sv-info > div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .sv-info .muted, .sv-info.muted { color: var(--muted); font-size: 11px; }
+        .sv-info .when { opacity: 0.8; }
+        .sv-acts { display: flex; gap: 2px; justify-content: flex-end; }
+        .sv-acts button { padding: 0 7px; }
+        .sv-acts button.main { color: var(--text); border-color: var(--line); }
+        .sv-acts button.sure { color: var(--carnivore); border-color: rgba(228, 102, 79, 0.5); }
+        #saves .foot { display: flex; align-items: center; gap: 6px; padding-top: 10px; }
+        #saves .foot button { border-color: var(--line); }
+        #sv-status { margin-left: auto; color: var(--muted); font-size: 11px; text-align: right; min-width: 0; }
+        #sv-status.bad { color: var(--carnivore); }
+        @media (max-width: 520px) {
+            .sv-row { grid-template-columns: 1fr auto; }
+            .sv-name { grid-column: 1 / -1; }
+            #saves .foot { flex-wrap: wrap; }
+        }
         /* The heir's line offers to shape them (a quiet link under it). */
         .banner .shape { pointer-events: auto; margin-top: 8px; height: auto; padding: 2px 8px; font: italic 17px var(--serif); color: var(--hud-muted); border: 0; }
         .banner .shape:hover { color: var(--hud-text); background: none; text-decoration: underline; text-underline-offset: 3px; }
@@ -508,6 +547,8 @@
                 <button id="pause" title="Pause (space)"></button>
                 <button id="reset" title="New world (R)"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.46-3.54"/><path d="M13 2.5v3h-3"/></svg></button>
             </div>
+            <!-- An autosave was found as the page opened (panel/saves.js): carry on from it. -->
+            <button id="continue" hidden></button>
 
             <!-- Your person, while you look at the map (play/modes.js). -->
             <div id="play-bar" hidden>
@@ -596,7 +637,7 @@
                 <div id="legends-more" class="muted" hidden></div>
             </section>
 
-            <footer><button id="credits-open" aria-expanded="false" aria-controls="credits" title="Who made the models, the type and the 3D engine">credits</button><label title="Type a seed and press Enter for that world">seed <input id="seed" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" aria-label="Seed"></label> · <span id="status"></span></footer>
+            <footer><button id="credits-open" aria-expanded="false" aria-controls="credits" title="Who made the models, the type and the 3D engine">credits</button><button id="saves-open" title="Save or load a game (P in a body)">save</button><label title="Type a seed and press Enter for that world">seed <input id="seed" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" aria-label="Seed"></label> · <span id="status"></span></footer>
             <!-- Credits (src/credits.js, panel/credits.js). -->
             <section id="credits" hidden aria-label="Credits"><div id="credit-list"></div></section>
         </div>
@@ -670,6 +711,13 @@
             </div>
         </div>
         <div class="foot"><span class="keys">Esc or L closes</span><button id="ed-reset" title="The look they were born with">as born</button><button id="ed-done">done</button></div>
+    </section>
+
+    <!-- Saving and loading (panel/saves.js): the panel's save button, or P in a body. -->
+    <section id="saves" hidden aria-label="Save and load">
+        <div class="head"><span class="title">Saves</span><span class="sub" id="sv-sub"></span><button id="sv-close" title="Close (Esc)"><svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button></div>
+        <div id="sv-list"></div>
+        <div class="foot"><button id="sv-export" title="Save this game to a file (.lifesave)">export this game</button><button id="sv-import" title="Carry on from a .lifesave file">import a file</button><input id="sv-file" type="file" accept=".lifesave" hidden><span id="sv-status" aria-live="polite"></span></div>
     </section>
 
     <!-- The admin console (play/console.js): ` or F2. -->

@@ -25,5 +25,14 @@ export function createRng(seed) {
         return r * Math.cos(2 * Math.PI * v);
     };
 
-    return { next, gauss };
+    // The whole of the stream's state, for a save (save.js): where it is, and
+    // gauss()'s cached second value. Reading it draws nothing; restoring it
+    // carries on with exactly the numbers the saved stream would have drawn.
+    const state = () => ({ a, spare });
+    const restore = (s) => {
+        a = s.a;
+        spare = s.spare;
+    };
+
+    return { next, gauss, state, restore };
 }

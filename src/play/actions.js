@@ -40,7 +40,8 @@ const IN_BODY = {
         m.body.pitch = clamp(m.body.pitch, ...PITCH[m.view]);
         m.env.setView(m.view);
     },
-    pause: (m) => m.env.setPaused(!m.env.getPaused()),
+    // P: the world waits, with the save menu open (panel/saves.js); P again carries on.
+    pause: (m) => (m.env.pauseMenu ? m.env.pauseMenu() : m.env.setPaused(!m.env.getPaused())),
     'cycle-call': (m) => m.calls.cycle(m.world.p.items?.enabled === true),
     call: (m) => m.lead.callHere(),
     'cycle-weapon': (m) => m.kit.cycle('weapon'),

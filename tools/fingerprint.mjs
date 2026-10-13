@@ -5,43 +5,67 @@
 //
 //   make fingerprint                                   # seeds 1-3 × 20k steps, defaults
 //   make fingerprint ARGS="--set terrain.enabled=false"
+//
+// The hashing itself is Trail, which the tests use too (test/save.test.mjs:
+// a world saved and loaded half way must leave the same trail).
 import { createHash } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 import { params as defaults } from '../src/config.js';
 import { World } from '../src/world.js';
 
-const args = process.argv.slice(2);
-const opt = (name, fallback) => {
-    const i = args.indexOf(`--${name}`);
-    return i >= 0 ? args[i + 1] : fallback;
-};
-const [s0, s1] = opt('seeds', '1-3').split('-').map(Number);
-const steps = Number(opt('steps', '20000'));
-const params = structuredClone(defaults);
-for (let i = 0; i < args.length; i++) {
-    if (args[i] !== '--set') continue;
-    const [path, raw] = args[++i].split('=');
-    const keys = path.split('.');
-    let o = params;
-    for (const k of keys.slice(0, -1)) o = o[k];
-    if (!(keys.at(-1) in o)) throw new Error(`unknown parameter: ${path}`);
-    o[keys.at(-1)] = raw === 'true' ? true : raw === 'false' ? false : Number(raw);
+// A world's trail: after each step `t` (counting from 1), step(w, t); at the
+// end, digest(w).
+export class Trail {
+    constructor() {
+        this.h = createHash('sha256');
+    }
+
+    step(w, t) {
+        if (t % 100 === 0) this.h.update(`${w.herbivores.n},${w.carnivores.n},${w.humans.n},${w.tribes.length};`);
+    }
+
+    digest(w) {
+        const h = this.h;
+        for (const pop of [w.herbivores, w.carnivores, w.humans]) {
+            h.update(Buffer.from(pop.x.buffer, 0, pop.n * 8));
+            h.update(Buffer.from(pop.y.buffer, 0, pop.n * 8));
+            h.update(Buffer.from(pop.energy.buffer, 0, pop.n * 8));
+        }
+        return h.digest('hex').slice(0, 16);
+    }
 }
 
-const all = createHash('sha256');
-for (let seed = s0; seed <= (s1 ?? s0); seed++) {
-    const h = createHash('sha256');
-    const w = new World(params, { seed, aspect: 1.6 });
-    for (let t = 1; t <= steps; t++) {
-        w.step();
-        if (t % 100 === 0) h.update(`${w.herbivores.n},${w.carnivores.n},${w.humans.n},${w.tribes.length};`);
+function main(args) {
+    const opt = (name, fallback) => {
+        const i = args.indexOf(`--${name}`);
+        return i >= 0 ? args[i + 1] : fallback;
+    };
+    const [s0, s1] = opt('seeds', '1-3').split('-').map(Number);
+    const steps = Number(opt('steps', '20000'));
+    const params = structuredClone(defaults);
+    for (let i = 0; i < args.length; i++) {
+        if (args[i] !== '--set') continue;
+        const [path, raw] = args[++i].split('=');
+        const keys = path.split('.');
+        let o = params;
+        for (const k of keys.slice(0, -1)) o = o[k];
+        if (!(keys.at(-1) in o)) throw new Error(`unknown parameter: ${path}`);
+        o[keys.at(-1)] = raw === 'true' ? true : raw === 'false' ? false : Number(raw);
     }
-    for (const pop of [w.herbivores, w.carnivores, w.humans]) {
-        h.update(Buffer.from(pop.x.buffer, 0, pop.n * 8));
-        h.update(Buffer.from(pop.y.buffer, 0, pop.n * 8));
-        h.update(Buffer.from(pop.energy.buffer, 0, pop.n * 8));
+
+    const all = createHash('sha256');
+    for (let seed = s0; seed <= (s1 ?? s0); seed++) {
+        const trail = new Trail();
+        const w = new World(params, { seed, aspect: 1.6 });
+        for (let t = 1; t <= steps; t++) {
+            w.step();
+            trail.step(w, t);
+        }
+        const digest = trail.digest(w);
+        all.update(digest);
+        console.log(`seed ${seed}: ${digest}   (${w.herbivores.n}/${w.carnivores.n}/${w.humans.n}, ${w.tribes.length} tribes)`);
     }
-    const digest = h.digest('hex').slice(0, 16);
-    all.update(digest);
-    console.log(`seed ${seed}: ${digest}   (${w.herbivores.n}/${w.carnivores.n}/${w.humans.n}, ${w.tribes.length} tribes)`);
+    console.log(`all:    ${all.digest('hex').slice(0, 16)}`);
 }
-console.log(`all:    ${all.digest('hex').slice(0, 16)}`);
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main(process.argv.slice(2));

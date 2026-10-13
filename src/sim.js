@@ -28,7 +28,17 @@
 //        admin {id, cmd, args, target}       an admin console command (admin.js), run at the start of the
 //                                            next step (at once while paused); answered by an event
 //                                            {type: 'admin', id, cmd, ok, text, changed, time}
-//   out  started {gen, hash}                 the new world's first moment, hashed
+//        save {slot, id}                     save the whole world now, between steps (save.js saveWorld);
+//                                            answered by `saved`
+//        load {gen, data}                    a world from a save (save.js loadWorld; gen counts worlds, as
+//                                            for start): answered by `started` as a new world is, so the
+//                                            page draws it afresh; the controlled person, if any, numbers
+//                                            its inputs afresh and the page jumps its body to it (snap).
+//                                            A save that cannot be loaded leaves the world as it was and
+//                                            is answered by `loadFailed {gen, error}`
+//   out  started {gen, hash, loaded}         the new world's first moment, hashed (loaded: from a save)
+//        saved {slot, id, data, ms, bytes}   the save (data: save.js; its arrays' buffers are transferred),
+//                                            how long making it took and about how big it is
 //        snapshot {...}                      see pack() below; with `events`, everything that happened
 //                                            since the last one (World.events, oldest first),
 //                                            `player`, the controlled person (playerSnapshot in player.js;
@@ -49,6 +59,7 @@ import { packCarcasses } from './spears.js';
 import { ORDER_KINDS } from './orders.js';
 import { describe, fraction } from './items.js';
 import { runAdmin } from './admin.js';
+import { saveWorld, loadWorld, saveSize, transferOf } from './save.js';
 
 // Steps per second at 1×: a calm pace, at which a person walks about six
 // units (a little over a body length) a second and runs at ten. (It used to
@@ -152,12 +163,45 @@ export class Sim {
                 this.admin.push(msg);
                 if (this.paused) runAdmin(this); // (no step is coming)
                 break;
+            case 'save':
+                this.save(msg);
+                break;
+            case 'load':
+                this.load(msg);
+                break;
         }
         this.offer();
     }
 
     start({ gen, seed, aspect, params }) {
-        this.world = new World(params, { seed, aspect });
+        const world = new World(params, { seed, aspect });
+        // (What it was made from, for a save: save.js builds the land again from it.)
+        world.origin = { params: structuredClone(params), aspect };
+        this.begin(world, gen, false);
+    }
+
+    // The world of a save. One that cannot be loaded changes nothing.
+    load({ gen, data }) {
+        let world;
+        try {
+            world = loadWorld(data);
+        } catch (err) {
+            this.post({ type: 'loadFailed', gen, error: err?.message ?? String(err) });
+            return;
+        }
+        // The page starts afresh: it numbers its inputs from scratch and puts
+        // the body where the simulation has it, as for an heir (player.js).
+        const pl = world.player;
+        if (pl !== null) {
+            pl.seq = 0;
+            pl.input = null;
+            pl.snap = true;
+        }
+        this.begin(world, gen, true);
+    }
+
+    begin(world, gen, loaded) {
+        this.world = world;
         this.gen = gen;
         this.acc = 0;
         this.samples = [];
@@ -166,7 +210,17 @@ export class Sim {
         this.dirty = true;
         this.last = performance.now(); // building the world is not time to catch up on
         this.due = this.last;
-        this.post({ type: 'started', gen, hash: startHash(this.world) });
+        this.post({ type: 'started', gen, hash: startHash(world), loaded });
+    }
+
+    // The whole world as a save (save.js), between steps; its arrays move to
+    // the page without being copied.
+    save({ slot, id }) {
+        if (!this.world) return;
+        const t0 = performance.now();
+        const data = saveWorld(this.world);
+        const ms = performance.now() - t0;
+        this.post({ type: 'saved', slot, id, data, ms, bytes: saveSize(data) }, transferOf(data));
     }
 
     // Advance the world by the real time since the last tick: the same

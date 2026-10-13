@@ -30,6 +30,10 @@
 // the numbering of inputs and acts afresh; when `player.id` changes, the
 // body starts where the snapshot has that person.
 //
+// A save (panel/saves.js) keeps snapshot(): who you are, in a body or not,
+// the look, the story so far. Loading it, resume() is that again, without a
+// word to the simulation: the saved world has the person already.
+//
 // Deaths. The simulation, once it has the person (it says so in `player`),
 // chooses the heir itself, in the body or on autopilot, and says so
 // (`heir`, `released`, `over` events). Before it has said so (or with a
@@ -329,6 +333,57 @@ export class Modes {
         this.hud.show(false);
         const rig = this.env.rig();
         if (rig) rig.aim = null;
+        this.env.changed();
+    }
+
+    // ---- A save (panel/saves.js) ----
+
+    // Who you are and how you look at it, to keep with a save.
+    snapshot() {
+        const b = this.body;
+        return {
+            game: this.game, self: this.self, tribe: this.tribe, inBody: this.inBody, view: this.view,
+            mapSpeed: this.mapSpeed, resting: this.resting, asleep: this.asleep, lock: this.lock,
+            body: { yaw: b.yaw, pitch: b.pitch, crouch: b.crouch, stamina: b.stamina },
+            story: [...this.story.played.values()].map((r) => ({ ...r })),
+        };
+    }
+
+    // A loaded world (after reset()): be who the save was, `p` being the
+    // simulation's own word on it (world.player: it has the person already,
+    // and numbers inputs afresh). Nothing is sent: the world is as saved.
+    resume(s, p) {
+        if (!p || !p.id || p.over) return; // (nobody played: God view, watching)
+        this.game = p.mode === 'play' ? 'play' : 'god';
+        this.self = p.id;
+        this.tribe = p.tribe;
+        this.view = s?.view === 'first' ? 'first' : 'shoulder';
+        if (Number.isFinite(s?.mapSpeed)) this.mapSpeed = s.mapSpeed;
+        this.story = { played: new Map((s?.story ?? []).map((r) => [r.id, { ...r }])) };
+        this.acked = true;
+        this.body.seq = 0;
+        this.seenId = 0;
+        const f = this.world.find(this.self);
+        if (f) this.record(f);
+        if (s?.inBody && !p.auto && f) {
+            this.inBody = true;
+            this.place(f);
+            const b = s.body ?? {};
+            if (Number.isFinite(b.yaw)) this.body.yaw = b.yaw;
+            if (Number.isFinite(b.pitch)) this.body.pitch = clamp(b.pitch, ...PITCH[this.view]);
+            this.body.crouch = b.crouch === true;
+            if (Number.isFinite(b.stamina)) this.body.stamina = b.stamina;
+            this.resting = s.resting === true && p.resting === true;
+            this.asleep = this.resting && s.asleep === true;
+            this.restAcked = false;
+            this.lock = s.lock || 0;
+            this.env.setView(this.view);
+            this.input.setMode('body');
+            this.env.inBody(true);
+            this.hud.show(true);
+        } else {
+            this.input.setMode('map');
+        }
         this.env.changed();
     }
 
@@ -638,6 +693,7 @@ export class Modes {
         } else if (followed === dead.id) {
             this.env.follow(next.id, true);
         }
+        this.env.succession?.(); // (an autosave: panel/saves.js)
     }
 
     // "Your line continues — Tiko, child of Ana."

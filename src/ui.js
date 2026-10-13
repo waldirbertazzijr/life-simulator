@@ -2,7 +2,8 @@
 // sparklines, average genes and the list of tribes. And the way into play
 // (play/modes.js): "become them" on a person's card, Play with its choice of
 // tribe, and, while your person is on the map, a bar to return to them. In
-// a body the panel hides, and its shortcuts wait.
+// a body the panel hides, and its shortcuts wait. Its save button opens the
+// save menu (panel/saves.js, which also shows "continue" here).
 //
 // Its parts (panel/): the follow card (card.js), the lists of tribes and
 // legends and Play's picker (lists.js), the sparklines (sparkline.js), and
@@ -32,7 +33,8 @@ export class Panel {
     // actions: { togglePause, setSpeed(n), reset(byKey), start(seed), setView(v), cycleView,
     //            unfollow, followDescendant, followAnother, followTribe(id), follow(id),
     //            becomeLabel(id) → 'become them' | null, become(id), openPicker,
-    //            play(tribeId), back(), stop(), look() (the character editor), setBlood(on) }
+    //            play(tribeId), back(), stop(), look() (the character editor), setBlood(on),
+    //            saves() (the save menu: panel/saves.js) }
     constructor(actions) {
         this.$ = (id) => document.getElementById(id);
         this.actions = actions;
@@ -91,6 +93,7 @@ export class Panel {
             if (b) actions.armCall(b.dataset.call);
         });
         this.$('blood').addEventListener('click', () => actions.setBlood(!this.blood));
+        this.$('saves-open').addEventListener('click', () => actions.saves());
 
         // The seed field: type a number, Enter starts that world; Escape (or
         // clicking away) puts back the current one. Keys typed here are the
@@ -259,6 +262,22 @@ export class Panel {
 
     sample(world) {
         this.record(world.grass.mean(), world.herbivores.n, world.carnivores.n, world.humans.n);
+    }
+
+    // The sparklines' points, oldest first (kept with a save), and back.
+    sparks() {
+        const out = {};
+        for (const [k, l] of Object.entries(this.lines)) out[k] = Array.from(l.values());
+        return out;
+    }
+
+    restoreSparks(s) {
+        if (!s || typeof s !== 'object') return;
+        for (const [k, l] of Object.entries(this.lines)) {
+            if (!Array.isArray(s[k])) continue;
+            l.clear();
+            for (const v of s[k]) if (Number.isFinite(v)) l.push(v);
+        }
     }
 
     // One point on each sparkline (the simulation sends these every 50 steps).

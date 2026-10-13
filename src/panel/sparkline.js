@@ -18,6 +18,11 @@ export class Sparkline {
         this.head = 0;
     }
 
+    // The samples kept, oldest first.
+    *values() {
+        for (let k = 0; k < this.len; k++) yield this.data[(this.head - this.len + k + HISTORY) % HISTORY];
+    }
+
     push(v) {
         this.data[this.head] = v;
         this.head = (this.head + 1) % HISTORY;

@@ -10,8 +10,9 @@
 // way in). ↑ and ↓ walk back through the commands typed before (kept by this
 // browser), and Tab completes commands, kinds, materials and parameters.
 //
-// Two commands are the page's own: `seed` (a new world is built here too,
-// mirror.js) and `clear`; `help` is answered here at once.
+// Four commands are the page's own: `seed` (a new world is built here too,
+// mirror.js), `save` and `load` (the page keeps the saves: panel/saves.js)
+// and `clear`; `help` is answered here at once.
 //
 // Play mode: once a command that changes the world has been used in a Play
 // game, a quiet "admin" mark shows on the HUD for the rest of that game
@@ -101,6 +102,7 @@ export class Console {
     //   events()       this frame's events (the Mirror's)
     //   doc, win       the DOM (none in tests)
     //   storage        where the history is kept (default: localStorage)
+    //   save(slot), load(slot)   keep this game in a slot, carry on from one (panel/saves.js): promises of the line to show
     // }
     constructor(env) {
         this.env = env;
@@ -265,10 +267,36 @@ export class Console {
             this.write('ok', `a new world, from seed ${n}`);
             return;
         }
+        if (p.cmd === 'save' || p.cmd === 'load') {
+            this.slot(p.cmd, p.args[0] ?? '1', c.usage);
+            return;
+        }
         const id = this.nextId++;
         const m = this.env.modes;
         this.asked.set(id, m && m.game === 'play' ? m.story : null);
         this.env.send({ type: 'admin', id, cmd: p.cmd, args: p.args, target: this.env.target?.() || 0 });
+    }
+
+    // `save` or `load` (`cmd`) with a slot: the page keeps the saves
+    // (panel/saves.js). Resolves once it is done and said.
+    async slot(cmd, slot, usage) {
+        const slots = cmd === 'save' ? ['1', '2', '3'] : ['1', '2', '3', 'auto'];
+        slot = String(slot).toLowerCase();
+        if (!slots.includes(slot)) {
+            this.write('error', `no such slot: ${slot} (${slots.join(', ')})`);
+            this.write('usage', `usage: ${usage}`);
+            return;
+        }
+        const run = this.env[cmd];
+        if (!run) {
+            this.write('error', 'saves are not kept here');
+            return;
+        }
+        try {
+            this.write('ok', await run(slot));
+        } catch (err) {
+            this.write('error', err?.message ?? String(err));
+        }
     }
 
     // Shortcut for the browser's console and probes: open, and type `line`.

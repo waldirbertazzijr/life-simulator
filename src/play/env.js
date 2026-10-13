@@ -6,7 +6,8 @@
 // `page` (main.js) = { world (the Mirror), renderer, canvas, panel, input,
 // hud, follow(id, keepView), followed(), setView(v), setSpeed(s),
 // getSpeed(), setPaused(p), getPaused(), changed() (the panel's play bar
-// is out of date), editLook(id, heir) (the character editor) }.
+// is out of date), editLook(id, heir) (the character editor), pauseMenu() (P: the
+// save menu, paused) and succession() (your heir took over: an autosave) }.
 import { personName } from './names.js';
 
 // What modes.js is given as `env`.
@@ -32,6 +33,9 @@ export function modesEnv(page) {
         },
         openPicker: () => panel.openPicker(world),
         changed: page.changed,
+        // P in a body: pause, with the save menu (panel/saves.js); and your heir has taken over (an autosave).
+        pauseMenu: page.pauseMenu,
+        succession: page.succession,
         // The character editor (editor.js) for a person (`heir`: just become them).
         editLook: (id, heir) => page.editLook?.(id, heir),
         // Poses on bodies (the 3D view's; the flat one has none).

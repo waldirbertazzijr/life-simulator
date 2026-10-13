@@ -82,6 +82,11 @@ export const COMMANDS = {
     set: { usage: 'set <param.path> <value>', about: 'change a live parameter', changes: true, complete: ['param'] },
     get: { usage: 'get [param.path]', about: 'read a parameter (none: the groups)', complete: ['param'] },
     seed: { usage: 'seed <n>', about: 'a new world, from seed n (with the numbers as set)', changes: true, page: true },
+    save: { usage: 'save [1|2|3]', about: 'save this game to a slot (1 if none is given): the save menu\'s slots', page: true, complete: [['1', '2', '3']] },
+    load: {
+        usage: 'load [1|2|3|auto]', about: 'carry on from a slot (1 if none is given), or the autosave', page: true,
+        complete: [['1', '2', '3', 'auto']],
+    },
     stats: { usage: 'stats', about: 'populations, tribes, items by kind and rarity, legends' },
     clear: { usage: 'clear', about: 'clear this log', page: true },
 };
@@ -640,6 +645,14 @@ const RUN = {
 
     seed() {
         refuse('a new world is the page\'s to build: type it in the console');
+    },
+
+    save() {
+        refuse('saves are kept by the page: type it in the console');
+    },
+
+    load() {
+        refuse('saves are kept by the page: type it in the console');
     },
 
     clear() {
