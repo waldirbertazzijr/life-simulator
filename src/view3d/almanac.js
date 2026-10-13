@@ -104,18 +104,10 @@ export function clockOf(world) {
     return base + atCache.offset;
 }
 
-// The moon as the page draws it, from when()'s moment `w` (calendar `c`):
-// new with the sun, and falling behind it a little more each day (it rises
-// later), so a waxing moon follows the sun down in the evening, the full moon
-// rides opposite it all night, and a waning one is high at dawn. calendar.js
-// places it half a turn off and turning the wrong way (`maz = az + PI + TAU
-// * phase`: full with the sun at noon, never up at night), so the page places
-// it from the sun and the phase here, the calendar's own way otherwise.
-// DROP THIS once calendar.js has `maz = az - TAU * phase` (and use w.moon).
-export function moonOf(w, c) {
-    const TAU = Math.PI * 2;
-    const maz = (((w.sun.az - TAU * w.moon.phase) % TAU) + TAU) % TAU;
-    return { alt: Math.sin(maz) * c.noon * (Math.PI / 180), az: maz, phase: w.moon.phase, lit: (1 - Math.cos(TAU * w.moon.phase)) / 2 };
+// The moon as the page draws it, from when()'s moment `w`: where
+// calendar.js puts it, and how much of its face is lit (0 new .. 1 full).
+export function moonOf(w) {
+    return { ...w.moon, lit: (1 - Math.cos(Math.PI * 2 * w.moon.phase)) / 2 };
 }
 
 // How far through the night it is (0 at its start, 1 at first light), or -1

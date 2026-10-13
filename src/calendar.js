@@ -31,8 +31,8 @@ const smooth = (x) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x));
 //              bearing (radians, 0 = east, rising in the east and setting in
 //              the west); it rises halfway through dawn and sets halfway
 //              through dusk, and climbs higher in summer than in winter
-//   moon       {phase, alt, az}: phase 0 new .. 0.5 full .. 1 new; it rides
-//              opposite the sun, shifted by its phase
+//   moon       {phase, alt, az}: phase 0 new .. 0.5 full .. 1 new; new, it
+//              rides with the sun; full, opposite it all night
 export function when(c, time) {
     const day = Math.floor(time / c.day);
     const t = (time - day * c.day) / c.day;
@@ -55,13 +55,15 @@ export function when(c, time) {
     const span = set - rise;
     const alt = u <= span ? Math.sin((Math.PI * u) / span) * peak : -Math.sin((Math.PI * (u - span)) / (1 - span)) * peak;
     const az = u <= span ? (Math.PI * u) / span : Math.PI + (Math.PI * (u - span)) / (1 - span);
+    // The moon: new with the sun, falling behind it a little more each day,
+    // so the full moon rides opposite it all night.
     const phase = (((day + t) / c.moonDays) % 1 + 1) % 1;
-    const maz = az + Math.PI + TAU * phase;
+    const maz = (((az - TAU * phase) % TAU) + TAU) % TAU;
     return {
         day, year: Math.floor(day / yearDays) + 1, season, seasonT, dayOfSeason: dayOfYear - season * c.seasonDays + 1,
         yearT, t, part, light,
         sun: { alt, az: az % TAU },
-        moon: { phase, alt: Math.sin(maz) * c.noon * DEG, az: maz % TAU },
+        moon: { phase, alt: Math.sin(maz) * c.noon * DEG, az: maz },
     };
 }
 

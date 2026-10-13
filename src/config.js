@@ -29,7 +29,7 @@ export const params = {
         light: 2250,   // 2.5 min of daylight
         dusk: 450,     // 30 s (the night is the rest: 1.5 min)
         seasonDays: 6,
-        moonDays: 8,   // a moon's cycle, new to new
+        moonDays: 7,   // a moon's cycle, new to new (not a divisor of the year, so full moons wander through the seasons)
         noon: 47,      // the sun's noon height at the equinoxes (degrees)...
         tilt: 23,      // ...± this between midsummer and midwinter
         winterOdds: [0.3, 0.45], // a year's winter: mild, normal (the rest hard)

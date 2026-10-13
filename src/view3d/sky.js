@@ -325,7 +325,7 @@ export class Sky {
     // shooting stars); `pixelRatio` for the stars' size.
     update(w, cal, overcast, view, scene, wall, pixelRatio) {
         const u = this.u;
-        const moon = moonOf(w, cal);
+        const moon = moonOf(w);
         const d = daylight(w.sun.alt, moon.alt, moon.lit, overcast);
         this.now = d;
         const sun = toward(w.sun.alt, w.sun.az, this.sunDir);
