@@ -97,6 +97,7 @@ export class Input {
         this.lookY = 0;
         this.onAction = () => {};
         this.capture = null;   // (code, repeat) => taken?, while a menu is open
+        this.blocked = false;  // the admin console is open (console.js): no key or click is the body's
 
         target.addEventListener('keydown', (e) => this.keydown(e));
         target.addEventListener('keyup', (e) => this.keyup(e));
@@ -142,7 +143,7 @@ export class Input {
     }
 
     keydown(e) {
-        if (this.mode === 'off' || typing(e) || e.ctrlKey || e.metaKey || e.altKey) return;
+        if (this.mode === 'off' || this.blocked || typing(e) || e.ctrlKey || e.metaKey || e.altKey) return;
         if (this.mode === 'map') {
             const action = MAP_ACTIONS[e.code];
             if (action) {
@@ -186,7 +187,7 @@ export class Input {
     }
 
     pointerdown(e) {
-        if (this.mode !== 'body' || this.capture) return;
+        if (this.mode !== 'body' || this.capture || this.blocked) return;
         if (e.button === 2) {
             this.onAction(e.shiftKey ? 'skill' : 'tool');
             return;

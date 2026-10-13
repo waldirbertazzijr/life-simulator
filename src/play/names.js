@@ -71,6 +71,7 @@ export function deathPhrase(cause, by, world = null) {
         case 'old age': return 'died of old age';
         case 'hunted': return by ? `was speared by ${killer(by, world)}` : 'was speared';
         case 'killed': return by ? `was killed by ${killer(by, world)}` : 'was killed by defenders while raiding';
+        case 'admin': return 'was struck down by the gods'; // (the admin console's kill: admin.js)
         default: return 'died';
     }
 }

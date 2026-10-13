@@ -22,6 +22,7 @@ import { Hud } from './play/hud.js';
 import { Modes } from './play/modes.js';
 import { personName } from './play/names.js';
 import { CraftMenu } from './play/craft.js';
+import { Console } from './play/console.js';
 import { setAside } from './orders.js';
 
 const VIEWS = ['map', 'follow', 'first'];
@@ -238,6 +239,18 @@ const modes = new Modes({
     aimed: (radius, skip) => renderer.pick?.(world, window.innerWidth / 2, window.innerHeight / 2, radius, skip) ?? 0,
 });
 
+// The admin console (play/console.js; the commands run in the simulation,
+// admin.js): ` or F2, or the panel's button. A kill goes for the lock-on, or
+// whoever is under the crosshair in a body.
+const terminal = new Console({
+    doc: document, win: window, input, modes,
+    send: (msg) => world.host.send(msg),
+    start,
+    target: () => modes.lock || (modes.inBody ? modes.env.aimed(28, (id) => id === modes.self) : 0),
+    params: () => world.p,
+    events: () => world.events,
+});
+
 function showPlay() {
     const tribe = world.tribeById.get(modes.tribe) ?? null;
     panel.showPlay(world, {
@@ -322,6 +335,7 @@ function frame(now) {
     modes.move(dt / 1000);
     world.update(now, dt);
     modes.after(dt / 1000);
+    terminal.frame();
 
     const target = followId ? world.find(followId) : null;
     const t1 = performance.now();
@@ -366,6 +380,7 @@ requestAnimationFrame(frame);
 //   sim.worker       whether the simulation runs in a Web Worker
 //   sim.timing       how the snapshots flow (interpolation delay, size)
 //   sim.run(steps)   test hook: step now; resolves to {time, counts, digest}
+//   sim.console      the admin console: sim.console.run('give bow legendary'), .lines (its log)
 //   sim.renderer
 window.sim = {
     get world() { return world; },
@@ -380,6 +395,7 @@ window.sim = {
     get mainMs() { return mainMs; },
     get worker() { return !world.host.local; },
     get timing() { return world.timing(); },
+    console: terminal,
     renderer,
 };
 

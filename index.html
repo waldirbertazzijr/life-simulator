@@ -396,6 +396,33 @@
         #story .line { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--hud-line); color: var(--hud-muted); font-style: italic; font-size: 15px; text-align: center; }
         #story .actions { display: flex; gap: 10px; justify-content: center; margin-top: 14px; }
         #story button { height: 32px; padding: 0 16px; font: 17px var(--serif); color: var(--hud-text); border: 1px solid var(--hud-line); border-radius: 2px; }
+
+        /* The admin console (play/console.js): ` or F2. It slides down from
+           the top, in the panel's colours, with a monospace line. */
+        #console {
+            position: fixed; left: 0; right: 0; top: 0; z-index: 30; height: min(52vh, 480px);
+            display: flex; flex-direction: column;
+            background: rgba(14, 16, 15, 0.93); border-bottom: 1px solid var(--line);
+            box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+            backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+            font: 12.5px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+            color: var(--text); text-shadow: none;
+            transform: translateY(-100%); visibility: hidden;
+            transition: transform 0.16s ease-in, visibility 0s linear 0.16s;
+        }
+        #console.open { transform: none; visibility: visible; transition: transform 0.18s ease-out; }
+        #console-log { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 16px 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
+        #console-log .cmd { color: var(--text); margin-top: 4px; }
+        #console-log .cmd::before { content: "› "; color: var(--muted); }
+        #console-log .ok { color: #b7bdb4; }
+        #console-log .error { color: #df9a86; }
+        #console-log .usage, #console-log .info { color: var(--muted); }
+        .console-line { display: flex; align-items: center; gap: 8px; padding: 7px 16px 9px; border-top: 1px solid var(--line); }
+        .console-line span { color: var(--muted); }
+        #console-input { flex: 1; min-width: 0; font: inherit; color: var(--text); background: none; border: 0; outline: none; caret-color: var(--accent); }
+        /* Play: admin commands were used in this game. */
+        #hud-admin { position: absolute; top: 24px; right: 30px; font-size: 14px; font-style: italic; letter-spacing: 0.06em; color: var(--hud-muted); }
+        #hud-admin[hidden] { display: none; }
     </style>
 </head>
 <body>
@@ -406,6 +433,7 @@
             <h1>Life Simulator</h1>
             <button id="play" hidden title="Lead a tribe: play as its people">Play</button>
             <button id="blood" aria-pressed="true" title="Blood: on"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2.2C6.2 5 4.5 7.2 4.5 9.6a3.5 3.5 0 0 0 7 0C11.5 7.2 9.8 5 8 2.2z"/><path class="off" d="M3 13 13 3"/></svg></button>
+            <button id="console-open" title="Admin console (` or F2)"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4.5 6.5 8 3 11.5"/><path d="M8.5 11.5H13"/></svg></button>
             <button id="collapse" title="Hide panel (H)" aria-expanded="true"><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M3.5 8h9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
         </header>
         <div class="body">
@@ -545,6 +573,7 @@
         <div class="hud-dot"></div>
         <div id="hud-ring" hidden></div>
         <div id="hud-flash"></div>
+        <div id="hud-admin" hidden title="Admin commands were used in this game">admin</div>
     </div>
     <div id="banners" aria-live="polite"></div>
     <!-- Your tribe's answer to a call (play/calls.js), in a body or on the map. -->
@@ -559,6 +588,12 @@
         </dl>
         <div class="line" id="story-line"></div>
         <div class="actions"><button id="story-again">Play again</button><button id="story-watch">Keep watching</button></div>
+    </section>
+
+    <!-- The admin console (play/console.js): ` or F2. -->
+    <section id="console" aria-label="Admin console" aria-hidden="true">
+        <div id="console-log" role="log" aria-live="polite"></div>
+        <label class="console-line"><span>›</span><input id="console-input" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Command"></label>
     </section>
 
     <script type="importmap">{ "imports": { "three": "./vendor/three/three.module.min.js" } }</script>

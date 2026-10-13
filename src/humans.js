@@ -143,7 +143,7 @@ function nearCamp(world, tribe) {
     }
 }
 
-function spawnPerson(world, tribe, x, y, energy, age, parent = -1) {
+export function spawnPerson(world, tribe, x, y, energy, age, parent = -1) {
     const P = world.p.human;
     const pop = world.humans;
     const spread = world.p.evolution.initialSpread;

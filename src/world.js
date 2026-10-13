@@ -20,6 +20,7 @@ import { caught, afterStep } from './player.js';
 import { Spears, stepSpears, spoilCarcasses } from './spears.js';
 import { fighting } from './orders.js';
 import { initItems, stepItems, bequeath, shielded, creditHolder, TASK } from './items.js';
+import { spared, keepLife } from './admin.js';
 
 export { STATE, STATE_LABEL } from './population.js';
 
@@ -57,6 +58,9 @@ export class World {
         // The person the page controls (src/player.js), or null: nobody, and
         // then the world runs exactly as if player.js did not exist.
         this.player = null;
+        // The admin console's `immortal` (admin.js): null, or {id, life}, the
+        // controlled person's life, which does not fall while it is set.
+        this.immortal = null;
         // The player's spears in flight, and its kills waiting to be butchered
         // (src/spears.js): empty unless someone is played. With items, every
         // hunter's kills wait to be butchered too.
@@ -141,6 +145,7 @@ export class World {
     // of how its story ended. (The event also says, for drawing, a person's
     // tribe and whether a child died.)
     die(pop, i, cause, by = 0) {
+        if (this.player !== null && this.immortal !== null && spared(this, pop, i, cause)) return; // (admin.js: immortal)
         pop.energy[i] = 0;
         const kind = this.kindOf(pop);
         const tally = this.deaths[kind];
@@ -258,6 +263,7 @@ export class World {
         if (this.tribes.length) stepTribes(this);
         if (this.itemsOn) stepItems(this);               // torches burn out, lost items go, tribes reckon their needs
         if (this.player !== null) afterStep(this); // if the controlled person died: its heir (player.js)
+        if (this.player !== null && this.immortal !== null) keepLife(this); // (admin.js: immortal)
         this.time++;
     }
 

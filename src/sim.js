@@ -23,6 +23,9 @@
 //                                            'gather' {on}, 'eat', 'store', 'take' (player.js); with items:
 //                                            'craft' {kind, flint}, 'skill' {dx, dy, target, lock},
 //                                            'tool' {dx, dy, target}, 'pickup' {item}, 'cycle' {slot}, 'drop' {item}
+//        admin {id, cmd, args, target}       an admin console command (admin.js), run at the start of the
+//                                            next step (at once while paused); answered by an event
+//                                            {type: 'admin', id, cmd, ok, text, changed, time}
 //   out  started {gen, hash}                 the new world's first moment, hashed
 //        snapshot {...}                      see pack() below; with `events`, everything that happened
 //                                            since the last one (World.events, oldest first),
@@ -41,6 +44,7 @@ import { takeControl, applyInput, applyAct, playerSnapshot } from './player.js';
 import { packCarcasses } from './spears.js';
 import { ORDER_KINDS } from './orders.js';
 import { describe, fraction } from './items.js';
+import { runAdmin } from './admin.js';
 
 // Steps per second at 1×: a calm pace, at which a person walks about six
 // units (a little over a body length) a second and runs at ten. (It used to
@@ -96,6 +100,7 @@ export class Sim {
         this.dirty = false; // changed without a step (new world, follow): send it even if paused
         this.samples = [];
         this.events = []; // World.events from every step since the last snapshot
+        this.admin = [];  // admin console commands waiting for the next step (admin.js)
         this.packer = new Packer();
     }
 
@@ -137,6 +142,10 @@ export class Sim {
             case 'act':
                 if (this.world) applyAct(this.world, msg);
                 this.dirty = true;
+                break;
+            case 'admin':
+                this.admin.push(msg);
+                if (this.paused) runAdmin(this); // (no step is coming)
                 break;
         }
         this.offer();
@@ -188,6 +197,7 @@ export class Sim {
     }
 
     step() {
+        if (this.admin.length !== 0) runAdmin(this); // (admin.js: as the player's acts, before the step)
         const w = this.world;
         w.step();
         if (w.time % SAMPLE_EVERY === 0) this.samples.push(w.grass.mean(), w.herbivores.n, w.carnivores.n, w.humans.n);

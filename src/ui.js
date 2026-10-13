@@ -390,6 +390,7 @@ export class Panel {
             killed: fate.by ? `Killed by ${personName(fate.by)}` : 'Killed by defenders while raiding',
             starvation: 'Starved',
             'old age': 'Died of old age',
+            admin: 'Struck down by the gods', // (the admin console: admin.js)
         }[fate.cause];
         const kids = `${fate.children} ${fate.children === 1 ? 'child' : 'children'}`;
         const kills = kind !== 'herbivore' ? `, ${fate.kills} ${fate.kills === 1 ? 'kill' : 'kills'}` : '';
