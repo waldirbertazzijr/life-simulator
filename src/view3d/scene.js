@@ -210,7 +210,7 @@ export class View3D {
         const motion = this.creatures.motion;
         motion.tick(shown, t0);
         this.effects.tick(motion.clock, shown);
-        // (The body the page plays strikes and throws by itself: play/modes.js.)
+        // (The body the page plays strikes and throws by itself: play/hands.js.)
         const player = world.player ?? null;
         const self = player !== null && !player.auto ? player.id : 0;
         const events = world.events ?? NONE;

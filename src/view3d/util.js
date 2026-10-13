@@ -1,4 +1,6 @@
-// Small helpers shared by the 3D view.
+// Small helpers shared by the page: the 3D view, the flat one (render.js)
+// and play/. No three.js here, so node tests can use it too. (The
+// simulation's files keep their own copies.)
 //
 // The world is a torus: walk off the right edge and you come back on the left.
 // The 3D view keeps a "floating origin": the point the camera looks at is
@@ -6,8 +8,12 @@
 // shortest wrapped offset from that point. So nothing is ever far from the
 // origin (no float jitter) and the world's edge is never in sight.
 export const TAU = Math.PI * 2;
+export const DEG = Math.PI / 180;
 
-// Shortest signed difference on a ring of size `size` (as in render.js).
+export const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+export const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+
+// Shortest signed difference on a ring of size `size`.
 export const wrapDelta = (d, size) => (d > size / 2 ? d - size : d < -size / 2 ? d + size : d);
 
 // Bring a coordinate back into [0, size).

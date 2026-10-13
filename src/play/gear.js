@@ -15,6 +15,7 @@
 // in every hand.
 import { personName } from './names.js';
 import { ITEM_KINDS, SKILLS, costOf as costOfCode, affords } from '../items.js';
+import { wrapDelta } from '../view3d/util.js';
 
 export { ITEM_KINDS };
 export const RARITY = ['normal', 'rare', 'legendary'];
@@ -135,8 +136,6 @@ export function craftRows(tribe, p, flint = false) {
 }
 
 // ---- On the ground ----
-
-const wrapDelta = (d, size) => (d > size / 2 ? d - size : d < -size / 2 ? d + size : d);
 
 // The nearest item lying within `reach` of (x, y): {item, d}, or null.
 export function nearestLying(world, x, y, reach) {

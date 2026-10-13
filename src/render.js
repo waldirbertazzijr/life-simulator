@@ -11,8 +11,7 @@
 // The world wraps around (a torus), so each animal is drawn at its copy
 // nearest the camera, and the grass image is tiled as needed.
 import { drawFlag } from './flag.js';
-
-const TAU = Math.PI * 2;
+import { TAU, wrapDelta } from './view3d/util.js';
 
 export const COLORS = {
     background: '#101211',
@@ -47,9 +46,6 @@ function grassPalette() {
     }
     return lut;
 }
-
-// Shortest signed difference on a ring of size `size`.
-const wrapDelta = (d, size) => (d > size / 2 ? d - size : d < -size / 2 ? d + size : d);
 
 // Flags are painted by flag.js (shared with the 3D view and the panel).
 export { drawFlag };

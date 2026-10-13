@@ -1,6 +1,14 @@
 // Who you are, and where: the two ways to play (spec §4), stepping into a
 // body and out to the map, resting at camp, deaths and heirs, the end of a
-// line, and lock-on.
+// line; and, each frame, the body, the look and what happened to you. The
+// rest of play hangs off this (its parts are given this Modes as `m`):
+//
+//   actions.js    what the keys do (input.js names them)
+//   hands.js      attacks, eating, and E (context.js: what E does here)
+//   kit.js        items in hand: cycling, the tool, the skill, crafting
+//   lead.js       leading your tribe: calls, and the tribe's answers
+//   aim.js        the look's limits, lock-on, what is within reach
+//   hud-state.js  what the HUD shows (hud.js draws it)
 //
 //   God  (the default) — a sandbox: become anyone, any time; when you die
 //        you carry on as your heir, and with nobody left you are back on
@@ -28,90 +36,28 @@
 // the tribe, else its eldest child. Either way YOU DIED shows first, for
 // DEATH_SECONDS.
 //
-// The hands (package 2, at the end): attacks, butchering, gathering, eating
-// and the store, and the poses they show.
-//
-// Items (package 3, after the hands): the arrows swap in a spare, right
-// click uses the tool, Shift + right click the weapon's skill (for Spirit),
-// C at camp opens the craft menu, E picks up what lies at your feet; the
-// weapon in hand decides the attack (a spear throws or jabs, a bow shoots,
-// a club swings); LEGEND FORGED when one of yours becomes a legend, a word
-// when one breaks. What you hold is the simulation's (gear.js reads it).
-//
-// `env` is how this reaches the rest of the page (main.js): the world (the
-// Mirror), the input, the HUD, the camera rig, follow, the view, the speed,
-// pause, the panel (inBody, openPicker, changed), and the bodies' poses
-// (pose, hold, release: the 3D view's).
-import { Body, STAMINA } from './body.js';
-import { personName, ageText, relation, YEAR, years, deathPhrase, deathText } from './names.js';
-import { POSE } from '../view3d/animate.js';
-import { Calls, noticeFor, placed } from './calls.js';
-import {
-    itemsOn, itemById, kindName, itemName, rarityName, skillOf, weaponKind, equipment, cycleAct, craftRows,
-    nearestLying, pickupText, CRAFT_ORDER,
-} from './gear.js';
-import { TASK, handWork } from '../items.js';
+// `env` is how this reaches the rest of the page (play/env.js wires it from
+// main.js): the world (the Mirror), the input, the HUD, the camera rig,
+// follow, the view, the speed, pause, the panel (inBody, openPicker,
+// changed), the bodies' poses (pose, hold, release: the 3D view's), and
+// what is under the crosshair (crosshair, aimed).
+import { Body } from './body.js';
+import { personName, relation, YEAR, years, deathPhrase, deathText } from './names.js';
+import { LOOK_RATE, PITCH, START_PITCH, keepLock } from './aim.js';
+import { act } from './actions.js';
+import { Hands } from './hands.js';
+import { Kit } from './kit.js';
+import { Lead } from './lead.js';
+import { fillHud } from './hud-state.js';
+import { clamp, wrapDelta, angleDelta } from '../view3d/util.js';
 
-const DEG = Math.PI / 180;
-const TAU = Math.PI * 2;
+export { LOCK, lockTarget } from './aim.js';
+
 export const DEATH_SECONDS = 3.5;
 const REST_SPEED = 16;
 const MAP_CLOSE = 260;     // rising to the map: at most this far above your person
-const LOOK_RATE = 0.0024;  // radians per pixel of mouse movement
-// How far the look tilts (positive looks down), and where it starts.
-const PITCH = { shoulder: [-35 * DEG, 60 * DEG], first: [-60 * DEG, 70 * DEG] };
-const START_PITCH = { shoulder: 9 * DEG, first: 4 * DEG };
-// Lock-on (Q): the nearest creature within `range` and `cone` of the look;
-// it is let go beyond `keep`. The view turns to it in about `ease` seconds.
-export const LOCK = { range: 60, cone: 35 * DEG, keep: 90, ease: 0.25 };
-// Heights, for aiming at things: the eyes, how much higher the shoulder
-// camera's focus is, and the middle of each kind of body (creatures.js).
-const EYE = 4.1;
-const SHOULDER_UP = 0.7;
-const CENTER = { herbivore: 2.0, carnivore: 1.7, human: 2.4 };
-// The hands: seconds between bites from the pouch; how long an act may go
-// unanswered by the simulation before it is taken as turned down; and the
-// simulation's reaches (params.play), should a world not have them.
-const EAT_EVERY = 1;
-const ACK_WAIT = 0.6;
-const HANDS = { jabRange: 5, jabArc: Math.PI / 4, heavyRange: 34, butcherReach: 4, rackReach: 8, takeMax: 40 };
-const AIMED = 12 * DEG; // a creature this near the aim is what an attack goes for
-// A creature drawn this near the crosshair (px) is what a shot is aimed at: at
-// its middle, and led like a locked one.
-const SIGHT_PX = 28;
-// Items: a club's swing and a knife's cut reach this far; an item lying
-// this near (at your feet) is picked up before the rack is used, one within
-// `reach` (the simulation's) only when the rack offers nothing.
-const ITEMS = { swing: 4, cut: 3, feet: 3, reach: 6 };
-// What the hands do while E is held (let go, they stop); gathering food
-// goes on until E again. Chopping and knapping are gathering to the
-// simulation (act 'gather': it decides by the ground underfoot, as the
-// page's prompt does: items.js handWork), and what each gathers.
-const HELD = new Set(['butcher', 'chop', 'knap']);
-const WORK = { [TASK.WOOD]: 'chop', [TASK.FLINT]: 'knap' };
-const GATHERS = { gather: 'food', chop: 'wood', knap: 'flint' };
-const WORK_POSE = { butcher: POSE.BUTCHER, gather: POSE.GATHER, chop: POSE.CHOP, knap: POSE.KNAP };
-const DOING = { butcher: 'Butchering', gather: 'Stop gathering', chop: 'Chopping wood', knap: 'Knapping flint' };
-
-// The prompt at the rack with something to store: 'Store 30 food, 3 wood'
-// (a material less than one is named without a number).
-function storeText({ amount, wood = 0, flint = 0 }) {
-    const parts = amount >= 1 ? [`${amount} food`] : [];
-    for (const [name, v] of [['wood', wood], ['flint', flint]]) if (v > 0) parts.push(v >= 1 ? `${Math.floor(v)} ${name}` : name);
-    return `Store ${parts.join(', ')}`;
-}
-// The pose of an attack (and of a charge, held at its wind-up) by weapon.
-const ATTACK_POSE = { spear: POSE.THROW, bow: POSE.SHOOT, club: POSE.SWING };
-const TOOL_POSE = { knife: POSE.JAB, torch: POSE.SWING };
-
-const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
-const wrapDelta = (d, size) => (d > size / 2 ? d - size : d < -size / 2 ? d + size : d);
 // A tribe-mate dying this close to you is told (mourn).
 const MOURN = 80;
-const angleDelta = (a) => {
-    a %= TAU;
-    return a > Math.PI ? a - TAU : a <= -Math.PI ? a + TAU : a;
-};
 
 // The tribe's most experienced adult: most kills, ties going to the eldest.
 // 0 if it has no adults.
@@ -151,26 +97,6 @@ export function pickHeir(world, dead) {
     return e ? { id: e, gap: 0 } : null;
 }
 
-// The id of the creature to lock on to from (x, y) looking along `yaw`:
-// the nearest within `range` and `cone` of the look, never `self`; 0 if none.
-export function lockTarget(world, x, y, yaw, self, range = LOCK.range, cone = LOCK.cone) {
-    const { width: W, height: H } = world;
-    let best = 0;
-    let bestD = range;
-    for (const pop of [world.herbivores, world.carnivores, world.humans]) {
-        for (let i = 0; i < pop.n; i++) {
-            if (pop.id[i] === self) continue;
-            const dx = wrapDelta(pop.x[i] - x, W);
-            const dy = wrapDelta(pop.y[i] - y, H);
-            const d = Math.hypot(dx, dy);
-            if (d > bestD || Math.abs(angleDelta(Math.atan2(dy, dx) - yaw)) > cone) continue;
-            best = pop.id[i];
-            bestD = d;
-        }
-    }
-    return best;
-}
-
 const freshStory = () => ({ played: new Map() });
 
 export class Modes {
@@ -193,7 +119,7 @@ export class Modes {
         this.seenId = 0;         // the person the latest `player` was about
         this.dying = null;       // { t, dead, outcome } while YOU DIED shows
         this.over = false;       // a Play game has ended; the story is shown
-        this.lock = 0;           // the creature locked on to
+        this.lock = 0;           // the creature locked on to (aim.js)
         this.story = freshStory();
         this.aim = { yaw: 0, pitch: 0, crouch: false };      // for the camera (camera.js)
         this.pose = { id: 0, x: 0, y: 0, heading: 0 };      // for the Mirror
@@ -206,18 +132,26 @@ export class Modes {
         // For checking (window.play.state): moves the simulation turned down
         // (each one a jump back), and the person's own reports placing the body.
         this.stats = { snaps: 0, placed: 0 };
-        // The hands (see the end).
-        this.clock = 0;          // seconds in a body, for the hands' waits
-        this.doing = null;       // { kind: 'gather' | 'butcher', id, acked, since } while at it
-        this.attacked = -1;      // when an attack went, until the simulation shows the spear gone (clock)
-        this.ate = -Infinity;    // when you last ate (clock)
-        this.held = 0;           // the pose held on your body (POSE), or 0
-        this.calls = new Calls(); // leading your tribe (calls.js)
-        // Items (see the end): the craft menu while it is open, and when a
-        // craft was asked for, until the simulation shows it under way (clock).
-        this.menu = null;        // { index, flint }
-        this.craftAsked = -1;
+        this.clock = 0;          // seconds in a body, for the hands' and the kit's waits
+        // The parts (each keeps its own state, and reaches the rest through this).
+        this.hands = new Hands(this); // attacks, eating, E (hands.js)
+        this.kit = new Kit(this);     // items in hand, the craft menu (kit.js)
+        this.lead = new Lead(this);   // leading your tribe (lead.js)
         this.input.onAction = (name, info) => this.action(name, info);
+    }
+
+    // What the hands are at, the craft menu, and the calls (for main.js, the
+    // tests and the console: the parts keep them).
+    get doing() {
+        return this.hands.doing;
+    }
+
+    get menu() {
+        return this.kit.menu;
+    }
+
+    get calls() {
+        return this.lead.calls;
     }
 
     // ---- Who ----
@@ -366,11 +300,8 @@ export class Modes {
     reset() {
         if (this.inBody) this.env.setSpeed(this.mapSpeed);
         this.inBody = false;
-        this.doing = null;
-        this.held = 0; // (the new world's bodies have no poses)
-        this.attacked = -1;
-        this.craftAsked = -1;
-        this.menu = null;
+        this.hands.reset();
+        this.kit.reset();
         this.input.capture = null;
         this.self = 0;
         this.known = null;
@@ -392,6 +323,19 @@ export class Modes {
         const rig = this.env.rig();
         if (rig) rig.aim = null;
         this.env.changed();
+    }
+
+    // The simulation's report on your body, if it has it by hand; or null.
+    mine() {
+        const p = this.world.player;
+        return p !== null && p.id !== 0 && p.id === this.self && !p.auto ? p : null;
+    }
+
+    // Put down whatever the hands were at, on the page alone (a new body, the
+    // map, death: the simulation puts its own down), and shut the craft menu.
+    dropHands() {
+        this.hands.drop();
+        this.kit.drop();
     }
 
     // ---- Resting at camp ----
@@ -419,126 +363,30 @@ export class Modes {
         if (this.inBody) this.env.setSpeed(1);
     }
 
-    // ---- What the keys do (input.js names them) ----
+    // ---- The keys, the hands, leading (the parts do it) ----
 
+    // An action input.js names (actions.js says what it does).
     action(name, info) {
-        if (name === 'map') {
-            if (this.inBody) this.leave();
-            else this.back();
-            return;
-        }
-        if (name === 'call' && !this.inBody) {
-            this.armCall(); // G on the map
-            return;
-        }
-        if (!this.inBody || this.dying) return;
-        switch (name) {
-            case 'move':
-                this.standUp();
-                this.stopHands();
-                this.closeCraft();
-                break;
-            case 'roll': {
-                this.standUp();
-                this.stopHands();
-                const f = this.world.find(this.self);
-                if (f && this.body.roll(this.input, this.envFor(f))) this.world.act({ seq: this.body.nextSeq(), action: 'roll' });
-                break;
-            }
-            case 'crouch':
-                this.standUp();
-                this.body.crouch = !this.body.crouch;
-                break;
-            case 'interact':
-                this.interact();
-                break;
-            case 'interact-end':
-                if (HELD.has(this.doing?.kind)) this.stopHands(); // (butchering, chopping and knapping last while E is held)
-                break;
-            case 'attack':
-                this.attack(info);
-                break;
-            case 'eat':
-                this.eat();
-                break;
-            case 'lock':
-                this.lock = this.lock ? 0 : lockTarget(this.world, this.body.x, this.body.y, this.body.yaw, this.self);
-                break;
-            case 'view':
-                this.view = this.view === 'shoulder' ? 'first' : 'shoulder';
-                this.body.pitch = clamp(this.body.pitch, ...PITCH[this.view]);
-                this.env.setView(this.view);
-                break;
-            case 'pause':
-                this.env.setPaused(!this.env.getPaused());
-                break;
-            case 'cycle-call':
-                this.calls.cycle(this.world.p.items?.enabled === true);
-                break;
-            case 'call':
-                this.callHere();
-                break;
-            case 'cycle-weapon':
-                this.cycle('weapon');
-                break;
-            case 'cycle-tool':
-                this.cycle('tool');
-                break;
-            case 'tool':
-                this.useTool();
-                break;
-            case 'skill':
-                this.useSkill();
-                break;
-            case 'craft':
-                if (this.menu) this.closeCraft();
-                else this.openCraft();
-                break;
-            default:
-                // (↓, the pouch: nothing to cycle yet.)
-                break;
-        }
+        act(this, name, info);
     }
 
-    // ---- Leading your tribe (calls.js; the simulation's side is orders.js) ----
-
-    // G in a body: the call in the slot, at the ground under the crosshair
-    // (where you stand, looking at the sky); a rally, around you.
-    callHere() {
-        const kind = this.calls.call.kind;
-        const at = kind === 'rally' ? null : this.env.crosshair?.() ?? null;
-        this.world.act({ seq: this.body.nextSeq(), action: 'call', kind, x: at ? at.x : this.body.x, y: at ? at.y : this.body.y });
+    // What E would do here (context.js), or null.
+    interaction() {
+        return this.hands.interaction();
     }
 
-    // On the map: ready a call (by default the slot's) to be given where you
-    // click next; asked for again, let it go. One about the camp (Gather
-    // food, Defend camp) is given at once.
+    // A left click: a light attack, or a heavy one of info.power (hands.js).
+    attack(info) {
+        return this.hands.attack(info);
+    }
+
+    // On the map: ready a call, or give the armed one at (x, y) (lead.js).
     armCall(kind) {
-        if (this.inBody || !this.self || this.dying || this.over) return;
-        if (this.calls.armed && (kind === undefined || kind === this.calls.armed)) this.calls.disarm();
-        else {
-            this.calls.arm(kind);
-            const camp = this.world.tribeById.get(this.tribe)?.camp;
-            if (!placed(this.calls.armed) && camp) this.callAt(camp.x, camp.y);
-        }
-        this.env.changed();
+        this.lead.armCall(kind);
     }
 
-    // A click on the map at (x, y), with a call armed: it is given there,
-    // once. False if no call was armed (the click is the map's).
     callAt(x, y) {
-        const kind = this.calls.armed;
-        if (!kind || this.inBody || !this.self) return false;
-        this.calls.disarm();
-        this.world.act({ seq: this.body.nextSeq(), action: 'call', kind, x, y });
-        this.env.changed();
-        return true;
-    }
-
-    // The tribe's answer to a call ('call', 'refused', 'rally' events), if
-    // it is yours: a notice.
-    answered(e) {
-        if (this.self && e.tribe === this.tribe) this.hud.notice?.(noticeFor(e), e.type === 'refused');
+        return this.lead.callAt(x, y);
     }
 
     // ---- Each frame ----
@@ -636,14 +484,15 @@ export class Modes {
         }
         if (this.inBody && !this.dying) {
             this.clock += dt;
-            this.keepHands();
+            this.hands.keep();
         }
         const f = this.self && !this.dying ? w.find(this.self) : null;
         if (f) {
             this.tribe = f.pop.tribe[f.i];
             this.record(f);
         }
-        this.keepLock(dt);
+        // Lock-on: kept while the target lives and is near, the look turned to it.
+        if (this.lock) this.lock = this.inBody ? keepLock(w, this.body, this.lock, this.view, dt) : 0;
         const rig = this.env.rig();
         if (rig) {
             if (this.inBody) {
@@ -655,6 +504,7 @@ export class Modes {
         }
     }
 
+    // One of this frame's events (the Mirror's), to whichever part it is about.
     event(e) {
         switch (e.type) {
             case 'bite':
@@ -680,15 +530,24 @@ export class Modes {
             case 'call':
             case 'refused':
             case 'rally':
-                this.answered(e);
+                this.lead.answered(e);
                 break;
             case 'legend':
             case 'broke':
             case 'crafted':
-                this.itemEvent(e);
+                this.kit.itemEvent(e);
                 break;
         }
     }
+
+    // ---- The HUD (after the camera has moved) ----
+
+    drawHud(dt) {
+        if (!this.inBody) return;
+        this.hud.update(fillHud(this, this.hudState), dt);
+    }
+
+    // ---- Death, heirs, and the story of your line ----
 
     // Your person has died (the death event e): YOU DIED, how, and then
     // (carryOn) whoever is next.
@@ -821,620 +680,5 @@ export class Modes {
             children: sum('children'),
             line: rs.map((r) => personName(r.id)),
         };
-    }
-
-    // Keep the lock on while the target lives and is near; turn the look
-    // toward it.
-    keepLock(dt) {
-        if (!this.lock) return;
-        const w = this.world;
-        const t = this.inBody ? w.find(this.lock) : null;
-        const b = this.body;
-        if (!t) {
-            this.lock = 0;
-            return;
-        }
-        const dx = wrapDelta(t.pop.x[t.i] - b.x, w.width);
-        const dy = wrapDelta(t.pop.y[t.i] - b.y, w.height);
-        const d = Math.hypot(dx, dy);
-        if (d > LOCK.keep) {
-            this.lock = 0;
-            return;
-        }
-        const k = 1 - Math.exp(-dt / LOCK.ease);
-        b.yaw = angleDelta(b.yaw + angleDelta(Math.atan2(dy, dx) - b.yaw) * k);
-        const ground = (x, y) => (w.terrain ? w.terrain.heightAt(x, y) : 0);
-        const eye = ground(b.x, b.y) + EYE + (this.view === 'shoulder' ? SHOULDER_UP : 0);
-        const at = ground(t.pop.x[t.i], t.pop.y[t.i]) + CENTER[t.kind];
-        const want = clamp(Math.atan2(eye - at, Math.max(d, 1)), ...PITCH[this.view]);
-        b.pitch += (want - b.pitch) * k;
-    }
-
-    // ---- The HUD (after the camera has moved) ----
-
-    drawHud(dt) {
-        if (!this.inBody) return;
-        const w = this.world;
-        const P = w.p.human;
-        const b = this.body;
-        const f = this.self && !this.dying ? w.find(this.self) : null;
-        const tribe = w.tribeById.get(this.tribe) ?? null;
-        const p = w.player && w.player.id === this.self ? w.player : null;
-        const spiritMax = w.p.play?.spiritMax ?? 100;
-        const paused = this.env.getPaused();
-        const s = this.hudState;
-        const id = this.dying ? this.dying.dead.id : this.self;
-        s.name = personName(id);
-        s.age = this.known ? ageText(this.known.age) : '';
-        s.life = f ? f.pop.energy[f.i] / P.maxEnergy : 0;
-        s.spirit = (p ? p.spirit : spiritMax) / spiritMax;
-        s.stamina = b.stamina / STAMINA.max;
-        s.tribe = tribe;
-        s.yaw = b.yaw;
-        s.camp = tribe ? Math.atan2(wrapDelta(tribe.camp.y - b.y, w.height), wrapDelta(tribe.camp.x - b.x, w.width)) : null;
-        s.carry = f ? this.carried(f) : 0;
-        s.load = this.load(); // (wood and flint, by the pouch)
-        s.store = tribe ? tribe.store : 0;
-        s.prompt = this.dying || this.menu ? null : paused ? [['P', 'Resume']] : this.prompt(f);
-        s.reload = f ? this.reloading() : 0;
-        s.charge = this.input.charging === true ? this.input.charge : 0;
-        s.crouch = b.crouch;
-        // Your call, and your tribe's standing order on the compass (calls.js).
-        s.call = this.calls.call;
-        const order = tribe?.order ?? null;
-        s.order = order ? Math.atan2(wrapDelta(order.y - b.y, w.height), wrapDelta(order.x - b.x, w.width)) : null;
-        // What you hold (gear.js), and the store's materials; the craft menu
-        // follows the store while it is open.
-        s.gear = equipment(w, p);
-        s.materials = s.gear.on && tribe ? { wood: tribe.wood ?? 0, flint: tribe.flint ?? 0, hide: tribe.hide ?? 0 } : null;
-        if (this.menu) this.showCraft();
-        s.ring = null;
-        s.target = null;
-        const t = this.lock ? w.find(this.lock) : null;
-        if (t) {
-            const tx = t.pop.x[t.i];
-            const ty = t.pop.y[t.i];
-            s.target = Math.atan2(wrapDelta(ty - b.y, w.height), wrapDelta(tx - b.x, w.width));
-            const rig = this.env.rig();
-            const h = (w.terrain ? w.terrain.heightAt(tx, ty) : 0) + CENTER[t.kind];
-            if (rig && rig.project(tx, ty, h, this.point)) s.ring = this.point;
-        }
-        this.hud.update(s, dt);
-    }
-
-    // ---- The hands (package 2) ----
-    //
-    // Left click attacks (input.js): a tap, a light attack (a jab if a
-    // creature is within reach in front, else a throw); held, a heavy throw,
-    // charged for up to a second (its power). Each costs stamina, and none
-    // goes while the spear is still coming back (the simulation's reload, as
-    // its report says) or from a child. The lock-on aims it: the simulation
-    // leads the target. E does what the place offers (interaction): butcher
-    // your kill (while E is held), store what you carry or take food at the
-    // rack, rest in camp; outside it, chop wood in forest or knap flint on
-    // rock (while E is held, until the load is full), or gather on grass
-    // (until E again or a move). R eats from the pouch. The body shows each
-    // (the poses: env.pose, hold, release).
-
-    // The simulation's report on your body, if it has it by hand; or null.
-    mine() {
-        const p = this.world.player;
-        return p !== null && p.id !== 0 && p.id === this.self && !p.auto ? p : null;
-    }
-
-    // What you carry: the simulation's latest word, else what is drawn.
-    carried(f) {
-        const p = this.mine();
-        if (p !== null && Number.isFinite(p.carry)) return p.carry;
-        return f ? f.pop.carry[f.i] : 0;
-    }
-
-    // The wood and flint you carry, and the most you can (all of it the
-    // simulation's word; nothing before it has said).
-    load() {
-        const p = this.mine();
-        return { wood: p?.wood ?? 0, flint: p?.flint ?? 0, max: p?.loadMax ?? this.world.p.items?.load ?? 0 };
-    }
-
-    // How much of the spear's reload is still to go, 0..1: all of it from the
-    // moment you attack until the simulation's report shows it (or, should
-    // it not take the attack up, a moment later).
-    reloading() {
-        const p = this.mine();
-        if (this.attacked >= 0) {
-            if ((p !== null && p.reload > 0) || this.clock - this.attacked > ACK_WAIT) this.attacked = -1;
-            else return 1;
-        }
-        return p !== null && p.reload > 0 ? Math.min(1, p.reload / this.world.p.human.reload) : 0;
-    }
-
-    // Can you attack now? (An adult with a weapon, the spear back, some
-    // stamina, the world running.)
-    canAttack(f) {
-        return !!f && f.pop.age[f.i] >= this.world.p.human.maturity && this.reloading() === 0
-            && this.body.stamina > 0 && !this.env.getPaused() && this.weapon() !== '';
-    }
-
-    // A light attack (info.heavy false) or a heavy one of info.power. The
-    // weapon in hand decides how: a spear jabs what is within reach in
-    // front, else is thrown; a bow shoots; a club swings at what is near.
-    attack(info = {}) {
-        const w = this.world;
-        const f = w.find(this.self);
-        if (!this.canAttack(f)) return false;
-        const heavy = info.heavy === true;
-        const kind = this.weapon();
-        this.body.spend(heavy ? STAMINA.heavy : STAMINA.light);
-        this.standUp();
-        this.stopHands();
-        this.closeCraft();
-        const yaw = this.body.yaw;
-        const { dx, dy, sighted } = this.sight();
-        const power = heavy ? clamp(Number(info.power) || 0, 0, 1) : 0;
-        const arc = w.p.play?.jabArc ?? HANDS.jabArc;
-        // What it goes for (your followers too, orders.js): the locked
-        // target, which the simulation leads the throw onto; else what is
-        // within reach or under the aim, told but not led (no aiming for you).
-        const jab = kind !== 'spear' || heavy ? 0 : this.nearestAlong(dx, dy, w.p.play?.jabRange ?? HANDS.jabRange, arc);
-        const target = this.lock || jab || (kind === 'club' ? this.nearestAlong(dx, dy, ITEMS.swing, arc) : sighted)
-            || (kind === 'club' ? 0 : this.nearestAlong(dx, dy, w.p.play?.heavyRange ?? HANDS.heavyRange, AIMED));
-        w.act({ seq: this.body.nextSeq(), action: 'attack', heavy, dx, dy, power, target, lock: this.lock !== 0 || (sighted !== 0 && target === sighted) });
-        this.body.heading = yaw; // (turned to throw)
-        this.attacked = this.clock;
-        // A charged throw carries on from its wind-up (the hold).
-        const code = jab ? POSE.JAB : ATTACK_POSE[kind] ?? POSE.THROW;
-        if (this.held === code) this.held = 0;
-        this.env.pose?.(this.self, code);
-        return true;
-    }
-
-    // Where a shot goes (dx, dy): at whoever is drawn under the crosshair
-    // (never you or a tribe-mate: `sighted`, its id, which the simulation
-    // then leads the shot onto, at its middle), else at the ground there,
-    // else straight along your look. (Over the shoulder the camera sits
-    // beside you, so the look's own line passes beside what the crosshair
-    // is on.) With a lock-on, along your look: the lock is led onto.
-    sight() {
-        const w = this.world;
-        const b = this.body;
-        let dx = Math.cos(b.yaw);
-        let dy = Math.sin(b.yaw);
-        if (this.lock) return { dx, dy, sighted: 0 };
-        const sighted = this.env.aimed?.(SIGHT_PX, (id) => id === this.self || this.mate(id)) ?? 0;
-        const f = sighted ? w.find(sighted) : null;
-        const p = f ? { x: f.pop.x[f.i], y: f.pop.y[f.i] } : this.env.crosshair?.() ?? null;
-        if (p) {
-            const ex = wrapDelta(p.x - b.x, w.width);
-            const ey = wrapDelta(p.y - b.y, w.height);
-            const d = Math.hypot(ex, ey);
-            if (d > 1) {
-                dx = ex / d;
-                dy = ey / d;
-            }
-        }
-        return { dx, dy, sighted: f ? sighted : 0 };
-    }
-
-    // Is `id` someone of your own tribe?
-    mate(id) {
-        const f = this.world.find(id);
-        return f !== null && f.kind === 'human' && f.pop.tribe[f.i] === this.tribe;
-    }
-
-    // The nearest creature (never yourself or a tribe-mate) within `range`
-    // and `arc` (radians, either way) of (dx, dy), as drawn: its id, or 0.
-    // Within the jab's reach and arc, it is what the simulation jabs.
-    nearestAlong(dx, dy, range, arc) {
-        const w = this.world;
-        const cone = Math.cos(arc);
-        const b = this.body;
-        let best = 0;
-        let bestD = range;
-        for (const pop of [w.herbivores, w.carnivores, w.humans]) {
-            for (let i = 0; i < pop.n; i++) {
-                if (pop.id[i] === this.self || (pop === w.humans && pop.tribe[i] === this.tribe)) continue;
-                const ex = wrapDelta(pop.x[i] - b.x, w.width);
-                const ey = wrapDelta(pop.y[i] - b.y, w.height);
-                const d = Math.hypot(ex, ey);
-                if (d > bestD || (d > 1e-9 && ex * dx + ey * dy < d * cone)) continue;
-                best = pop.id[i];
-                bestD = d;
-            }
-        }
-        return best;
-    }
-
-    // R: a bite from the pouch (the simulation eats up to its eatMax, never
-    // past full), at most once a second.
-    eat() {
-        const f = this.world.find(this.self);
-        if (!f || this.clock - this.ate < EAT_EVERY) return false;
-        const p = this.mine();
-        const energy = p !== null && Number.isFinite(p.energy) ? p.energy : f.pop.energy[f.i];
-        if (!(this.carried(f) > 0) || energy >= this.world.p.human.maxEnergy) return false;
-        this.ate = this.clock;
-        this.world.act({ seq: this.body.nextSeq(), action: 'eat' });
-        this.env.pose?.(this.self, POSE.EAT);
-        return true;
-    }
-
-    // What E would do here, in this order: butcher a kill of yours within
-    // reach; at the rack (by the camp's centre), store what you carry (food,
-    // wood, flint), or with empty hands take food for the road; in camp,
-    // rest; outside it, in forest chop wood and on rock or tundra knap flint
-    // (while the load has room: the simulation's own test of the ground,
-    // items.js handWork, on the Mirror's land), elsewhere, on grass worth
-    // it, gather. { kind, id?, amount?, wood?, flint? }, or null.
-    interaction() {
-        const w = this.world;
-        const f = w.find(this.self);
-        if (!f) return null;
-        const P = w.p.human;
-        const Q = w.p.play ?? HANDS;
-        const b = this.body;
-        let best = null;
-        let bestD = Q.butcherReach ?? HANDS.butcherReach;
-        for (const c of w.carcasses ?? []) {
-            const d = Math.hypot(wrapDelta(c.x - b.x, w.width), wrapDelta(c.y - b.y, w.height));
-            if (d <= bestD) {
-                best = c;
-                bestD = d;
-            }
-        }
-        if (best) return { kind: 'butcher', id: best.id };
-        // An item lying at your feet comes next; one a little farther off,
-        // only where the rack has nothing to offer (items, at the end).
-        const lying = itemsOn(w) ? nearestLying(w, b.x, b.y, w.p.items?.pickReach ?? ITEMS.reach) : null;
-        const pick = lying ? { kind: 'pickup', id: lying.item.id, item: lying.item } : null;
-        if (pick && lying.d <= ITEMS.feet) return pick;
-        const carry = this.carried(f);
-        const load = this.load();
-        const t = w.tribeById.get(this.tribe);
-        if (t) {
-            const d2 = wrapDelta(t.camp.x - b.x, w.width) ** 2 + wrapDelta(t.camp.y - b.y, w.height) ** 2;
-            if (d2 <= (Q.rackReach ?? HANDS.rackReach) ** 2) {
-                if (carry >= 1 || load.wood > 0 || load.flint > 0) {
-                    const what = { kind: 'store', amount: Math.floor(carry) };
-                    if (load.wood > 0) what.wood = load.wood;
-                    if (load.flint > 0) what.flint = load.flint;
-                    return what;
-                }
-                const amount = Math.floor(Math.min(Q.takeMax ?? HANDS.takeMax, t.store, P.carryMax - carry));
-                if (amount >= 1) return { kind: 'take', amount };
-            }
-            if (pick) return pick;
-            if (d2 < P.campRadius * P.campRadius) return { kind: 'rest' };
-        }
-        if (pick) return pick;
-        const work = WORK[handWork(w, b.x, b.y, t)];
-        if (work) return load.wood + load.flint < load.max - 1e-9 ? { kind: work } : null;
-        const g = w.grass;
-        if (g && g.g[g.index(b.x, b.y)] >= P.gatherMin && carry < P.carryMax) return { kind: 'gather' };
-        return null;
-    }
-
-    // E: stand up from resting, stop gathering, or do what the place offers.
-    interact() {
-        if (this.resting) {
-            this.standUp();
-            return;
-        }
-        if (this.doing) {
-            this.stopHands();
-            return;
-        }
-        const what = this.interaction();
-        if (!what) return;
-        if (what.kind === 'butcher') this.startHands('butcher', what.id);
-        else if (what.kind in GATHERS) this.startHands(what.kind, 0); // gather, chop, knap
-        else if (what.kind === 'rest') this.rest();
-        else if (what.kind === 'pickup') this.world.act({ seq: this.body.nextSeq(), action: 'pickup', item: what.id });
-        else this.world.act({ seq: this.body.nextSeq(), action: what.kind }); // store, take
-    }
-
-    // Butcher the carcass `id`, gather, chop or knap: it goes on (the body
-    // kneeling to it, swinging at a tree, striking stone) until it is done,
-    // stopped, or turned down (keepHands).
-    startHands(kind, id) {
-        const msg = kind === 'butcher' ? { action: 'butcher', on: true, id } : { action: 'gather', on: true };
-        this.world.act({ seq: this.body.nextSeq(), ...msg });
-        this.doing = { kind, id, acked: false, since: this.clock };
-        this.holdPose(WORK_POSE[kind]);
-    }
-
-    // Stop what the hands are at (E let go, E again, a move, an attack).
-    stopHands() {
-        const d = this.doing;
-        if (!d) return;
-        this.doing = null;
-        this.world.act({ seq: this.body.nextSeq(), action: d.kind === 'butcher' ? 'butcher' : 'gather', on: false });
-        this.releasePose();
-    }
-
-    // Put down whatever the hands were at, on the page alone (a new body, the
-    // map, death: the simulation puts its own down).
-    dropHands() {
-        this.doing = null;
-        this.releasePose();
-        this.attacked = -1;
-        this.craftAsked = -1;
-        this.closeCraft();
-    }
-
-    // Each frame: what the simulation says the hands are at (it stops them
-    // itself: the carcass cut up, the patch gathered thin, the pouch full),
-    // the weapon drawn back while a heavy attack charges, and the seated
-    // work of crafting while it goes on.
-    keepHands() {
-        if (this.attacked >= 0) this.reloading(); // (has the simulation taken the attack up?)
-        const d = this.doing;
-        if (d) {
-            const p = this.mine();
-            // (Gathering food: `true` from a simulation that does not say what.)
-            const at = p !== null && (d.kind === 'butcher' ? p.butchering === d.id
-                : p.gathering === GATHERS[d.kind] || (d.kind === 'gather' && p.gathering === true));
-            if (at) d.acked = true;
-            else if (d.acked || this.clock - d.since > ACK_WAIT) {
-                this.doing = null;
-                this.releasePose();
-            }
-        }
-        if (this.doing) return; // (its own pose is held)
-        const charge = ATTACK_POSE[this.weapon()] ?? POSE.THROW;
-        const charging = this.input.charging === true && this.canAttack(this.world.find(this.self));
-        const want = charging ? charge : this.crafting() ? POSE.CRAFT : 0;
-        if (want && this.held !== want) this.holdPose(want);
-        else if (!want && this.held) this.releasePose();
-    }
-
-    holdPose(code) {
-        this.held = code;
-        this.env.hold?.(this.self, code);
-    }
-
-    releasePose() {
-        if (!this.held) return;
-        this.held = 0;
-        this.env.release?.(this.self);
-    }
-
-    // The HUD's prompt: what E would do (or is doing), and R while you carry
-    // food. A list of [key, what], or null.
-    prompt(f) {
-        if (this.resting) return [['E', 'Rise']];
-        const out = [];
-        if (this.doing) out.push(['E', DOING[this.doing.kind] ?? 'Butchering']);
-        else {
-            const what = this.interaction();
-            if (what) {
-                out.push(['E', what.kind === 'butcher' ? 'Butcher'
-                    : what.kind === 'store' ? storeText(what)
-                    : what.kind === 'take' ? `Take ${what.amount} food`
-                    : what.kind === 'rest' ? 'Rest at camp'
-                    : what.kind === 'pickup' ? pickupText(what.item)
-                    : what.kind === 'chop' ? 'Chop wood'
-                    : what.kind === 'knap' ? 'Knap flint'
-                    : 'Gather', ...(what.kind === 'pickup' && what.item.rarity > 0 ? [rarityName(what.item.rarity)] : [])]);
-            }
-        }
-        if (f && this.carried(f) >= 1) out.push(['R', 'Eat']);
-        return out.length ? out : null;
-    }
-
-    // ---- Items (package 3) ----
-    //
-    // What you hold is the simulation's word (its report: weapon, tool, kit,
-    // crafting, skill; the Mirror's items): the page asks and shows. In a
-    // world without items, your weapon is the plain spear it always was.
-
-    // The kind of weapon in your hand ('' for none).
-    weapon() {
-        return weaponKind(this.world, this.mine());
-    }
-
-    // → and ←: swap the weapon (or the tool) in hand for the next spare.
-    cycle(slot) {
-        if (!itemsOn(this.world)) return false;
-        const act = cycleAct(this.mine(), slot);
-        if (!act) return false;
-        this.world.act({ seq: this.body.nextSeq(), ...act });
-        return true;
-    }
-
-    // Right click: the tool in hand. A knife cuts what is in front, a torch
-    // is brandished (predators near are driven off), a basket gathers (as E
-    // does: on, or off again).
-    useTool() {
-        const w = this.world;
-        if (!itemsOn(w)) return false;
-        const tool = itemById(w, this.mine()?.tool);
-        const kind = tool ? kindName(tool.kind) : '';
-        if (!kind) {
-            this.hud.notice?.('No tool in hand', true);
-            return false;
-        }
-        if (kind === 'basket') {
-            const what = this.doing ? null : this.interaction()?.kind;
-            if (this.doing?.kind in GATHERS) this.stopHands();
-            else if (what in GATHERS) {
-                this.standUp();
-                this.startHands(what, 0);
-            }
-            return true;
-        }
-        this.standUp();
-        this.stopHands();
-        this.closeCraft();
-        const yaw = this.body.yaw;
-        const dx = Math.cos(yaw);
-        const dy = Math.sin(yaw);
-        const target = this.lock || (kind === 'knife' ? this.nearestAlong(dx, dy, ITEMS.cut, w.p.play?.jabArc ?? HANDS.jabArc) : 0);
-        w.act({ seq: this.body.nextSeq(), action: 'tool', dx, dy, target });
-        this.body.heading = yaw;
-        this.env.pose?.(this.self, TOOL_POSE[kind] ?? POSE.JAB);
-        return true;
-    }
-
-    // Shift + right click: the weapon's skill, for Spirit (spec §8.6). Turned
-    // down here, with a word, when there is no skill or too little Spirit.
-    useSkill() {
-        const w = this.world;
-        if (!itemsOn(w)) return false;
-        const p = this.mine();
-        const weapon = itemById(w, p?.weapon);
-        const skill = skillOf(weapon, p?.skill ?? 0);
-        const f = w.find(this.self);
-        if (!skill || !f) {
-            this.hud.notice?.('No weapon skill', true);
-            return false;
-        }
-        if (f.pop.age[f.i] < w.p.human.maturity) {
-            this.hud.notice?.('A child cannot', true);
-            return false;
-        }
-        if (!((p?.spirit ?? 0) >= skill.cost)) {
-            this.hud.notice?.(`Not enough Spirit for ${skill.name}`, true);
-            return false;
-        }
-        this.standUp();
-        this.stopHands();
-        this.closeCraft();
-        const yaw = this.body.yaw;
-        const kind = kindName(weapon.kind);
-        const { dx, dy, sighted } = kind === 'club' ? { dx: Math.cos(yaw), dy: Math.sin(yaw), sighted: 0 } : this.sight();
-        const target = this.lock || sighted || this.nearestAlong(dx, dy, kind === 'club' ? 8 : w.p.play?.heavyRange ?? HANDS.heavyRange, kind === 'club' ? Math.PI : AIMED);
-        w.act({ seq: this.body.nextSeq(), action: 'skill', dx, dy, target, lock: this.lock !== 0 || (sighted !== 0 && target === sighted) });
-        this.body.heading = yaw;
-        this.env.pose?.(this.self, ATTACK_POSE[kind] ?? POSE.THROW);
-        return true;
-    }
-
-    // Is something being crafted? (The simulation says so, or a craft was
-    // just asked for and it has not answered yet.)
-    crafting() {
-        const p = this.mine();
-        if (p?.crafting) {
-            this.craftAsked = -1;
-            return true;
-        }
-        if (this.craftAsked >= 0 && this.clock - this.craftAsked <= ACK_WAIT) return true;
-        this.craftAsked = -1;
-        return false;
-    }
-
-    // C: the craft menu, at your camp only, for an adult not already at it.
-    // While it is open the pointer is free, and its keys are the menu's.
-    openCraft() {
-        const w = this.world;
-        const f = w.find(this.self);
-        if (!itemsOn(w) || !f) return false;
-        const no = f.pop.age[f.i] < w.p.human.maturity ? 'A child cannot craft'
-            : !this.atCamp() ? 'Craft at your camp'
-            : this.crafting() ? 'Already crafting'
-            : null;
-        if (no) {
-            this.hud.notice?.(no, true);
-            return false;
-        }
-        this.standUp();
-        this.stopHands();
-        const rows = craftRows(w.tribeById.get(this.tribe), w.p, false);
-        this.menu = { index: Math.max(0, rows.findIndex((r) => r.can)), flint: false };
-        this.input.capture = (code, repeat) => this.craftKey(code, repeat);
-        this.input.unlock?.();
-        this.showCraft();
-        return true;
-    }
-
-    // Shut the menu (relock: the pointer is taken again, for a key or click
-    // that counts as the user's gesture).
-    closeCraft(relock = false) {
-        if (!this.menu) return;
-        this.menu = null;
-        this.input.capture = null;
-        this.hud.craftMenu?.(null);
-        if (relock) this.input.lock?.();
-    }
-
-    showCraft() {
-        const m = this.menu;
-        const rows = craftRows(this.world.tribeById.get(this.tribe), this.world.p, m.flint);
-        this.hud.craftMenu?.({ rows, index: m.index, flint: m.flint }, this.craftActions ??= {
-            pick: (kind) => this.craftKind(kind),
-            hover: (index) => {
-                if (this.menu && this.menu.index !== index) {
-                    this.menu.index = index;
-                    this.showCraft();
-                }
-            },
-            flint: () => {
-                if (!this.menu) return;
-                this.menu.flint = !this.menu.flint;
-                this.showCraft();
-            },
-        });
-    }
-
-    // The menu's keys: ↑ ↓ choose, Enter crafts, F (or ← →) adds a flint,
-    // 1–6 craft at once, Esc or C close. Others pass (a move closes it).
-    craftKey(code, repeat) {
-        const m = this.menu;
-        if (!m) return false;
-        const n = CRAFT_ORDER.length;
-        if (code === 'ArrowUp' || code === 'ArrowDown') {
-            m.index = (m.index + (code === 'ArrowUp' ? n - 1 : 1)) % n;
-            this.showCraft();
-            return true;
-        }
-        if (repeat) return code === 'Enter' || code === 'NumpadEnter';
-        if (code === 'Enter' || code === 'NumpadEnter') {
-            this.craftKind(CRAFT_ORDER[m.index]);
-            return true;
-        }
-        if (code === 'KeyF' || code === 'ArrowLeft' || code === 'ArrowRight') {
-            m.flint = !m.flint;
-            this.showCraft();
-            return true;
-        }
-        if (code === 'Escape' || code === 'KeyC') {
-            this.closeCraft();
-            return true;
-        }
-        const digit = /^Digit([1-9])$/.exec(code);
-        if (digit && Number(digit[1]) <= n) {
-            this.craftKind(CRAFT_ORDER[Number(digit[1]) - 1]);
-            return true;
-        }
-        return false;
-    }
-
-    // Craft `kind` (with the menu's flint), if the store can pay for it.
-    craftKind(kind) {
-        const m = this.menu;
-        if (!m) return false;
-        const row = craftRows(this.world.tribeById.get(this.tribe), this.world.p, m.flint).find((r) => r.kind === kind);
-        if (!row) return false;
-        if (!row.can) {
-            this.hud.notice?.(`The store lacks ${row.text}`, true);
-            return false;
-        }
-        this.world.act({ seq: this.body.nextSeq(), action: 'craft', kind, flint: m.flint });
-        this.craftAsked = this.clock;
-        this.closeCraft(true);
-        return true;
-    }
-
-    // What happened to items of yours: LEGEND FORGED; a word when one
-    // breaks, or is made.
-    itemEvent(e) {
-        if (!this.self) return;
-        const item = itemById(this.world, e.item);
-        if (e.type === 'legend' && e.bearer === this.self) this.hud.banner('legend', e.name ?? itemName(item));
-        else if (e.type === 'broke' && e.bearer === this.self) {
-            this.hud.notice?.(`Your ${item ? itemName(item).replace(/^Plain /, '').toLowerCase() : kindName(e.kind)} broke`, true);
-        } else if (e.type === 'crafted' && e.by === this.self) {
-            const name = item ? itemName(item) : kindName(e.kind);
-            this.hud.notice?.(e.rarity >= 1 ? `Made: ${name} (rare)` : `Made: ${name.replace(/^Plain /, 'a ').toLowerCase()}`);
-        }
     }
 }

@@ -11,7 +11,8 @@
 // offers "become them", and Play leads a tribe. In a body the play keys
 // (play/input.js) move it (play/body.js), the camera looks over its shoulder
 // or from its eyes, the HUD shows (play/hud.js), and play/modes.js keeps
-// who you are and what happens to you.
+// who you are and what happens to you. play/env.js wires play to this page
+// (and makes window.play).
 import { params } from './config.js';
 import { Renderer } from './render.js';
 import { Panel } from './ui.js';
@@ -20,7 +21,8 @@ import { localHost } from './sim.js';
 import { Input } from './play/input.js';
 import { Hud } from './play/hud.js';
 import { Modes } from './play/modes.js';
-import { personName } from './play/names.js';
+import { modesEnv, windowPlay } from './play/env.js';
+import { SIGHT_PX } from './play/aim.js';
 import { CraftMenu } from './play/craft.js';
 import { Console } from './play/console.js';
 import { setAside } from './orders.js';
@@ -209,9 +211,10 @@ renderer.setBlood?.(blood);
 const input = new Input({ target: window, canvas, doc: document });
 const hud = new Hud(document);
 hud.menu = new CraftMenu(document);
-const modes = new Modes({
-    world, input, hud,
-    rig: () => renderer.rig ?? null,
+// The page as play sees it (play/env.js turns it into modes.js's env, and
+// window.play).
+const page = {
+    world, renderer, canvas, panel, input, hud,
     follow,
     followed: () => followId,
     setView,
@@ -219,25 +222,9 @@ const modes = new Modes({
     getSpeed: () => speed,
     setPaused,
     getPaused: () => paused,
-    inBody(on) {
-        document.body.classList.toggle('in-body', on);
-        panel.suspend(on);
-        // The panel's buttons would otherwise keep the keyboard's focus.
-        if (on && document.activeElement instanceof HTMLElement) document.activeElement.blur();
-    },
-    openPicker: () => panel.openPicker(world),
     changed: () => showPlay(),
-    // Poses on bodies (the 3D view's; the flat one has none).
-    pose: (id, code, seconds) => renderer.pose?.(id, code, seconds),
-    hold: (id, code) => renderer.hold?.(id, code),
-    release: (id) => renderer.release?.(id),
-    // Where a call goes in a body: the ground under the crosshair (the
-    // middle of the view), or null for the sky.
-    crosshair: () => renderer.groundAt?.(window.innerWidth / 2, window.innerHeight / 2) ?? null,
-    // What a shot goes for: whoever is drawn under the crosshair (within
-    // `radius` px; skip(id) true passes someone over), or 0.
-    aimed: (radius, skip) => renderer.pick?.(world, window.innerWidth / 2, window.innerHeight / 2, radius, skip) ?? 0,
-});
+};
+const modes = new Modes(modesEnv(page));
 
 // The admin console (play/console.js; the commands run in the simulation,
 // admin.js): ` or F2, or the panel's button. A kill goes for the lock-on, or
@@ -246,7 +233,7 @@ const terminal = new Console({
     doc: document, win: window, input, modes,
     send: (msg) => world.host.send(msg),
     start,
-    target: () => modes.lock || (modes.inBody ? modes.env.aimed(28, (id) => id === modes.self) : 0),
+    target: () => modes.lock || (modes.inBody ? modes.env.aimed(SIGHT_PX, (id) => id === modes.self) : 0),
     params: () => world.p,
     events: () => world.events,
 });
@@ -400,91 +387,6 @@ window.sim = {
     renderer,
 };
 
-// And for playing from the console, or a headless browser (which cannot lock
-// the pointer: it drags, or sets the look here):
-//   play.become(id)      step into a person (default: the first one)
-//   play.start(tribeId)  Play: lead a tribe (default: the biggest)
-//   play.leave(), play.back(), play.stop()   to the map, back in, let go
-//   play.picker()        Play's choice of tribes
-//   play.view('first' | 'shoulder'), play.look(yaw, pitch)
-//   play.hold(code, ms)  hold a key (e.g. 'KeyW') for ms; resolves when let go
-//   play.press(code)     tap a key
-//   play.attack({heavy, power})   left click (a headless browser has no pointer lock to click with)
-//   play.banner(kind, text), play.over()   show a banner; end the line now
-//   play.call(kind)      put a call in the slot (G gives it: play.press('KeyG'))
-//   play.arm(kind), play.mapClick(x, y)    on the map: ready a call, and click
-//                        the world point (x, y) through the view
-//   play.cycle('weapon' | 'tool'), play.tool(), play.skill(), play.craft()
-//                        → or ←, right click, Shift + right click, C (keys
-//                        in the craft menu: play.press('ArrowDown'), ...)
-//   play.state           who, where, stamina, snaps (moves turned down), the hands, the items...
-//   play.modes
-const key = (type, code) => window.dispatchEvent(new KeyboardEvent(type, { code, key: code, bubbles: true }));
-window.play = {
-    // (Only in the 3D view: the flat one has no over-the-shoulder camera.)
-    become(id = world.humans.id[0]) {
-        return !!renderer.rig && modes.become(id);
-    },
-    start(tribeId = [...world.tribes].sort((a, b) => b.members - a.members)[0]?.id) {
-        return !!renderer.rig && modes.startPlay(tribeId);
-    },
-    leave: () => modes.leave(),
-    back: () => modes.back(),
-    stop: () => modes.stop(),
-    picker: () => panel.openPicker(world),
-    view(v) {
-        if (modes.inBody && v !== modes.view) modes.action('view');
-    },
-    look(yaw, pitch) {
-        modes.body.yaw = yaw;
-        if (pitch !== undefined) modes.body.pitch = pitch;
-    },
-    hold(code, ms) {
-        key('keydown', code);
-        return new Promise((resolve) => setTimeout(() => {
-            key('keyup', code);
-            resolve();
-        }, ms));
-    },
-    press(code) {
-        key('keydown', code);
-        key('keyup', code);
-    },
-    attack: (info = {}) => modes.action('attack', info),
-    banner: (kind, text) => hud.banner(kind, text),
-    over: () => modes.gameOver(),
-    call: (kind) => modes.calls.select(kind),
-    arm: (kind) => modes.armCall(kind),
-    cycle: (slot = 'weapon') => modes.action(slot === 'tool' ? 'cycle-tool' : 'cycle-weapon'),
-    tool: () => modes.action('tool'),
-    skill: () => modes.action('skill'),
-    craft: () => modes.action('craft'),
-    mapClick(x, y) {
-        const at = { x: 0, y: 0 };
-        if (!renderer.rig?.project(x, y, world.terrain ? world.terrain.heightAt(x, y) : 0, at)) return false;
-        const rect = canvas.getBoundingClientRect();
-        canvas.dispatchEvent(new MouseEvent('click', { clientX: rect.left + at.x, clientY: rect.top + at.y, bubbles: true }));
-        return true;
-    },
-    get state() {
-        const p = world.player;
-        return {
-            game: modes.game, self: modes.self, name: modes.self ? personName(modes.self) : null,
-            inBody: modes.inBody, view: modes.view, mode: renderer.mode, resting: modes.resting, lock: modes.lock,
-            stamina: Math.round(modes.body.stamina), x: +modes.body.x.toFixed(2), y: +modes.body.y.toFixed(2),
-            snaps: modes.stats.snaps, placed: modes.stats.placed, speed, paused,
-            call: modes.calls.call.kind, armed: modes.calls.armed,
-            player: p ? { id: p.id, x: +p.x.toFixed(2), y: +p.y.toFixed(2), auto: p.auto, spirit: +p.spirit.toFixed(1), resting: p.resting } : null,
-            hands: p ? {
-                carry: +p.carry.toFixed(1), energy: +p.energy.toFixed(1), reload: p.reload, gathering: p.gathering, butchering: p.butchering,
-                wood: +(p.wood ?? 0).toFixed(2), flint: +(p.flint ?? 0).toFixed(2),
-                doing: modes.doing?.kind ?? null, can: modes.interaction()?.kind ?? null,
-            } : null,
-            items: p && world.items ? {
-                weapon: p.weapon, tool: p.tool, kit: p.kit, crafting: p.crafting, skill: p.skill,
-                menu: modes.menu ? { ...modes.menu } : null, legends: world.legends?.length ?? 0,
-            } : null,
-        };
-    },
-    modes,
-};
+// And for playing from the console, or a headless browser: window.play
+// (play/env.js lists what it offers).
+window.play = windowPlay(page, modes);

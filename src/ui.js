@@ -3,21 +3,19 @@
 // (play/modes.js): "become them" on a person's card, Play with its choice of
 // tribe, and, while your person is on the map, a bar to return to them. In
 // a body the panel hides, and its shortcuts wait.
+//
+// Its parts (panel/): the follow card (card.js), the lists of tribes and
+// legends and Play's picker (lists.js), and the sparklines (sparkline.js).
+// The markup is in index.html; this wires it up and keeps it current.
 import { COLORS } from './render.js';
 import { drawFlag } from './flag.js';
-import { STATE, STATE_LABEL } from './world.js';
-import { personName, ageText, years } from './play/names.js';
-import { mostExperienced, eldestOf } from './play/modes.js';
+import { personName } from './play/names.js';
 import { callName, MATERIAL_CALLS } from './play/calls.js';
-import { legendRows } from './play/gear.js';
+import { Sparkline } from './panel/sparkline.js';
+import { fillCard } from './panel/card.js';
+import { TribeList, LegendList, fillPicker } from './panel/lists.js';
 
-const LEGENDS_SHOWN = 10; // rows in the Legends list at most (the newest)
-
-// States shown in the alarm colour.
-const ALARM = new Set([STATE.FLEEING, STATE.CHASING, STATE.FIGHTING, STATE.RAIDING]);
 const PEOPLE_COLOR = '#7fb3ff';
-
-const HISTORY = 480; // samples kept per sparkline
 
 const ICONS = {
     pause: '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><rect x="3.5" y="3" width="3" height="10" rx="0.6"/><rect x="9.5" y="3" width="3" height="10" rx="0.6"/></svg>',
@@ -25,64 +23,6 @@ const ICONS = {
 };
 
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-
-class Sparkline {
-    constructor(canvas, color, fixedMax = null) {
-        this.canvas = canvas;
-        this.ctx = canvas.getContext('2d');
-        this.color = color;
-        this.fixedMax = fixedMax;
-        this.data = new Float32Array(HISTORY);
-        this.len = 0;
-        this.head = 0;
-    }
-
-    clear() {
-        this.len = 0;
-        this.head = 0;
-    }
-
-    push(v) {
-        this.data[this.head] = v;
-        this.head = (this.head + 1) % HISTORY;
-        if (this.len < HISTORY) this.len++;
-    }
-
-    draw() {
-        const { canvas, ctx, data, len } = this;
-        const dpr = Math.min(window.devicePixelRatio || 1, 2);
-        const w = canvas.clientWidth;
-        const h = canvas.clientHeight;
-        if (canvas.width !== Math.round(w * dpr)) {
-            canvas.width = Math.round(w * dpr);
-            canvas.height = Math.round(h * dpr);
-        }
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        ctx.clearRect(0, 0, w, h);
-        if (len < 2) return;
-
-        // Honest baseline: the y-axis always starts at zero.
-        let max = this.fixedMax ?? 0;
-        if (this.fixedMax === null) for (let k = 0; k < len; k++) max = Math.max(max, data[k]);
-        if (max <= 0) return;
-
-        const start = len < HISTORY ? 0 : this.head;
-        const dx = w / (HISTORY - 1);
-        const x0 = w - (len - 1) * dx;
-        ctx.beginPath();
-        for (let k = 0; k < len; k++) {
-            const v = data[(start + k) % HISTORY];
-            const x = x0 + k * dx;
-            const y = h - 1 - (v / max) * (h - 2);
-            if (k === 0) ctx.moveTo(x, y);
-            else ctx.lineTo(x, y);
-        }
-        ctx.strokeStyle = this.color;
-        ctx.lineWidth = 1.25;
-        ctx.lineJoin = 'round';
-        ctx.stroke();
-    }
-}
 
 export class Panel {
     // actions: { togglePause, setSpeed(n), reset(byKey), start(seed), setView(v), cycleView,
@@ -92,7 +32,8 @@ export class Panel {
     constructor(actions) {
         this.$ = (id) => document.getElementById(id);
         this.actions = actions;
-        this.tribeRows = new Map();
+        this.tribes = new TribeList(this.$);
+        this.legends = new LegendList(this.$);
         this.suspended = false; // in a body: the shortcuts are the body's (play/input.js)
         this.blood = true;
         this.followId = 0;
@@ -115,7 +56,6 @@ export class Panel {
             const row = e.target.closest('[data-tribe]');
             if (row) actions.followTribe(Number(row.dataset.tribe));
         });
-        this.legendRows = new Map(); // item id → its row
         this.$('legend-list').addEventListener('click', (e) => {
             const row = e.target.closest('[data-bearer]');
             if (row && Number(row.dataset.bearer)) actions.follow(Number(row.dataset.bearer));
@@ -254,34 +194,9 @@ export class Panel {
         line.classList.toggle('armed', !!calls.armed);
     }
 
-    // Play: the living tribes, each with who you would begin as.
+    // Play: the living tribes, each with who you would begin as (lists.js).
     openPicker(world) {
-        const list = this.$('picker-list');
-        list.textContent = '';
-        // (Counted here: a tribe's own count waits for the world's first step.)
-        const members = new Map();
-        const pop = world.humans;
-        for (let i = 0; i < pop.n; i++) members.set(pop.tribe[i], (members.get(pop.tribe[i]) ?? 0) + 1);
-        for (const t of [...world.tribes].sort((a, b) => (members.get(b.id) ?? 0) - (members.get(a.id) ?? 0))) {
-            const id = mostExperienced(world, t.id) || eldestOf(world, t.id);
-            if (!id) continue;
-            const found = world.find(id);
-            const row = document.createElement('button');
-            row.className = 'pick-row';
-            row.dataset.tribe = t.id;
-            row.title = `Lead the ${t.name}`;
-            row.innerHTML = '<canvas width="36" height="24"></canvas><span class="name"><span class="t"></span><span class="as"></span></span><span class="n"></span>'
-                + '<span class="bar aggr"><span></span></span><span class="bar soc"><span></span></span>';
-            drawFlag(row.querySelector('canvas').getContext('2d'), t.flag, 0, 0, 36, 24);
-            row.querySelector('.t').textContent = t.name;
-            const kills = found ? found.pop.kills[found.i] : 0;
-            row.querySelector('.as').textContent = `as ${personName(id)}${found ? `, ${ageText(found.pop.age[found.i])}` : ''}`
-                + `${kills ? `, ${kills} ${kills === 1 ? 'kill' : 'kills'}` : ''}`;
-            row.querySelector('.n').textContent = members.get(t.id) ?? 0;
-            row.querySelector('.aggr span').style.width = `${t.aggression * 100}%`;
-            row.querySelector('.soc span').style.width = `${t.sociality * 100}%`;
-            list.appendChild(row);
-        }
+        fillPicker(this.$, world);
         this.$('picker').hidden = false;
         if (this.$('panel').classList.contains('collapsed')) this.toggleCollapsed();
     }
@@ -315,7 +230,7 @@ export class Panel {
     }
 
     // The card for the animal being followed: its state and biography while
-    // alive, how its story ended once it is not.
+    // alive, how its story ended once it is not (card.js).
     showFollow(world, id, target) {
         const $ = this.$;
         const card = $('follow');
@@ -323,175 +238,14 @@ export class Panel {
         this.followId = id;
         $('panel').classList.toggle('following', !!id);
         if (!id) return;
-
-        const fate = world.fate && world.fate.id === id ? world.fate : null;
-        const kind = target ? target.kind : fate ? fate.kind : 'herbivore';
-        const P = world.p[kind];
-        const person = kind === 'human';
-        $('f-swatch').className = `swatch ${kind}`;
-        $('f-name').textContent = person ? personName(id) : `${kind} #${id}`;
-        // Become them.
-        const become = $('f-become');
-        const label = person && target ? this.actions.becomeLabel(id) : null;
-        become.hidden = !label;
-        if (label && become.textContent !== label) {
-            become.textContent = label;
-            become.title = 'Play as this person';
-        }
-        for (const k of ['f-kills-k', 'f-kills-m', 'f-kills']) $(k).hidden = kind === 'herbivore';
-        for (const k of ['f-carry-k', 'f-carry-m', 'f-carry']) $(k).hidden = !person || !target;
-        $('f-fate').hidden = !!target;
-
-        // A person's tribe: flag, name and culture.
-        const tribeId = person ? (target ? target.pop.tribe[target.i] : fate?.tribe) : 0;
-        const tribe = tribeId ? world.tribeById.get(tribeId) ?? world.fallen.find((t) => t.id === tribeId) : null;
-        $('f-tribe').hidden = !tribe;
-        if (tribe) {
-            const flag = $('f-flag');
-            const ctx = flag.getContext('2d');
-            ctx.clearRect(0, 0, flag.width, flag.height);
-            drawFlag(ctx, tribe.flag, 0, 0, flag.width, flag.height);
-            $('f-tribe-name').textContent = `of the ${tribe.name}${tribe.alive ? '' : ' (gone)'}`;
-            $('f-culture').textContent = `aggr ${tribe.aggression.toFixed(2)} · social ${tribe.sociality.toFixed(2)}`;
-        }
-
-        if (target) {
-            const { pop, i } = target;
-            const state = pop.state[i];
-            $('f-gen').textContent = `generation ${pop.generation[i]}`;
-            $('f-state').textContent = STATE_LABEL[state];
-            $('f-state').className = ALARM.has(state) ? 'alarm' : '';
-            $('f-carry').textContent = Math.round(pop.carry[i]);
-            const e = pop.energy[i];
-            $('f-energy').textContent = Math.round(e);
-            $('f-energy-bar').style.width = `${Math.min(100, (e / P.maxEnergy) * 100)}%`;
-            const life = pop.age[i] / pop.lifespan[i];
-            $('f-age').textContent = person ? ageText(pop.age[i]) : `${Math.round(life * 100)}%`;
-            $('f-age-bar').style.width = `${Math.min(100, life * 100)}%`;
-            const avg = world.meanGenes(pop);
-            $('f-speed').textContent = pop.speedGene[i].toFixed(2);
-            $('f-speed-avg').textContent = `avg ${avg.speed.toFixed(2)}`;
-            $('f-sense').textContent = pop.senseGene[i].toFixed(2);
-            $('f-sense-avg').textContent = `avg ${avg.sense.toFixed(2)}`;
-            $('f-children').textContent = pop.children[i];
-            $('f-kills').textContent = pop.kills[i];
-            return;
-        }
-
-        // It died (or the world was reset under it).
-        $('f-state').className = '';
-        $('f-state').textContent = 'dead';
-        $('f-energy').textContent = '0';
-        $('f-energy-bar').style.width = '0%';
-        if (!fate) {
-            $('f-fate-text').textContent = 'Gone.';
-            $('f-descendant').disabled = true;
-            return;
-        }
-        const how = {
-            eaten: `Eaten by carnivore #${fate.by}`,
-            hunted: `Speared by ${personName(fate.by)}`,
-            killed: fate.by ? `Killed by ${personName(fate.by)}` : 'Killed by defenders while raiding',
-            starvation: 'Starved',
-            'old age': 'Died of old age',
-            admin: 'Struck down by the gods', // (the admin console: admin.js)
-        }[fate.cause];
-        const kids = `${fate.children} ${fate.children === 1 ? 'child' : 'children'}`;
-        const kills = kind !== 'herbivore' ? `, ${fate.kills} ${fate.kills === 1 ? 'kill' : 'kills'}` : '';
-        const when = person ? `aged ${years(fate.age)}` : `at age ${Math.round(fate.age)}`;
-        $('f-fate-text').textContent = `${how} ${when}. Left ${kids}${kills}.`;
-        $('f-children').textContent = fate.children;
-        $('f-kills').textContent = fate.kills;
-        $('f-descendant').disabled = !world.descendant(id);
-    }
-
-    // One row per living tribe, biggest first: flag, name, size, culture.
-    // Rows are kept (not rebuilt) so a click is never lost to a refresh.
-    updateTribes(world) {
-        const list = this.$('tribe-list');
-        const seen = new Set();
-        for (const t of [...world.tribes].sort((a, b) => b.members - a.members)) {
-            seen.add(t.id);
-            let row = this.tribeRows.get(t.id);
-            if (!row) {
-                row = document.createElement('button');
-                row.className = 'tribe-row';
-                row.dataset.tribe = t.id;
-                row.title = `Follow the eldest of the ${t.name}`;
-                row.innerHTML = '<canvas width="36" height="24"></canvas><span class="name"></span><span class="n"></span>'
-                    + '<span class="bar aggr"><span></span></span><span class="bar soc"><span></span></span>';
-                drawFlag(row.querySelector('canvas').getContext('2d'), t.flag, 0, 0, 36, 24);
-                row.querySelector('.name').textContent = t.name;
-                row.querySelector('.aggr span').style.width = `${t.aggression * 100}%`;
-                row.querySelector('.soc span').style.width = `${t.sociality * 100}%`;
-                this.tribeRows.set(t.id, row);
-            }
-            row.querySelector('.n').textContent = t.members;
-            list.appendChild(row); // (re)ordering keeps the biggest on top
-        }
-        for (const [id, row] of this.tribeRows) {
-            if (seen.has(id)) continue;
-            row.remove();
-            this.tribeRows.delete(id);
-        }
-        this.$('tribes').hidden = !world.p.human.enabled;
-        this.$('tribes-empty').hidden = world.tribes.length > 0;
-    }
-
-    // The legendary items, newest first (gear.js's legendRows): flag, name,
-    // kind and bearer, kills, generations. A click follows the bearer; one
-    // lying on the ground cannot be followed. Rows are kept, as the tribes'.
-    updateLegends(world) {
-        const all = legendRows(world);
-        const rows = all.slice(0, LEGENDS_SHOWN);
-        const list = this.$('legend-list');
-        const seen = new Set();
-        for (const r of rows) {
-            seen.add(r.id);
-            let row = this.legendRows.get(r.id);
-            if (!row) {
-                row = document.createElement('button');
-                row.className = 'legend-row';
-                row.innerHTML = '<canvas width="36" height="24"></canvas><span class="name"><span class="t"></span><span class="as"></span></span>'
-                    + '<span class="n kills"></span><span class="n gens"></span>';
-                row.querySelector('.t').textContent = r.name;
-                row.flagOf = 0;
-                this.legendRows.set(r.id, row);
-            }
-            const tribeId = r.tribe ? r.tribe.id : 0;
-            if (row.flagOf !== tribeId) {
-                row.flagOf = tribeId;
-                const ctx = row.querySelector('canvas').getContext('2d');
-                ctx.clearRect(0, 0, 36, 24);
-                if (r.tribe) drawFlag(ctx, r.tribe.flag, 0, 0, 36, 24);
-            }
-            row.dataset.bearer = r.bearer;
-            row.disabled = !r.bearer;
-            const as = `${r.kind} · ${r.bearer ? r.bearerName : r.where}${r.tribe ? `, ${r.tribe.name}` : ''}`;
-            if (row.querySelector('.as').textContent !== as) row.querySelector('.as').textContent = as;
-            row.title = r.bearer ? `Follow ${r.bearerName}, who bears ${r.name}` : `${r.name} lies on the ground`;
-            row.querySelector('.kills').textContent = r.kills;
-            row.querySelector('.gens').textContent = r.gens;
-            list.appendChild(row); // (newest on top)
-        }
-        for (const [id, row] of this.legendRows) {
-            if (seen.has(id)) continue;
-            row.remove();
-            this.legendRows.delete(id);
-        }
-        this.$('legends').hidden = !all.length;
-        const more = this.$('legends-more');
-        more.hidden = all.length <= LEGENDS_SHOWN;
-        if (!more.hidden) more.textContent = `and ${all.length - LEGENDS_SHOWN} more`;
+        fillCard($, world, id, target, this.actions);
     }
 
     reset(world) {
         this.closePicker();
         this.selfShown = null;
-        for (const row of this.tribeRows.values()) row.remove();
-        this.tribeRows = new Map(); // a new world reuses tribe ids
-        for (const row of this.legendRows.values()) row.remove();
-        this.legendRows = new Map();
+        this.tribes.reset(); // (a new world reuses tribe ids)
+        this.legends.reset();
         for (const l of Object.values(this.lines)) l.clear();
         this.sample(world);
         this.update(world);
@@ -515,8 +269,8 @@ export class Panel {
         $('n-herbivores').textContent = world.herbivores.n;
         $('n-carnivores').textContent = world.carnivores.n;
         $('n-humans').textContent = world.humans.n;
-        this.updateTribes(world);
-        this.updateLegends(world);
+        this.tribes.update(world);
+        this.legends.update(world);
 
         const gh = world.meanGenes(world.herbivores);
         const gc = world.meanGenes(world.carnivores);

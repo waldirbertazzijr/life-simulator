@@ -21,9 +21,8 @@
 import * as THREE from 'three';
 import { POSE, KINDS } from './animate.js';
 import { SPECIES, offScreen } from './creatures.js';
-import { wrapDelta } from './util.js';
+import { TAU, wrapDelta } from './util.js';
 
-const TAU = Math.PI * 2;
 export const BLOOD = '#6e0f0f';  // droplets
 const POOL_COLOR = '#560c0c';    // pools: darker, soaking in
 const LIFE = 600;                // steps a carcass, and a pool, lasts
@@ -309,7 +308,7 @@ export class Effects {
     // died, a violent death bloodies the ground, and the killer strikes; a
     // spear or a jab striking sprays blood along the blow, and so, a little,
     // does each butchering stroke; a carcass cut up is gone. `self`: the body
-    // the page plays, which strikes by itself (play/modes.js).
+    // the page plays, which strikes by itself (play/hands.js).
     handle(events, self = 0) {
         const m = this.motion;
         // At high speed a frame can bring hundreds of deaths: only the newest

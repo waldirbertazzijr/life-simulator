@@ -17,7 +17,7 @@
 // also seen from the map, as are the answers to calls.
 //
 // The markup and styles are in index.html; this fills them in. What it
-// shows comes each frame from modes.js (drawHud) as one plain object.
+// shows comes each frame from hud-state.js as one plain object.
 import { drawFlag } from '../flag.js';
 
 // Trailing segments: what was lost stays for `hold` seconds, then shrinks at
@@ -129,7 +129,7 @@ export class Hud {
         if (!on) this.flashEl.classList.remove('on');
     }
 
-    // A frame's worth of what to show (modes.js, drawHud).
+    // A frame's worth of what to show (hud-state.js, by way of modes.js's drawHud).
     update(s, dt) {
         const $ = this.$;
         const shown = this.shown;

@@ -38,9 +38,7 @@
 // only that offset glides: the camera never trails behind a running animal,
 // even at 64×.
 import * as THREE from 'three';
-import { wrap, wrapDelta, angleDelta, groundOf, meshHeight, smoothstep } from './util.js';
-
-const DEG = Math.PI / 180;
+import { DEG, clamp, wrap, wrapDelta, angleDelta, groundOf, meshHeight, smoothstep } from './util.js';
 
 // Per kind: eye height and how far ahead of the body's centre the eyes are
 // (first person), the height the follow camera looks at, and how far back it
@@ -87,7 +85,6 @@ const FLATTEN = Math.tan(15 * DEG) / Math.tan(MAP_PITCH);
 // follow camera swings round and zooms; first person looks around.
 const KEY_RATE = { pan: 0.8, turn: 1.6, orbit: 1.8, zoom: 1.2, lookYaw: 1.6, lookPitch: 1.0 };
 
-const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const CORNERS = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
 
 // The tilt the map shows at distance `dist`, given the user's tilt, and back

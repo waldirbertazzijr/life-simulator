@@ -16,6 +16,7 @@
 //
 // Stamina only limits what you can do: it is the page's alone.
 import { STEPS_PER_SECOND } from '../sim.js';
+import { wrap, angleDelta } from '../view3d/util.js';
 
 // Spec §5: per step at 1×; regeneration starts half a second after the
 // last spending.
@@ -26,13 +27,6 @@ export const STAMINA = { max: 100, sprint: 1, roll: 20, light: 10, heavy: 25, re
 const MAX_DT = 0.1;
 const TURN = 12;      // per second: how quickly the body turns to face its way
 const SLIDE = Math.SQRT1_2;
-const TAU = Math.PI * 2;
-
-const wrap = (v, size) => ((v % size) + size) % size;
-const angleDelta = (a) => {
-    a %= TAU;
-    return a > Math.PI ? a - TAU : a <= -Math.PI ? a + TAU : a;
-};
 
 export class Body {
     constructor() {

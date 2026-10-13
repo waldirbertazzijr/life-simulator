@@ -1,7 +1,7 @@
 // The player's hands: the keyboard and the mouse while you are in a body.
 // It knows nothing of bodies or cameras; it keeps what is held (the WASD
 // axes, Space), adds up how far the mouse has moved (the look), and names
-// each one-off action for modes.js:
+// each one-off action for actions.js (what each one does):
 //
 //   move                    a movement key went down (it stands you up from resting)
 //   roll                    Space tapped: released within TAP_MS
@@ -63,7 +63,7 @@ export class TapHold {
 }
 
 const MOVE = { KeyW: 'forward', KeyS: 'back', KeyA: 'left', KeyD: 'right' };
-// One-off actions. Only some do anything yet (modes.js); the rest are named
+// One-off actions. Only some do anything yet (actions.js); the rest are named
 // here so that later packages only have to listen for them.
 const ACTIONS = {
     KeyX: 'crouch', KeyQ: 'lock', KeyE: 'interact', KeyR: 'eat', KeyC: 'craft', KeyG: 'call',

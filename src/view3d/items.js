@@ -27,10 +27,9 @@ import * as THREE from 'three';
 import { part } from './shapes.js';
 import { GAIT, POSE, POSES, KEYS } from './animate.js';
 import { offScreen, CHILD } from './creatures.js';
-import { wrapDelta, hash } from './util.js';
+import { TAU, wrapDelta, hash } from './util.js';
 import { kindName } from '../play/gear.js';
 
-const TAU = Math.PI * 2;
 export const ITEM_SHAPES = ['spear', 'bow', 'club', 'knife', 'basket', 'torch'];
 const FAR = 220;          // items farther than this from the camera are not drawn
 const MIN_PX = 3;         // nor any whose length on screen is less than this

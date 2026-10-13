@@ -1,6 +1,6 @@
 // The craft menu (C at camp, spec §8.4): every kind with what it costs,
 // dimmed when the camp's store cannot pay for it, the one chosen lit, and a
-// switch to add a flint for a chance of rare. Keys and choices are modes.js's
+// switch to add a flint for a chance of rare. Keys and choices are kit.js's
 // (craftKey, craftKind); this only shows them and hears the mouse. The
 // markup and styles are in index.html.
 import { ITEM_ICONS } from './hud.js';
