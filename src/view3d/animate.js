@@ -39,7 +39,8 @@ export const PART = Object.freeze({ TORSO: 0, HEAD: 1, LEG_FL: 2, LEG_FR: 3, LEG
 export const KINDS = ['herbivore', 'carnivore', 'human'];
 
 // How each species walks:
-// - leg: from the hip joint to the sole (shapes.js puts the joints there);
+// - leg: from the hip joint to the sole (shapes.js puts the joints there; a
+//   model, models.js, sets its own when it loads);
 // - swing: how far a leg swings either way at a walk (radians), and runSwing
 //   how much more when running;
 // - pitch: the body's rocking when bounding;
@@ -103,10 +104,13 @@ export const VERTEX_PARS = /* glsl */ `
 attribute vec4 rig;   // the joint of this vertex's part (x, y, z), and the part
 attribute vec2 gait;  // per individual: how far through a stride (0..1), and how fast (0 still, 1 walking, 2 running)
 attribute vec3 pose;  // per individual: the pose, how far through it (0..1), and how much of it (0..1)
+attribute float look; // per individual: how much it wears its species' map colour (small on screen) over its own
+uniform vec3 uLook;   // that colour (the 2D map's)
 uniform highp sampler2D uPoses; // the keyframes (poseTable)
 uniform int uRow;     // this species' first row in it
 uniform vec3 uTorso;  // the torso's joint: head and arms ride on it
 uniform vec3 uRoot;   // the whole body turns about this
+uniform vec3 uBody;   // this body's proportions to the one the poses were written for (keyframes.js FRAME): 1, 1, 1 for shapes.js's
 uniform vec4 uGaitA;  // leg swing, its increase running, leg length, rocking when bounding
 uniform vec4 uGaitB;  // torso and head lean running, arm swing, four legs (1) or two (0)
 
@@ -169,8 +173,8 @@ vec3 transformed = vec3( position );
         if ( part != 0 ) own += w * keyed( part, r0, r1, t );
         if ( part <= 1 || part >= 6 ) torso += w * keyed( 0, r0, r1, t );
         root += w * keyed( ${ROOT}, r0, r1, t );
-        shift += w * keyed( ${SHIFT}, r0, r1, t );
-        pivot += w * keyed( ${PIVOT}, r0, r1, t );
+        shift += w * uBody * keyed( ${SHIFT}, r0, r1, t );
+        pivot += w * uBody * keyed( ${PIVOT}, r0, r1, t );
     }
     // "Outward" is away from the body, whichever side the limb is on.
     if ( part >= 2 && rig.z > 0.0 ) own.y = -own.y;
@@ -178,6 +182,16 @@ vec3 transformed = vec3( position );
     if ( part <= 1 || part >= 6 ) transformed = turn( transformed - uTorso, torso ) + uTorso;
     transformed = turn( transformed - pivot, root ) + pivot + shift;
 }
+`;
+
+// In place of <color_vertex>: a model's own colours give way to its
+// species' map colour as it gets small on screen (creatures.js), so a grey
+// wolf a few pixels long still reads as a predator, as on the 2D map.
+export const VERTEX_COLOR = /* glsl */ `
+#include <color_vertex>
+#ifdef USE_COLOR
+vColor.rgb = mix( vColor.rgb, uLook, look );
+#endif
 `;
 
 // ---- What each one is doing ----

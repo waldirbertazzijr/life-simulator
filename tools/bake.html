@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>bake</title>
+    <style>html, body { margin: 0; background: #b3c9da; } canvas { display: block; }</style>
+    <script type="importmap">{ "imports": { "three": "../vendor/three/three.module.min.js" } }</script>
+</head>
+<body>
+    <!-- tools/bake.mjs opens this page and calls bake() from tools/bake-page.js. -->
+    <script type="module">window.bakePage = import('./bake-page.js');</script>
+</body>
+</html>

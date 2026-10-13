@@ -128,6 +128,7 @@ export class View3D {
         this.lilies = new Lilies(this.scene);
         this.frogs = new Frogs(this.scene);
         this.creatures = new Creatures(this.scene);
+        this.creatures.useModels(); // the sheep and the wolf (models.js), swapped in once loaded
         this.effects = new Effects(this.scene, this.creatures.motion); // the dead, and blood
         this.thrown = new Thrown(this.scene); // spears in the air
         this.items = new Items(this.scene);   // items held and lying (package 3)

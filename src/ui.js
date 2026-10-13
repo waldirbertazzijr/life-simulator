@@ -5,7 +5,8 @@
 // a body the panel hides, and its shortcuts wait.
 //
 // Its parts (panel/): the follow card (card.js), the lists of tribes and
-// legends and Play's picker (lists.js), and the sparklines (sparkline.js).
+// legends and Play's picker (lists.js), the sparklines (sparkline.js), and
+// the credits (credits.js).
 // The markup is in index.html; this wires it up and keeps it current.
 import { COLORS } from './render.js';
 import { drawFlag } from './flag.js';
@@ -14,6 +15,7 @@ import { callName, MATERIAL_CALLS } from './play/calls.js';
 import { Sparkline } from './panel/sparkline.js';
 import { fillCard } from './panel/card.js';
 import { TribeList, LegendList, fillPicker } from './panel/lists.js';
+import { wireCredits } from './panel/credits.js';
 
 const PEOPLE_COLOR = '#7fb3ff';
 
@@ -46,6 +48,7 @@ export class Panel {
             humans: new Sparkline(this.$('spark-humans'), PEOPLE_COLOR),
         };
 
+        wireCredits(this.$);
         this.$('pause').addEventListener('click', () => actions.togglePause());
         this.$('reset').addEventListener('click', () => actions.reset());
         this.$('collapse').addEventListener('click', () => this.toggleCollapsed());

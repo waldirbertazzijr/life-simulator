@@ -188,6 +188,15 @@ const human = {
     },
 };
 
+// The animals' bodies the poses below were written for (shapes.js): the
+// height of the body's middle (the root), its half width, and its length.
+// An imported body of other proportions (models.js) scales the poses' shift
+// and pivot by its own, so it falls onto its own side.
+export const FRAME = {
+    herbivore: { center: 2.05, half: 1.4, length: 5 },
+    carnivore: { center: 2.0, half: 0.78, length: 7 },
+};
+
 // Grazers. Body centre at 2.05 (its half width 1.4), neck at 1.2, 2.45.
 const GRAZING = {
     seconds: 2.4, cycle: true, keys: [
@@ -213,7 +222,7 @@ const fall = (pivot, back, head) => ({
 const herbivore = {
     [POSE.GRAZE]: GRAZING,
     [POSE.EAT]: GRAZING,
-    [POSE.FALL]: fall([0, -2.05, 1.4], 2.9, [-0.45, 0.25, 0]),
+    [POSE.FALL]: fall([0, -FRAME.herbivore.center, FRAME.herbivore.half], 2.9, [-0.45, 0.25, 0]),
 };
 
 // Predators. Body centre at 2.0 (its half width 0.78), neck at 1.3, 2.25.
@@ -247,7 +256,7 @@ const carnivore = {
     [POSE.CROUCH]: {
         seconds: 2, cycle: true, keys: [STALK, { ...STALK, head: [-0.2, 0, 0.1] }, STALK, { ...STALK, head: [-0.2, 0, -0.1] }],
     },
-    [POSE.FALL]: fall([0, -2, 0.78], 2.3, [-0.3, 0.2, 0]),
+    [POSE.FALL]: fall([0, -FRAME.carnivore.center, FRAME.carnivore.half], 2.3, [-0.3, 0.2, 0]),
 };
 
 export const POSES = { herbivore, carnivore, human };

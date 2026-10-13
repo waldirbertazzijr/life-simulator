@@ -93,6 +93,16 @@
         }
         #seed:hover { color: var(--text); border-color: var(--line); }
         #seed:focus { outline: none; color: var(--text); border-color: var(--muted); background: rgba(255, 255, 255, 0.05); }
+        /* Credits: a quiet link at the end of the footer line, and the list it opens. */
+        #credits-open { float: right; min-width: 0; height: 18px; padding: 0 2px; border: 0; font-size: 11px; line-height: 18px; }
+        #credits-open[aria-expanded="true"] { color: var(--text); }
+        #credits { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 4px; max-height: 45vh; overflow-y: auto; color: var(--muted); font-size: 11px; line-height: 15px; }
+        #credits[hidden] { display: none; }
+        #credits .credit { padding: 5px 0; }
+        #credits .credit + .credit { border-top: 1px solid var(--line); }
+        #credits .t { color: var(--text); font-size: 12px; }
+        #credits a { color: var(--muted); text-decoration: underline; text-decoration-color: rgba(255, 255, 255, 0.2); text-underline-offset: 2px; }
+        #credits a:hover { color: var(--text); }
 
         /* The animal being followed. */
         #follow { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
@@ -545,7 +555,9 @@
                 <div id="legends-more" class="muted" hidden></div>
             </section>
 
-            <footer><label title="Type a seed and press Enter for that world">seed <input id="seed" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" aria-label="Seed"></label> · <span id="status"></span></footer>
+            <footer><button id="credits-open" aria-expanded="false" aria-controls="credits" title="Who made the models, the type and the 3D engine">credits</button><label title="Type a seed and press Enter for that world">seed <input id="seed" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" aria-label="Seed"></label> · <span id="status"></span></footer>
+            <!-- Credits (src/credits.js, panel/credits.js). -->
+            <section id="credits" hidden aria-label="Credits"><div id="credit-list"></div></section>
         </div>
     </aside>
 

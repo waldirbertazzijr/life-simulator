@@ -5,13 +5,15 @@
 //
 // Its own little scene: a meadow, the same light as the world, and the same
 // meshes, materials and shaders as the creatures (creatures.js), so what is
-// seen here is what the world draws. Each figure walks or runs on the spot,
-// or plays its pose: cycles go round, sequences (a throw, a fall) play and
-// then wait a moment before playing again. The fallen lie on a pool of blood,
-// and a spray flies each time they fall.
+// seen here is what the world draws (the models too, once they have loaded:
+// models.js). Each figure walks or runs on the spot, or plays its pose:
+// cycles go round, sequences (a throw, a fall) play and then wait a moment
+// before playing again. The fallen lie on a pool of blood, and a spray flies
+// each time they fall.
 import * as THREE from 'three';
 import { COLORS } from '../render.js';
 import { SHAPES, CHILD, Herd, herdMaterial } from './creatures.js';
+import { loadModel } from './models.js';
 import { Effects } from './effects.js';
 import { POSE, POSE_NAMES, POSES } from './animate.js';
 import { Items, ITEM_SHAPES } from './items.js';
@@ -110,6 +112,11 @@ export class Lineup {
             carnivore: new Herd(this.scene, SHAPES.carnivore(), herdMaterial('carnivore', COLORS.carnivore), false),
             human: new Herd(this.scene, SHAPES.human(), herdMaterial('human', '#ffffff'), true),
         };
+        for (const kind of Object.keys(this.herds)) {
+            loadModel(kind)
+                .then((shape) => shape && this.herds[kind].setShape(shape.geometry, shape))
+                .catch((err) => console.warn(`The ${kind} model did not load.`, err));
+        }
         this.tint = new THREE.Color(PEOPLE);
         this.effects = new Effects(this.scene, null);
         this.effects.blood = true;

@@ -4,7 +4,7 @@ PLAYWRIGHT := mcr.microsoft.com/playwright@sha256:06a9939e57531807f8d5fd76ce44b5
 DOCKER     := docker run --rm -v "$(CURDIR)":/app:ro -w /app
 PORT       ?= 8000
 
-.PHONY: serve check shot fingerprint test bot orders
+.PHONY: serve check shot fingerprint test bot orders bake
 
 # Serve the app at http://localhost:$(PORT)
 serve:
@@ -37,3 +37,10 @@ test:
 shot:
 	@mkdir -p .shots
 	$(DOCKER) -v "$(CURDIR)/.shots":/out --entrypoint node $(PLAYWRIGHT) tools/probe.mjs $(ARGS)
+
+# Flatten a textured, rigged model into our format (Chromium decodes its textures), e.g.
+# make bake ARGS="--in assets/local/in/sheep.glb --out assets/local/sheep.glb --budget 1500"
+# Inputs and outputs live in the git-ignored assets/local/; a picture of the bake goes to .shots/.
+bake:
+	@mkdir -p .shots assets/local
+	$(DOCKER) -v "$(CURDIR)/.shots":/out -v "$(CURDIR)/assets/local":/app/assets/local --entrypoint node $(PLAYWRIGHT) tools/bake.mjs $(ARGS)
