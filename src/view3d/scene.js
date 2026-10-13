@@ -237,9 +237,10 @@ export class View3D {
         s.render += (s.lastRender - s.render) * 0.05;
     }
 
-    // The id of whoever is drawn under pixel (px, py) (within 16 px), or 0.
-    pick(world, px, py) {
-        return this.creatures.pick(this.rig.camera, this.rig.w, this.rig.h, px, py);
+    // The id of whoever is drawn under pixel (px, py) (within `radius` px, 16;
+    // skip(id) true passes someone over), or 0.
+    pick(world, px, py, radius, skip) {
+        return this.creatures.pick(this.rig.camera, this.rig.w, this.rig.h, px, py, radius, skip);
     }
 
     // The world point {x, y} on the ground under pixel (px, py), or null

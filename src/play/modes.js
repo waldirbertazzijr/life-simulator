@@ -75,6 +75,9 @@ const EAT_EVERY = 1;
 const ACK_WAIT = 0.6;
 const HANDS = { jabRange: 5, jabArc: Math.PI / 4, heavyRange: 34, butcherReach: 4, rackReach: 8, takeMax: 40 };
 const AIMED = 12 * DEG; // a creature this near the aim is what an attack goes for
+// A creature drawn this near the crosshair (px) is what a shot is aimed at: at
+// its middle, and led like a locked one.
+const SIGHT_PX = 28;
 // Items: a club's swing and a knife's cut reach this far; an item lying
 // this near (at your feet) is picked up before the rack is used, one within
 // `reach` (the simulation's) only when the rack offers nothing.
@@ -939,17 +942,16 @@ export class Modes {
         this.stopHands();
         this.closeCraft();
         const yaw = this.body.yaw;
-        const dx = Math.cos(yaw);
-        const dy = Math.sin(yaw);
+        const { dx, dy, sighted } = this.sight();
         const power = heavy ? clamp(Number(info.power) || 0, 0, 1) : 0;
         const arc = w.p.play?.jabArc ?? HANDS.jabArc;
         // What it goes for (your followers too, orders.js): the locked
         // target, which the simulation leads the throw onto; else what is
         // within reach or under the aim, told but not led (no aiming for you).
         const jab = kind !== 'spear' || heavy ? 0 : this.nearestAlong(dx, dy, w.p.play?.jabRange ?? HANDS.jabRange, arc);
-        const target = this.lock || jab
-            || (kind === 'club' ? this.nearestAlong(dx, dy, ITEMS.swing, arc) : this.nearestAlong(dx, dy, w.p.play?.heavyRange ?? HANDS.heavyRange, AIMED));
-        w.act({ seq: this.body.nextSeq(), action: 'attack', heavy, dx, dy, power, target, lock: this.lock !== 0 });
+        const target = this.lock || jab || (kind === 'club' ? this.nearestAlong(dx, dy, ITEMS.swing, arc) : sighted)
+            || (kind === 'club' ? 0 : this.nearestAlong(dx, dy, w.p.play?.heavyRange ?? HANDS.heavyRange, AIMED));
+        w.act({ seq: this.body.nextSeq(), action: 'attack', heavy, dx, dy, power, target, lock: this.lock !== 0 || (sighted !== 0 && target === sighted) });
         this.body.heading = yaw; // (turned to throw)
         this.attacked = this.clock;
         // A charged throw carries on from its wind-up (the hold).
@@ -957,6 +959,39 @@ export class Modes {
         if (this.held === code) this.held = 0;
         this.env.pose?.(this.self, code);
         return true;
+    }
+
+    // Where a shot goes (dx, dy): at whoever is drawn under the crosshair
+    // (never you or a tribe-mate: `sighted`, its id, which the simulation
+    // then leads the shot onto, at its middle), else at the ground there,
+    // else straight along your look. (Over the shoulder the camera sits
+    // beside you, so the look's own line passes beside what the crosshair
+    // is on.) With a lock-on, along your look: the lock is led onto.
+    sight() {
+        const w = this.world;
+        const b = this.body;
+        let dx = Math.cos(b.yaw);
+        let dy = Math.sin(b.yaw);
+        if (this.lock) return { dx, dy, sighted: 0 };
+        const sighted = this.env.aimed?.(SIGHT_PX, (id) => id === this.self || this.mate(id)) ?? 0;
+        const f = sighted ? w.find(sighted) : null;
+        const p = f ? { x: f.pop.x[f.i], y: f.pop.y[f.i] } : this.env.crosshair?.() ?? null;
+        if (p) {
+            const ex = wrapDelta(p.x - b.x, w.width);
+            const ey = wrapDelta(p.y - b.y, w.height);
+            const d = Math.hypot(ex, ey);
+            if (d > 1) {
+                dx = ex / d;
+                dy = ey / d;
+            }
+        }
+        return { dx, dy, sighted: f ? sighted : 0 };
+    }
+
+    // Is `id` someone of your own tribe?
+    mate(id) {
+        const f = this.world.find(id);
+        return f !== null && f.kind === 'human' && f.pop.tribe[f.i] === this.tribe;
     }
 
     // The nearest creature (never yourself or a tribe-mate) within `range`
@@ -1221,11 +1256,10 @@ export class Modes {
         this.stopHands();
         this.closeCraft();
         const yaw = this.body.yaw;
-        const dx = Math.cos(yaw);
-        const dy = Math.sin(yaw);
         const kind = kindName(weapon.kind);
-        const target = this.lock || this.nearestAlong(dx, dy, kind === 'club' ? 8 : w.p.play?.heavyRange ?? HANDS.heavyRange, kind === 'club' ? Math.PI : AIMED);
-        w.act({ seq: this.body.nextSeq(), action: 'skill', dx, dy, target, lock: this.lock !== 0 });
+        const { dx, dy, sighted } = kind === 'club' ? { dx: Math.cos(yaw), dy: Math.sin(yaw), sighted: 0 } : this.sight();
+        const target = this.lock || sighted || this.nearestAlong(dx, dy, kind === 'club' ? 8 : w.p.play?.heavyRange ?? HANDS.heavyRange, kind === 'club' ? Math.PI : AIMED);
+        w.act({ seq: this.body.nextSeq(), action: 'skill', dx, dy, target, lock: this.lock !== 0 || (sighted !== 0 && target === sighted) });
         this.body.heading = yaw;
         this.env.pose?.(this.self, ATTACK_POSE[kind] ?? POSE.THROW);
         return true;

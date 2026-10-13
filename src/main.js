@@ -233,6 +233,9 @@ const modes = new Modes({
     // Where a call goes in a body: the ground under the crosshair (the
     // middle of the view), or null for the sky.
     crosshair: () => renderer.groundAt?.(window.innerWidth / 2, window.innerHeight / 2) ?? null,
+    // What a shot goes for: whoever is drawn under the crosshair (within
+    // `radius` px; skip(id) true passes someone over), or 0.
+    aimed: (radius, skip) => renderer.pick?.(world, window.innerWidth / 2, window.innerHeight / 2, radius, skip) ?? 0,
 });
 
 function showPlay() {

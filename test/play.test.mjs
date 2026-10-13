@@ -563,6 +563,9 @@ function play() {
     const modes = new Modes({
         world, input, hud,
         rig: () => null,
+        // Whoever is drawn under the crosshair (state.aimed), and the ground there.
+        aimed: (radius, skip) => (state.aimed && !skip(state.aimed) ? state.aimed : 0),
+        crosshair: () => state.crosshair ?? null,
         follow: (id) => {
             state.followed = id;
         },
@@ -1448,4 +1451,30 @@ test('death phrases', () => {
     assert.equal(deathPhrase('killed', 42), `was killed by ${personName(42)}`);
     assert.equal(deathText('eaten', 3), 'Eaten by a predator');
     assert.equal(deathText('hunted', 42), `Speared by ${personName(42)}`);
+});
+
+test('a shot goes for whoever is under the crosshair, at its middle, else for the ground there', () => {
+    const { world, modes, state, frame } = inBody(play());
+    const b = modes.body;
+    const ready = () => {
+        world.player.reload = 30;
+        frame();
+        world.player.reload = 0;
+        frame();
+    };
+    b.yaw = 0;
+    world.add('herbivores', { id: 62, x: b.x + 20, y: b.y + 20 });
+    state.aimed = 62;
+    modes.action('attack', { heavy: false, power: 0 });
+    let a = lastAct(world);
+    assert.deepEqual([a.target, a.lock], [62, true], 'aimed at, and led onto');
+    assert.ok(Math.abs(a.dx - Math.SQRT1_2) < 1e-6 && Math.abs(a.dy - Math.SQRT1_2) < 1e-6, 'toward its middle, not along the look');
+    ready();
+    // A tribe-mate under the crosshair is passed over; the ground there counts.
+    state.aimed = 8;
+    state.crosshair = { x: b.x, y: b.y + 30 };
+    modes.action('attack', { heavy: false, power: 0 });
+    a = lastAct(world);
+    assert.equal(a.lock, false);
+    assert.ok(Math.abs(a.dx) < 1e-6 && Math.abs(a.dy - 1) < 1e-6, 'toward the ground under the crosshair');
 });

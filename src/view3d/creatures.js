@@ -375,12 +375,13 @@ export class Creatures {
         this.pickN = n + 1;
     }
 
-    // The id of whoever was drawn nearest to pixel (px, py), within 16 px, or 0.
-    pick(camera, w, h, px, py) {
+    // The id of whoever was drawn nearest to pixel (px, py), within `radius`
+    // px (16), or 0; skip(id) true passes someone over.
+    pick(camera, w, h, px, py, radius = 16, skip = null) {
         const e = this.vp.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).elements;
         const P = this.pickPos;
         let best = 0;
-        let bestD2 = 16 * 16;
+        let bestD2 = radius * radius;
         for (let k = 0; k < this.pickN; k++) {
             const x = P[k * 3];
             const y = P[k * 3 + 1];
@@ -390,7 +391,7 @@ export class Creatures {
             const sx = ((e[0] * x + e[4] * y + e[8] * z + e[12]) / cw + 1) * 0.5 * w;
             const sy = (1 - (e[1] * x + e[5] * y + e[9] * z + e[13]) / cw) * 0.5 * h;
             const d2 = (sx - px) * (sx - px) + (sy - py) * (sy - py);
-            if (d2 < bestD2) {
+            if (d2 < bestD2 && (skip === null || !skip(this.pickId[k]))) {
                 bestD2 = d2;
                 best = this.pickId[k];
             }
