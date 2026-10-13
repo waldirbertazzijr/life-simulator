@@ -3,7 +3,7 @@
 // EventTarget, and the world is a small fake with the Mirror's shape.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { personName, years, ageText, relation, YEAR } from '../src/play/names.js';
+import { personName, years, ageText, relation, YEAR, deathPhrase, deathText } from '../src/play/names.js';
 import { Input } from '../src/play/input.js';
 import { Body } from '../src/play/body.js';
 import { Mirror } from '../src/mirror.js';
@@ -529,6 +529,10 @@ function play() {
     };
     const hud = {
         shown: false, banners: [], flashes: 0, story: null, actions: null,
+        notices: [],
+        notice(text) {
+            this.notices.push(text);
+        },
         show(on) {
             this.shown = on;
         },
@@ -1260,7 +1264,8 @@ test('dying in a body: YOU DIED, then the heir the simulation chose', async () =
         await frames(4);
     }
     await frames(4);
-    assert.deepEqual(hud.banners, ['died']);
+    assert.equal(hud.banners.length, 1);
+    assert.match(hud.banners[0], /^Starved, aged \d+$/, 'YOU DIED, and how');
     assert.equal(modes.self, first, 'the banner first');
     const heir = sim.world.player?.id;
     assert.ok(heir && heir !== first, 'the simulation has an heir');
@@ -1417,4 +1422,30 @@ test('events come into view at their own moment', async () => {
     mirror.release();
     assert.deepEqual(mine(), ['late']);
     assert.ok(mirror.events.every((e) => e.time <= 7));
+});
+
+test('YOU DIED says how; a tribe-mate dying near you is told', () => {
+    const { world, hud, modes, frame } = play();
+    modes.become(7);
+    frame();
+    const b = modes.body;
+    world.events = [{ type: 'death', kind: 'human', id: 8, tribe: 1, x: b.x + 10, y: b.y, cause: 'eaten', by: 500 }];
+    frame();
+    assert.deepEqual(hud.notices, [`${personName(8)} was eaten by a predator`]);
+    world.events = [{ type: 'death', kind: 'human', id: 11, tribe: 1, x: b.x + 500, y: b.y, cause: 'starvation', by: 0 }];
+    frame();
+    assert.equal(hud.notices.length, 1, 'too far away to be told');
+    world.remove(7);
+    world.events = [{ type: 'death', kind: 'human', id: 7, tribe: 1, x: b.x, y: b.y, cause: 'starvation', by: 0 }];
+    frame();
+    assert.equal(hud.banners[0][0], 'died');
+    assert.match(hud.banners[0][1], /^Starved, aged \d+$/);
+});
+
+test('death phrases', () => {
+    assert.equal(deathPhrase('old age', 0), 'died of old age');
+    assert.equal(deathPhrase('killed', 0), 'was killed by defenders while raiding');
+    assert.equal(deathPhrase('killed', 42), `was killed by ${personName(42)}`);
+    assert.equal(deathText('eaten', 3), 'Eaten by a predator');
+    assert.equal(deathText('hunted', 42), `Speared by ${personName(42)}`);
 });

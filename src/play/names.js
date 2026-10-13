@@ -60,3 +60,31 @@ export function relation(gap) {
     if (!(gap >= 1)) return null;
     return ['child', 'grandchild', 'great-grandchild'][gap - 1] ?? 'descendant';
 }
+
+// How someone died, from a death event's cause and `by` (who killed it), as
+// what follows a name: "was eaten by a predator", "starved", "was killed by
+// Tiko of the Neto". `world` (the Mirror) names a killer still about.
+export function deathPhrase(cause, by, world = null) {
+    switch (cause) {
+        case 'eaten': return 'was eaten by a predator';
+        case 'starvation': return 'starved';
+        case 'old age': return 'died of old age';
+        case 'hunted': return by ? `was speared by ${killer(by, world)}` : 'was speared';
+        case 'killed': return by ? `was killed by ${killer(by, world)}` : 'was killed by defenders while raiding';
+        default: return 'died';
+    }
+}
+
+// The same, standing alone: "Eaten by a predator", "Starved".
+export function deathText(cause, by, world = null) {
+    const s = deathPhrase(cause, by, world).replace(/^was /, '');
+    return s[0].toUpperCase() + s.slice(1);
+}
+
+// A killer by name, with its tribe if the world still has it.
+function killer(id, world) {
+    const f = world ? world.find(id) : null;
+    if (!f || f.kind !== 'human') return f ? `a ${f.kind === 'carnivore' ? 'predator' : f.kind}` : personName(id);
+    const tribe = world.tribeById?.get(f.pop.tribe[f.i]);
+    return tribe ? `${personName(id)} of the ${tribe.name}` : personName(id);
+}

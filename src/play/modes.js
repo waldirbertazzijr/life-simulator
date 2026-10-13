@@ -43,7 +43,7 @@
 // pause, the panel (inBody, openPicker, changed), and the bodies' poses
 // (pose, hold, release: the 3D view's).
 import { Body, STAMINA } from './body.js';
-import { personName, ageText, relation, YEAR } from './names.js';
+import { personName, ageText, relation, YEAR, years, deathPhrase, deathText } from './names.js';
 import { POSE } from '../view3d/animate.js';
 import { Calls, noticeFor, placed } from './calls.js';
 import {
@@ -85,6 +85,8 @@ const TOOL_POSE = { knife: POSE.JAB, torch: POSE.SWING };
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const wrapDelta = (d, size) => (d > size / 2 ? d - size : d < -size / 2 ? d + size : d);
+// A tribe-mate dying this close to you is told (mourn).
+const MOURN = 80;
 const angleDelta = (a) => {
     a %= TAU;
     return a > Math.PI ? a - TAU : a <= -Math.PI ? a + TAU : a;
@@ -640,7 +642,10 @@ export class Modes {
                 this.standUp();
                 break;
             case 'death':
-                if (e.kind === 'human' && e.id === this.self && this.self && !this.dying) this.died();
+                if (e.kind !== 'human' || !this.self) break;
+                if (e.id === this.self) {
+                    if (!this.dying) this.died(e);
+                } else if (e.tribe === this.tribe && !this.dying) this.mourn(e);
                 break;
             case 'heir':
                 if (this.dying && e.from === this.dying.dead.id) this.dying.outcome = { kind: 'heir', id: e.to, gap: null, told: true, parent: e.parent ?? 0 };
@@ -664,8 +669,9 @@ export class Modes {
         }
     }
 
-    // Your person has died: YOU DIED, and then (carryOn) whoever is next.
-    died() {
+    // Your person has died (the death event e): YOU DIED, how, and then
+    // (carryOn) whoever is next.
+    died(e) {
         const k = this.known;
         this.dying = {
             t: DEATH_SECONDS,
@@ -677,7 +683,18 @@ export class Modes {
         this.lock = 0;
         this.world.pose = null;
         this.input.clear();
-        this.hud.banner('died');
+        const age = this.known ? `, aged ${years(this.known.age)}` : '';
+        this.hud.banner('died', e?.cause ? `${deathText(e.cause, e.by, this.world)}${age}` : '');
+    }
+
+    // Someone of your tribe has died near you (within MOURN): say who, and how.
+    mourn(e) {
+        const w = this.world;
+        const dx = wrapDelta(e.x - this.body.x, w.width);
+        const dy = wrapDelta(e.y - this.body.y, w.height);
+        if (dx * dx + dy * dy > MOURN * MOURN) return;
+        const who = e.child ? `${personName(e.id)}, a child,` : personName(e.id);
+        this.hud.notice?.(`${who} ${deathPhrase(e.cause, e.by, w)}`, true);
     }
 
     carryOn() {

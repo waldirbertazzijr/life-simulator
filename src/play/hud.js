@@ -27,7 +27,7 @@ export const COMPASS_SPAN = 180; // degrees across the compass strip
 
 const BANNER_MS = { died: 3400, line: 4800, legend: 5200 };
 const TITLES = { died: 'YOU DIED', ended: 'YOUR LINE HAS ENDED', legend: 'LEGEND FORGED' };
-const SUBTITLED = new Set(['legend']); // (their text goes under the title)
+const SUBTITLED = new Set(['died', 'legend']); // (their text goes under the title)
 const NOTICE_MS = 3200; // a call's answer stays this long (calls.js)
 
 // The calls' signs in the top slot (36 × 36, drawn like the others): a horn,
