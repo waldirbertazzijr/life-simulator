@@ -567,10 +567,10 @@ export class CameraRig {
             map.pitch = clamp(userTilt(seen, map.dist), MAP_TILT[0], MAP_TILT[1]);
         } else if (this.mode === 'follow') {
             this.orbit.yaw -= dx * 0.006;
-            this.orbit.pitch = clamp(this.orbit.pitch + dy * 0.004, 4 * DEG, 85 * DEG);
+            this.orbit.pitch = clamp(this.orbit.pitch + dy * 0.004, -35 * DEG, 85 * DEG);
         } else {
             this.look.yaw -= dx * 0.004;
-            this.look.pitch = clamp(this.look.pitch - dy * 0.003, -40 * DEG, 50 * DEG);
+            this.look.pitch = clamp(this.look.pitch - dy * 0.003, -80 * DEG, 50 * DEG);
         }
     }
 
@@ -654,7 +654,7 @@ export class CameraRig {
             this.orbit.zoom = clamp(this.orbit.zoom * Math.exp(-y * KEY_RATE.zoom * dt), 0.3, 3);
         } else {
             this.look.yaw = clamp(this.look.yaw + x * KEY_RATE.lookYaw * dt, -120 * DEG, 120 * DEG);
-            this.look.pitch = clamp(this.look.pitch - y * KEY_RATE.lookPitch * dt, -40 * DEG, 50 * DEG);
+            this.look.pitch = clamp(this.look.pitch - y * KEY_RATE.lookPitch * dt, -80 * DEG, 50 * DEG);
         }
     }
 }

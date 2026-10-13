@@ -6,7 +6,7 @@ import { DEG, wrapDelta, angleDelta, clamp } from '../view3d/util.js';
 
 export const LOOK_RATE = 0.0024;  // radians per pixel of mouse movement
 // How far the look tilts (positive looks down), and where it starts.
-export const PITCH = { shoulder: [-35 * DEG, 60 * DEG], first: [-60 * DEG, 70 * DEG] };
+export const PITCH = { shoulder: [-72 * DEG, 60 * DEG], first: [-85 * DEG, 70 * DEG] }; // (far up: the sky is worth it)
 export const START_PITCH = { shoulder: 9 * DEG, first: 4 * DEG };
 // Lock-on (Q): the nearest creature within `range` and `cone` of the look;
 // it is let go beyond `keep`. The view turns to it in about `ease` seconds.
