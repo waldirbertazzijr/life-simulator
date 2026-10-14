@@ -9,9 +9,9 @@
 //
 // - Carcasses: only their record is kept here; creatures.js draws them as
 //   extra instances of their species, fallen over (the FALL pose). The
-//   player's kills wait in the simulation to be butchered (spears.js), so
+//   kills wait in the simulation until their meat is gone (spears.js), so
 //   while it lists one (follow) its body stays (keep), shrinking as it is
-//   cut up (cut), and goes when it is done (removeCarcass) or fades if left.
+//   cut up or eaten (cut), and goes when it is used up (removeCarcass).
 // - Sprays: a few small faceted droplets thrown up and out, which fall back
 //   and lie on the ground for a moment.
 // - Pools: dark, matte patches on the ground that spread, then fade.
@@ -333,8 +333,8 @@ export class Effects {
 
     // The marks of the hands' events (package 2): blood where a blow went
     // in, splashing back toward whoever struck it (who is watching); a
-    // little at each butchering stroke; and a carcass cut up, or left to
-    // spoil, goes.
+    // little at each butchering stroke; and a carcass used up (cut up, or
+    // eaten to the bone by predators) goes.
     mark(e) {
         if (e.type === 'hit') {
             const s = SPECIES[e.kind];
@@ -345,10 +345,8 @@ export class Effects {
             this.spray(e.x - dx * near, e.y - dy * near, s.center, -dx, -dy, HIT);
         } else if (e.type === 'butcher') {
             if (this.seen(e.x, e.y, this.ground(e.x, e.y))) this.spray(e.x, e.y, 0.9, 0, 0, STROKE);
-        } else if (e.type === 'butchered') {
+        } else if (e.type === 'butchered' || e.type === 'used') {
             this.removeCarcass(e.carcass);
-        } else if (e.type === 'spoiled') {
-            this.release(e.carcass);
         }
     }
 

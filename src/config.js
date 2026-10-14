@@ -153,6 +153,7 @@ export const params = {
         speed: 0.75,
         cruise: 0.6,
         sense: 50,           // how far it spots prey — predators see first, then stalk
+        smell: 250,          // how far a hungry one scents a carcass (× its sense gene), and goes to it first
         hunt: 400,           // hunts only with less than this in stomach and fat (at night × bold)
         bold: 1.5,
         catchRadius: 3,
@@ -234,23 +235,25 @@ export const params = {
         groupRadius: 40,     // tribe-mates this close count as "together"
         meetRadius: 10,      // strangers this close meet: fight or walk away
         fightDamage: 30,
+        beaten: 0.5,         // below this share of its energy, one in a fight runs from it
         partySpacing: 15,    // social foragers close up when a tribe-mate is farther than this
-        // Raids (aggressive tribes, when their own store runs low)
-        raidRate: 0.0005,    // × aggression: per-step chance a hungry forager sets off on a raid
-        raidRange: 450,      // only camps this close, holding a full load, are worth raiding
+        // Raids (aggressive tribes, on neighbours richer than they are)
+        raidRate: 0.0001,    // × aggression: per-step chance an adult with nothing to do for the tribe sets off on a raid
+        raidRange: 750,      // only camps this close, holding a full load and more a member, are worth raiding
         raidLoad: 150,       // most a raider can carry off
         guard: 0.3,          // each defender at the camp hurts the raider with this chance (×0.5–1 by sociality)
         defendRadius: 30,    // tribe-mates this close help fend off a predator:
         defend: 0.6,         // chance it is driven off = 1 − e^(−defend × defenders)
         killPredator: 0.3,   // × aggression: chance the defenders kill it
-        // The tribe
+        // The tribe. Its store keeps until it is eaten, spent on births,
+        // split with a daughter tribe or raided: food never spoils.
         storeTarget: 30,     // food per member the tribe wants in store before resting
-        spoil: 0.00025,      // the store loses this fraction per step
+        fetchBelow: 1,       // the camp sends for the rest of its kills (and mates help cut) while its store holds less than this × storeTarget
         birthCost: 120,      // a birth takes this much from the store (90 made tribes too many)...
         childEnergy: 60,     // ...of which the newborn gets this
         reserve: 5,          // food per member kept back when deciding on a birth
         birthInterval: 4000, // steps between births in one tribe, at least...
-        birthChance: 0.00025,// ...then this chance a step, × the season's (spring, summer, autumn, winter)
+        birthChance: 0.00032,// ...then this chance a step, × the season's (spring, summer, autumn, winter); 2.5e-4 left too few, with raids
         births: [1, 0.6, 0.2, 0],
         splitSize: 22,       // a tribe this large splits in two...
         splitDistance: 300,  // ...the daughter settling about this far off...
@@ -287,8 +290,8 @@ export const params = {
         jabRange: 5,         // a creature this close in front is jabbed instead of thrown at...
         jabArc: Math.PI / 4, // ...this far to either side of the aim
         jabHit: 0.5,         // chance a jab kills; from behind an unwary animal, always (an ambush)
-        // The player's kills wait to be butchered (acts/hands.js).
-        spoil: 4500,         // steps a carcass lasts (a day: a big kill takes more than one load home)
+        // The player's kills wait to be butchered (acts/hands.js), as long as
+        // it takes: no predator takes them while the player lives (spears.js).
         butcherSteps: 60,    // steps to cut one up...
         butcherReach: 4,     // ...standing this close to it
         butcherEvery: 10,    // a stroke (blood, for the page) every this many steps
@@ -336,6 +339,11 @@ export const params = {
         spotReach: 500,      // a tribe goes no farther than this (by land) for them: where a load comes soonest
         initialWood: 6,      // wood in each starting camp (spears for the children who come of age)
         errand: 3000,        // steps a worker keeps at it before going home with what it has
+        // A camp's fire burns wood through the night; a full camp's adults
+        // keep its woodpile, and a stock of flint (tasks.js chores).
+        fire: 7,             // wood a member the camp fire burns each night
+        woodpile: 2,         // nights of it a camp keeps in wood
+        flintStock: 0.5,     // flint a member it keeps
         // Kinds (the plain spear is today's hunting: human.throwRange, hit, reload).
         arrowRange: 1.6,     // a bow: × the spear's reach (a hunter's throw; the player's arrows: × play.throwRange, heavyRange)...
         arrowSpeed: 1.6,     // ...its arrows fly × as fast as a thrown spear (play.throwSpeed, heavySpeed)...

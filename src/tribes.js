@@ -171,11 +171,17 @@ export function seedTribes(world) {
 }
 
 // Tribe bookkeeping, once per step after the dead are removed: count members,
-// spoil the store, births at camp, splits, and the end of tribes. (Wood, flint
-// and hide do not spoil.)
+// the camp fire, births at camp, splits, and the end of tribes. (Nothing in
+// the store spoils: food goes only as it is eaten, spent on a birth, split
+// or raided.)
 export function stepTribes(world) {
     const P = world.p.human;
     const pop = world.humans;
+    // The camp fire (items): through the night it burns items.fire wood a
+    // member, while there is any (a daily want of wood: tasks.js chores; the
+    // hook for the fire pit and its warmth).
+    const C = world.p.calendar;
+    const burn = world.itemsOn && world.night ? world.p.items.fire / (C.day - C.dawn - C.light - C.dusk) : 0;
     for (const t of world.tribes) {
         t.members = 0;
         t.adults = 0;
@@ -192,7 +198,7 @@ export function stepTribes(world) {
             continue;
         }
         if (t.order !== null && world.time + 1 >= t.order.until) t.order = null; // its last step: the order lapses (orders.js)
-        t.store *= 1 - P.spoil;
+        if (burn > 0 && t.wood > 0) t.wood = t.wood > burn * t.members ? t.wood - burn * t.members : 0;
         if (t.birthCooldown > 0) t.birthCooldown--;
         // A birth: in its season (world.breedP), with two adults, the store
         // able to spare it, and not too soon after the last.

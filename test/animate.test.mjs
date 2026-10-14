@@ -743,7 +743,7 @@ test("the player's kill stays until butchered, shrinking", () => {
     fx.follow([]);
     draw();
     assert.equal(herd.mesh.count, 0, 'cut up: gone');
-    // One the simulation no longer lists (spoilt) fades from then on.
+    // One the simulation no longer lists (an event missed) fades from then on.
     fx.handle([death(12, 'hunted', { by: 9 })]);
     fx.follow([{ id: 12, cut: 0 }]);
     fx.follow([]);
@@ -751,6 +751,24 @@ test("the player's kill stays until butchered, shrinking", () => {
     fx.tick(m.clock, 1000);
     const j = fx.slotOf(12);
     assert.ok(fx.dead.fade[j] > 0 && fx.dead.fade[j] < 1, `fading: ${fx.dead.fade[j]}`);
+});
+
+test('a carcass eaten to the bone by predators goes at once', () => {
+    const m = motion();
+    const fx = effects(m);
+    const c = new Creatures(new THREE.Scene());
+    const herd = c.herds.herbivore[0];
+    const draw = () => c.update(deadWorld(), view(), () => 0, 0, fx);
+    fx.handle([death(20, 'hunted', { by: 9 })]);
+    fx.follow([{ id: 20, cut: 0 }]);
+    fx.follow([{ id: 20, cut: 0.7 }]); // (a predator eats into it)
+    draw();
+    assert.equal(herd.mesh.count, 1);
+    fx.handle([{ type: 'used', carcass: 20, by: 31, time: 700 }]);
+    fx.follow([]);
+    draw();
+    assert.equal(herd.mesh.count, 0, 'used up: gone');
+    assert.equal(fx.kept.size, 0);
 });
 
 // ---- Items (package 3): the work poses, held and lying items, piles, arrows, marks ----

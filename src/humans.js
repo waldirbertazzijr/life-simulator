@@ -19,7 +19,7 @@ import {
     KIND, TASK, arm, armOf, hitWith, efficiencyOf, carryOf, blowOf, killed, credit, wearItem, butcherable,
     guards, raided, raiderKilled,
 } from './items.js';
-import { stepTask, job, campItems, wildPickup } from './tasks.js';
+import { stepTask, job, campItems, wildPickup, fetch } from './tasks.js';
 import { wrapDelta, wrapMod } from './util.js';
 
 // The way to a tribe's camp, (ddx, ddy) away at distance d: straight there on
@@ -86,13 +86,14 @@ export function throwAt(world, i, tribe, mates, prey, j, cause) {
     return meat;
 }
 
-// The nearest other tribe whose camp is within `range` of this tribe's camp
-// and holds at least `minStore` food: a raid is only worth a full haul.
+// The nearest other tribe whose camp is within `range` of this tribe's camp,
+// holds at least `minStore` food (a raid is only worth a full haul), and
+// more a member than this tribe has: envy, not only hunger, sends raiders.
 function raidTarget(world, tribe, range, minStore) {
     let best = null;
     let bestD2 = range * range;
     for (const other of world.tribes) {
-        if (other === tribe || other.store < minStore) continue;
+        if (other === tribe || other.store < minStore || other.store * tribe.members <= tribe.store * other.members) continue;
         const dx = wrapDelta(other.camp.x - tribe.camp.x, world.width);
         const dy = wrapDelta(other.camp.y - tribe.camp.y, world.height);
         const d2 = dx * dx + dy * dy;
@@ -140,8 +141,10 @@ const me = {
 //   a child                     keepToCamp, playing
 //   a task for the tribe        doTask: wood, flint, or crafting (items)
 //   hands full                  homeward
-//   enough food at home         keepToCamp, resting
-//   a hungry, aggressive tribe  sets out on a raid (raidTarget)
+//   an aggressive tribe         sets out on a raid on a richer neighbour
+//                               (raidTarget)
+//   enough food at home         keepToCamp, resting (the hungry eat there;
+//                               at camp, a full camp's chores: tasks.js)
 //   otherwise                   forage: hunt, or gather plants
 export function stepHumans(world) {
     const P = world.p.human;
@@ -215,13 +218,12 @@ export function stepHumans(world) {
         } else if (!adult) keepToCamp(world, i, tribe, STATE.PLAYING);
         else if (itemsOn && task[i] !== TASK.NONE) doTask(world, i, tribe);
         else if (me.c >= trip) homeward(world, i, tribe);
-        else if (tribe.store >= P.storeTarget * tribe.members && me.e >= P.hunger * P.maxEnergy) keepToCamp(world, i, tribe, STATE.AT_CAMP);
-        else if (tribe.store < P.storeTarget * tribe.members * 0.5 && rng.next() < tribe.aggression * P.raidRate
-                && (victim = raidTarget(world, tribe, P.raidRange, P.raidLoad))) {
-            // A hungry, aggressive tribe sends someone to rob a neighbour.
+        else if (rng.next() < tribe.aggression * P.raidRate && (victim = raidTarget(world, tribe, P.raidRange, P.raidLoad))) {
+            // An aggressive tribe sends someone to rob a richer neighbour.
             goal[i] = victim.id;
             me.s = STATE.RAIDING;
-        } else forage(world, i, tribe, order);
+        } else if (tribe.store >= P.storeTarget * tribe.members) keepToCamp(world, i, tribe, STATE.AT_CAMP); // (the hungry eat at home)
+        else forage(world, i, tribe, order);
 
         if (me.c > P.carryMax * bag) me.c = P.carryMax * bag; // hands are full; the rest is left behind
         if (me.v > 0) move(world, i);
@@ -277,7 +279,8 @@ function facePredator(world, i, tribe, j) {
 // the offset). Hawk, as often as the tribe is aggressive: attack and rob;
 // the stranger may fight back. A blow takes human.reload to ready again,
 // as a throw does. (Items: a club hits harder; each blow wears
-// what struck it.) Otherwise dove: walk away.
+// what struck it.) Otherwise dove: walk away. Hurt (below human.beaten of
+// its energy), it runs: most fights end so, not in a death.
 function meetStranger(world, i, tribe, j) {
     const P = world.p.human;
     const pop = world.humans;
@@ -285,7 +288,15 @@ function meetStranger(world, i, tribe, j) {
     const { rng } = world;
     const itemsOn = world.itemsOn;
     pop.focus[i] = id[j];
-    if (rng.next() < tribe.aggression) {
+    if (me.e < P.beaten * P.maxEnergy) {
+        // Hurt: it runs from the fight (most fights end so, not in a death).
+        me.s = STATE.FLEEING;
+        const people = world.humanHash;
+        const d = Math.sqrt(people.d2) || 1;
+        me.dx = -people.dx / d;
+        me.dy = -people.dy / d;
+        me.v = me.top;
+    } else if (rng.next() < tribe.aggression) {
         me.s = STATE.FIGHTING;
         if (pop.timer[i] > 0) return; // (between blows: a blow, like a throw, takes human.reload to ready again)
         pop.timer[i] = P.reload;
@@ -375,8 +386,8 @@ function headHome(world, i, tribe) {
 }
 
 // On a raid: walk to the other tribe's camp and take food from its store,
-// if its defenders let you. False if they struck the raider down (it is
-// dead: nothing more of its step).
+// if its defenders let you (beaten, it goes home empty-handed). False if
+// they struck the raider down (it is dead: nothing more of its step).
 function raid(world, i) {
     const P = world.p.human;
     const pop = world.humans;
@@ -394,14 +405,28 @@ function raid(world, i) {
         let defenders = world.humanHash.count(x[i], y[i], P.defendRadius, i, pop.tribe, target.id, true);
         // (A camp under orders to defend is met by every adult: orders.js.)
         if (target.order !== null && target.order.kind === 'defend' && defenders < target.adults) defenders = target.adults;
+        // Each defender may strike it, until it is beaten (below
+        // human.beaten of its energy): then it is driven off empty-handed.
+        let beaten = false;
         for (let k = 0; k < defenders; k++) {
-            if (world.rng.next() < P.guard * (0.5 + 0.5 * target.sociality)) me.e -= P.fightDamage;
+            if (world.rng.next() < P.guard * (0.5 + 0.5 * target.sociality)) {
+                me.e -= P.fightDamage;
+                if (me.e < P.beaten * P.maxEnergy) {
+                    beaten = true;
+                    break;
+                }
+            }
         }
         if (me.e <= 0) {
             pop.energy[i] = 0;
             if (world.itemsOn) raiderKilled(world, i, target); // (a defender's weapon struck it down: items.js)
             world.die(pop, i, 'killed');
             return false;
+        }
+        if (beaten) {
+            goal[i] = 0;
+            me.s = STATE.FLEEING;
+            return true;
         }
         const loot = Math.min(target.store, P.raidLoad);
         target.store -= loot;
@@ -421,6 +446,11 @@ function raid(world, i) {
 // (Orders, orders.js: under Hunt here, "near home" is near its marker;
 // under Gather food, nobody hunts. Items: the unarmed do not hunt.)
 function forage(world, i, tribe, order) {
+    // (Items: what is left of a kill comes before a new one: tasks.js fetch.)
+    if (order === null && world.itemsOn && world.carcasses.size !== 0 && fetch(world, i, tribe)) {
+        doTask(world, i, tribe);
+        return;
+    }
     const ground = order !== null && order.kind === 'hunt' ? order : null;
     if ((order !== null && order.kind === 'gather') || !me.armed || !hunt(world, i, tribe, ground)) gatherPlants(world, i, tribe, ground);
 }
@@ -579,9 +609,14 @@ function atHome(world, i, tribe, order) {
     const pop = world.humans;
     const itemsOn = world.itemsOn;
     let e = me.e;
-    if (itemsOn && me.c > P.tripLoad && (pop.gear[i] & 7) === KIND.BASKET) wearItem(world, i, world.items.get(pop.tool[i]));
-    tribe.store += me.c;
-    me.c = 0;
+    // (One cutting up a kill in camp keeps what it cuts until its hands are
+    // full, as anywhere: a kill is so many loads, wherever it lies.)
+    const cutting = itemsOn && pop.task[i] === TASK.BUTCHER;
+    if (!cutting) {
+        if (itemsOn && me.c > P.tripLoad && (pop.gear[i] & 7) === KIND.BASKET) wearItem(world, i, world.items.get(pop.tool[i]));
+        tribe.store += me.c;
+        me.c = 0;
+    }
     if (e < P.hunger * P.maxEnergy && tribe.store > 0) {
         let take = P.maxEnergy * 0.9 - e;
         if (take > tribe.store) take = tribe.store;
@@ -589,6 +624,7 @@ function atHome(world, i, tribe, order) {
         e += take;
     }
     me.e = e;
+    if (cutting) return;
     if (itemsOn) campItems(world, i, tribe);
     if (order !== null && itemsOn && !world.night && !world.dusk) errand(world, i, tribe, order); // (not after dusk)
 }

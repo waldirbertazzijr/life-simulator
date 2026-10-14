@@ -474,16 +474,120 @@ function kill(w, id) {
     return { carcass: g, x, y };
 }
 
-test('a carcass spoils after play.spoil steps untouched', () => {
+// A carcass lying at (x, y) with `meat` in it (made by nobody living, of no
+// tribe: only predators will come for it). Its id.
+function carcassAt(w, x, y, meat) {
+    const id = 1e6 + w.carcasses.size;
+    w.carcasses.set(id, { id, kind: 'herbivore', x: wrap(x, w.width), y: wrap(y, w.height), meat, total: meat, done: 0, cut: 0, by: 0, born: w.time });
+    return id;
+}
+
+// A hungry predator at (x, y), free to go (no timer). Its id.
+function hungryAt(w, x, y) {
+    const id = predatorAt(w, x, y);
+    const i = indexIn(w.carnivores, id);
+    w.carnivores.timer[i] = 0;
+    w.carnivores.energy[i] = 60;
+    w.carnivores.fat[i] = 0;
+    return id;
+}
+
+test('nothing rots: a carcass left alone lies on, days later, all its meat in it', () => {
     const w = world(EMPTY);
     const id = control(w);
     const { carcass } = kill(w, id);
-    for (let k = 1; k < w.p.play.spoil; k++) w.step();
-    assert.ok(w.carcasses.has(carcass), 'still there a step before');
+    const meat = w.carcasses.get(carcass).meat;
+    const days = 3 * w.p.calendar.day;
+    for (let k = 0; k < days; k++) {
+        if (k % 1000 === 0) w.humans.energy[at(w, id)] = 140; // (fed: the player lives on)
+        w.step();
+        assert.equal(happened(w, 'used').length, 0);
+    }
+    assert.ok(w.carcasses.has(carcass), 'still there');
+    assert.equal(w.carcasses.get(carcass).meat, meat, 'not a bite gone');
+    assert.equal(w.p.play.spoil, undefined, 'no timer');
+});
+
+// The spot farthest from every camp (as stand() finds it, nobody put there).
+function faraway(w) {
+    let best = null;
+    for (let y = 0; y < w.height; y += 20) {
+        for (let x = 0; x < w.width; x += 20) {
+            let d = Infinity;
+            for (const t of w.tribes) d = Math.min(d, Math.hypot(wrapDelta(t.camp.x - x, w.width), wrapDelta(t.camp.y - y, w.height)));
+            if (!best || d > best.d) best = { x, y, d };
+        }
+    }
+    return best;
+}
+
+test('a hungry predator goes to a carcass in sight and eats what it can hold, instead of hunting', () => {
+    const w = world(EMPTY);
+    const C = w.p.carnivore;
+    const { x, y } = faraway(w);
+    const carcass = carcassAt(w, x, y, 4000);
+    grazer(w, x - 15, y); // (prey nearer than the carcass: it goes for the carcass all the same)
+    const wolf = hungryAt(w, x + 20, y);
+    let k = 0;
+    for (; k < 60; k++) {
+        w.step();
+        const i = indexIn(w.carnivores, wolf);
+        if (w.carnivores.state[i] === STATE.EATING) break;
+        assert.equal(w.carnivores.state[i], STATE.ROAMING, 'walking to it');
+    }
+    const i = indexIn(w.carnivores, wolf);
+    assert.equal(w.carnivores.state[i], STATE.EATING, `eating by step ${k}`);
+    assert.equal(w.carnivores.timer[i], C.handling);
+    const c = w.carcasses.get(carcass);
+    const took = 4000 - c.meat;
+    assert.ok(took > 2000, `a big meal: ${took}`);
+    assert.ok(Math.abs(c.cut - took / 4000) < 1e-9, 'the page sees it eaten into');
+    assert.ok(Math.abs(w.carnivores.energy[i] + w.carnivores.fat[i] - (C.maxEnergy + C.fatMax)) < 1, 'full: stomach and fat');
+    assert.equal(w.herbivores.n, 1, 'the grazer lives');
+});
+
+test('a carcass eaten to the bone is used up and goes', () => {
+    const w = world(EMPTY);
+    const { x, y } = faraway(w);
+    const carcass = carcassAt(w, x, y, 200);
+    const wolf = hungryAt(w, x + 2, y);
+    const i = indexIn(w.carnivores, wolf);
     w.step();
     assert.equal(w.carcasses.has(carcass), false, 'gone');
-    const [e] = happened(w, 'spoiled');
-    assert.ok(e && e.carcass === carcass);
+    const [e] = happened(w, 'used');
+    assert.ok(e, "a 'used' event");
+    assert.equal(e.carcass, carcass);
+    assert.equal(e.by, wolf);
+    assert.ok(Math.abs(w.carnivores.energy[i] + w.carnivores.fat[i] - (60 + 200 * w.p.carnivore.efficiency)) < 0.1);
+});
+
+test("a sated predator leaves carrion be; and none takes the player's own kill until it lets go", () => {
+    const w = world(EMPTY);
+    const id = control(w);
+    const { carcass, x, y } = kill(w, id);
+    w.humans.x[at(w, id)] = wrap(x + 300, w.width); // (out of the predator's sight: it would go for the player)
+    const meat = w.carcasses.get(carcass).meat;
+    const wolf = hungryAt(w, x + 6, y + 2);
+    for (let k = 0; k < 30; k++) {
+        w.step();
+        assert.notEqual(w.carnivores.state[indexIn(w.carnivores, wolf)], STATE.EATING);
+    }
+    assert.equal(w.carcasses.get(carcass).meat, meat, "the player's: untouched");
+    // A sated one passes by another carcass, right under its nose.
+    let i = indexIn(w.carnivores, wolf);
+    const other = carcassAt(w, w.carnivores.x[i] + 2, w.carnivores.y[i], 300);
+    w.carnivores.fat[i] = w.p.carnivore.hunt;
+    for (let k = 0; k < 10; k++) w.step();
+    assert.equal(w.carcasses.get(other).meat, 300, 'sated: it leaves it');
+    // Hungry again, and the player gone: both are carrion, the nearer first.
+    i = indexIn(w.carnivores, wolf);
+    w.carnivores.fat[i] = 0;
+    w.carnivores.energy[i] = 60;
+    takeControl(w, 0);
+    for (let k = 0; k < 40 && w.carcasses.has(other); k++) w.step();
+    assert.equal(w.carcasses.has(other), false, 'the nearer, eaten');
+    for (let k = 0; k < 600 && w.carcasses.get(carcass)?.meat === meat; k++) w.step();
+    assert.ok((w.carcasses.get(carcass)?.meat ?? 0) < meat, 'then what was the player’s');
 });
 
 test('butchering takes 60 steps, strikes every 10, and fills the pouch (a kill that fits in it)', () => {
@@ -704,7 +808,7 @@ test('R eats up to 40, never past full', () => {
 });
 
 // The player alone in its tribe, standing `d` from its camp's centre with
-// `carry` in hand: so the store changes only by what it does (and spoils).
+// `carry` in hand: so the store changes only by what it does (nothing spoils).
 function alone(w, d, carry) {
     const id = control(w);
     const pop = w.humans;
@@ -721,12 +825,11 @@ function alone(w, d, carry) {
 
 test('the player keeps what it carries at camp; E stores it at the rack', () => {
     const w = world(EMPTY);
-    const spoil = 1 - w.p.human.spoil;
     const { id, tribe } = alone(w, 12, 50);
     let store = tribe.store;
     w.step();
     assert.equal(w.humans.carry[at(w, id)], 50, 'in camp, it is not dropped off');
-    assert.ok(Math.abs(tribe.store - store * spoil) < 1e-9);
+    assert.equal(tribe.store, store);
     store = tribe.store;
     act(w, 'store');
     w.step();
@@ -742,12 +845,24 @@ test('the player keeps what it carries at camp; E stores it at the rack', () => 
     assert.equal(e.amount, 50);
     assert.equal(e.id, id);
     assert.equal(w.humans.carry[at(w, id)], 0);
-    assert.ok(Math.abs(tribe.store - (store + 50) * spoil) < 1e-9, 'all of it in the store');
+    assert.equal(tribe.store, store + 50, 'all of it in the store');
+});
+
+test('the store never shrinks by itself: food keeps for days, untouched', () => {
+    const w = world(EMPTY);
+    const { id, tribe } = alone(w, 12, 0);
+    tribe.store = 1234.5;
+    tribe.birthCooldown = 1e9; // (no births: the one thing that would spend it)
+    for (let k = 0; k < 2 * w.p.calendar.day; k++) {
+        if (k % 1000 === 0) w.humans.energy[at(w, id)] = 140; // (fed: it does not eat from it)
+        w.step();
+    }
+    assert.equal(tribe.store, 1234.5);
+    assert.equal(w.p.human.spoil, undefined);
 });
 
 test('with empty hands, take up to 40 from the store', () => {
     const w = world(EMPTY);
-    const spoil = 1 - w.p.human.spoil;
     const { id, tribe } = alone(w, 3, 0);
     tribe.store = 100;
     act(w, 'take');
@@ -756,7 +871,7 @@ test('with empty hands, take up to 40 from the store', () => {
     assert.ok(e);
     assert.equal(e.amount, 40);
     assert.equal(w.humans.carry[at(w, id)], 40);
-    assert.ok(Math.abs(tribe.store - 60 * spoil) < 1e-9);
+    assert.equal(tribe.store, 60);
     act(w, 'take');
     w.step();
     assert.equal(happened(w, 'take').length, 0, 'hands not empty');

@@ -28,7 +28,7 @@ import { Terrain, BIOME } from './terrain.js';
 import { stepHumans, driveOff } from './humans.js';
 import { seedTribes, stepTribes } from './tribes.js';
 import { caught, afterStep } from './player.js';
-import { Spears, stepSpears, spoilCarcasses } from './spears.js';
+import { Spears, stepSpears, carrion, CARRION, eatCarcass } from './spears.js';
 import { fighting } from './orders.js';
 import { initItems, bequeath, shielded, creditHolder, TASK } from './items.js';
 import { stepItems } from './tasks.js';
@@ -80,7 +80,8 @@ export class World {
         this.immortal = null;
         // The player's spears in flight, and its kills waiting to be butchered
         // (src/spears.js): empty unless someone is played. With items, every
-        // hunter's kills wait to be butchered too.
+        // hunter's kills wait to be butchered too. A carcass never rots: it
+        // goes when its meat is gone (cut up, or eaten by predators).
         this.spears = new Spears();
         this.carcasses = new Map(); // the dead creature's id → its carcass
         // Items (src/items.js): world.items, and world.itemsOn, false when
@@ -354,7 +355,6 @@ export class World {
         this.stepCarnivores();
         if (this.humans.n) stepHumans(this);
         if (this.spears.n) stepSpears(this);            // the player's, in flight (spears.js)
-        if (this.carcasses.size) spoilCarcasses(this);  // the player's kills, left too long
         this.grass.regrow(this.regrowth); // (grass.regrowth, by the season: clock)
         this.herbivores.compact();
         this.carnivores.compact();
@@ -607,9 +607,10 @@ export class World {
     }
 
     // One step of every predator: hunting when its stomach and fat run low
-    // (more readily at night), eating its kill (what the stomach cannot hold
-    // goes to fat), and roaming wider at night and in winter; a birth in its
-    // season, when well fed, with its territory not too crowded.
+    // (more readily at night; a carcass it scents first), eating its kill
+    // (what the stomach cannot hold goes to fat), and roaming wider at night
+    // and in winter; a birth in its season, when well fed, with its
+    // territory not too crowded.
     stepCarnivores() {
         const P = this.p.carnivore;
         const pop = this.carnivores;
@@ -649,9 +650,24 @@ export class World {
             // meals. It costs energy, and an idle predator moves off.
             const rival = rivals.nearest(x[i], y[i], P.crowdRadius, i);
             if (rival >= 0) e -= P.crowdCost;
+            let meal = null; // (carrion it scents, if it is hungry: spears.js)
 
             if (timer[i] > 0) {
                 timer[i]--; // eating, digesting or catching its breath (state unchanged)
+            } else if (e + f < hungry && this.carcasses.size !== 0 && (meal = carrion(this, x[i], y[i], P.smell * vg, P.wary)) !== null) {
+                // A carcass scented: a meal that does not run. To it, and
+                // eat what the stomach and fat can hold (× efficiency, as a kill).
+                const d = Math.sqrt(CARRION.d2);
+                h = Math.atan2(CARRION.dy, CARRION.dx);
+                focus[i] = 0;
+                if (d <= P.catchRadius) {
+                    e += eatCarcass(this, meal, (P.maxEnergy - e + P.fatMax - f) / P.efficiency, id[i]) * P.efficiency;
+                    timer[i] = P.handling;
+                    state[i] = STATE.EATING;
+                } else {
+                    v = d < top * P.cruise ? d : top * P.cruise;
+                    state[i] = STATE.ROAMING;
+                }
             } else if (e + f < hungry) {
                 // The nearest prey: a grazer, or a person.
                 let j = cover ? this.spot(grazers, x[i], y[i], P.sense * vg) : grazers.nearest(x[i], y[i], P.sense * vg);

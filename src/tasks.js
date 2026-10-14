@@ -61,10 +61,11 @@ function wayTo(world, place, x, y, ddx, ddy, d) {
 // carcass (twice as fast with a knife), eating a share as it goes (1 −
 // sociality, as a hunter always has) and carrying the rest, as much as its
 // hands hold; a stroke for the page every play.butcherEvery. A big kill is
-// more than one can carry: as it starts, tribe-mates near come to help,
-// and what is left when the hands are full waits for others from the camp
-// (fetch). Whoever first stops takes the hides home; whoever cuts the last
-// of it is done with it.
+// more than one can carry: as it starts, tribe-mates near come to help, and
+// what is left when the hands are full waits for others from the camp
+// (fetch), while the store could use it (both below human.fetchBelow ×
+// storeTarget a member); what nobody comes for is the predators'. Whoever
+// first stops takes the hides home; whoever cuts the last of it is done.
 function butcherStep(world, i, tribe, e, c) {
     const P = world.p.human;
     const Q = world.p.play;
@@ -82,7 +83,7 @@ function butcherStep(world, i, tribe, e, c) {
         job.v = Math.min(P.speed * pop.speedGene[i] * P.cruise, d - 1);
         return;
     }
-    if (cc.done === 0) helpers(world, i, tribe, cc);
+    if (cc.done === 0 && tribe.store < P.storeTarget * tribe.members * P.fetchBelow) helpers(world, i, tribe, cc);
     const room = P.carryMax * ((pop.gear[i] & 7) === KIND.BASKET ? carryOf(world, pop, i) : 1) - c;
     const fast = (pop.gear[i] & 7) === KIND.KNIFE;
     if (room <= 0) {
@@ -143,23 +144,27 @@ function helpers(world, i, tribe, cc) {
     }
 }
 
-// From camp: an adult with nothing to do goes to cut what is left of one of
-// its tribe's kills (the nearest with a load's worth of meat more than those
-// already at it or on their way can carry), while the store could use it.
+// An adult with nothing to do (at camp, or a forager out: humans.js) goes
+// to cut what is left of a kill (the nearest to camp with meat more than
+// those already at it or on their way can carry), while the store could use
+// it (below human.fetchBelow × storeTarget a member): its tribe's kills, and
+// those of tribes gone (not the player's). What nobody comes for is the
+// predators' (spears.js carrion). True if it goes.
 const near = new Map(); // (fetch: a carcass's id → its meat nobody is coming for)
-function fetch(world, i, tribe) {
+export function fetch(world, i, tribe) {
     const P = world.p.human;
     const pop = world.humans;
-    if (tribe.store >= P.storeTarget * tribe.members * 2) return;
+    if (tribe.store >= P.storeTarget * tribe.members * P.fetchBelow) return false;
     const reach2 = (P.homeRange * 1.4) ** 2; // (butcherable: 1.5)
+    const mine = world.player !== null ? world.player.id : 0;
     near.clear();
     for (const cc of world.carcasses.values()) {
-        if (cc.tribe !== tribe.id || cc.meat < P.tripLoad) continue;
+        if (cc.tribe !== tribe.id && (cc.tribe === undefined || world.tribeById.has(cc.tribe) || (mine !== 0 && cc.by === mine))) continue;
         const dx = wrapDelta(cc.x - tribe.camp.x, world.width);
         const dy = wrapDelta(cc.y - tribe.camp.y, world.height);
         if (dx * dx + dy * dy < reach2) near.set(cc.id, cc.meat);
     }
-    if (near.size === 0) return;
+    if (near.size === 0) return false;
     for (let k = 0; k < pop.n; k++) {
         if (pop.task[k] !== TASK.BUTCHER || !near.has(pop.work[k])) continue;
         near.set(pop.work[k], near.get(pop.work[k]) - (P.carryMax - pop.carry[k]));
@@ -167,7 +172,7 @@ function fetch(world, i, tribe) {
     let best = null;
     let bestD2 = Infinity;
     for (const [id, left] of near) {
-        if (left < P.tripLoad) continue;
+        if (left <= 0) continue;
         const cc = world.carcasses.get(id);
         const dx = wrapDelta(cc.x - tribe.camp.x, world.width);
         const dy = wrapDelta(cc.y - tribe.camp.y, world.height);
@@ -177,9 +182,10 @@ function fetch(world, i, tribe) {
             best = cc;
         }
     }
-    if (best === null) return;
+    if (best === null) return false;
     pop.task[i] = TASK.BUTCHER;
     pop.work[i] = best.id;
+    return true;
 }
 
 // An errand for wood or flint: to the tribe's spot, gather there until the
@@ -300,8 +306,24 @@ export function campItems(world, i, tribe) {
     if (pop.age[i] < world.p.human.maturity) return;
     if (tribe.goods.length) campPickup(world, i, tribe);
     if (pop.task[i] !== TASK.NONE || pop.goal[i] !== 0 || world.night || world.dusk) return; // (no new task after dusk)
-    if (world.carcasses.size && (world.time + pop.id[i]) % 10 === 0) fetch(world, i, tribe);
+    if (world.carcasses.size) fetch(world, i, tribe);
     if (pop.task[i] === TASK.NONE && tribe.want !== 0) assign(world, i, tribe);
+    if (pop.task[i] === TASK.NONE && tribe.store >= world.p.human.storeTarget * tribe.members) chore(world, i, tribe);
+}
+
+// Chores: an adult at camp with nothing the tribe needs done, its store
+// full, works rather than rest. Today: wood for the camp fire (items.woodpile
+// nights of it, items.fire a member a night: tribes.js), and flint for the
+// stock (items.flintStock a member), up to two thirds of the adults at once.
+// (The hook for later work: building, gardens.)
+function chore(world, i, tribe) {
+    const I = world.p.items;
+    const A = tribe.adults;
+    if (tribe.wood < I.fire * I.woodpile * tribe.members && tribe.woodSpot !== null && tribe.chopping < 1 + Math.floor((A * 2) / 3)) {
+        startErrand(world, i, tribe, TASK.WOOD);
+    } else if (tribe.flint < I.flintStock * tribe.members && tribe.flintSpot !== null && tribe.quarrying < 1 + Math.floor(A / 6)) {
+        startErrand(world, i, tribe, TASK.FLINT);
+    }
 }
 
 // From the camp's goods, the first thing better than what person i holds.

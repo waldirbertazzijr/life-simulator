@@ -359,7 +359,7 @@ const adultsOf = (w, tribe) => {
 
 test('Gather wood and Gather flint send idle adults for them, to the spot; a hungry camp sets them aside', () => {
     for (const kind of ['wood', 'flint']) {
-        const w = world(CALM, 2);
+        const w = world({ ...CALM, 'items.fire': 0, 'items.flintStock': 0 }, 2); // (no chores: only the order sends them)
         const tribe = w.tribes[0];
         const task = kind === 'wood' ? TASK.WOOD : TASK.FLINT;
         const spot = kind === 'wood' ? tribe.woodSpot : tribe.flintSpot;
@@ -397,6 +397,110 @@ test('Gather wood and Gather flint send idle adults for them, to the spot; a hun
         }
         assert.ok(sent <= 2, `hungry, ${sent} went (the tribe's own needs only)`);
     }
+});
+
+test('the camp fire burns items.fire wood a member through the night, and goes out without wood', () => {
+    const w = world(CALM);
+    const tribe = w.tribes[0];
+    const C = w.p.calendar;
+    const night = C.day - C.dawn - C.light - C.dusk;
+    // To the first step of the night, with wood enough for it.
+    while (!w.night) w.step();
+    tribe.wood = 1000;
+    let steps = 0;
+    while (w.night) {
+        const before = tribe.wood;
+        w.step();
+        if (!w.night) break; // (the step that ended the night was dawn's)
+        const burnt = before - tribe.wood; // (nobody puts wood in at night: errands end at dusk)
+        assert.ok(Math.abs(burnt - (w.p.items.fire * tribe.members) / night) < 1e-9, `a step's burning: ${burnt}`);
+        steps++;
+    }
+    assert.ok(steps >= night - 2, `all night: ${steps} of ${night}`);
+    // By day it burns nothing; at night, out of wood, it is out (never below 0).
+    const day = tribe.wood;
+    for (let k = 0; k < 100; k++) w.step();
+    assert.ok(tribe.wood >= day, 'by day: nothing burnt');
+    while (!w.night) w.step();
+    tribe.wood = 0.5;
+    for (let k = 0; k < 400; k++) w.step();
+    assert.equal(tribe.wood, 0);
+});
+
+test('a full camp keeps its woodpile: chores send adults for wood, up to two thirds of them', () => {
+    const w = world(CALM, 2);
+    const tribe = w.tribes[0];
+    const I = w.p.items;
+    w.step();
+    const chopping = () => adultsOf(w, tribe).filter((i) => w.humans.task[i] === TASK.WOOD).length;
+    let most = 0;
+    for (let k = 0; k < 600; k++) {
+        tribe.store = 5000; // (fed: nothing to forage for)
+        tribe.wood = 0;
+        w.step();
+        if (!w.night && !w.dusk) most = Math.max(most, chopping());
+    }
+    assert.ok(most >= 2, `${most} out for wood`);
+    assert.ok(most <= 1 + Math.floor((tribe.adults * 2) / 3), `no more than two thirds: ${most} of ${tribe.adults}`);
+    // The woodpile full (items.woodpile nights of fire): nobody more goes.
+    for (const i of adultsOf(w, tribe)) w.humans.task[i] = TASK.NONE;
+    let sent = 0;
+    for (let k = 0; k < 300; k++) {
+        tribe.store = 5000;
+        tribe.wood = I.fire * I.woodpile * tribe.members + 100;
+        tribe.flint = 100;
+        w.step();
+        sent = Math.max(sent, chopping());
+    }
+    assert.ok(sent <= 1, `a full woodpile: ${sent} went (the tribe's crafting needs only)`);
+});
+
+test('an aggressive tribe raids a richer neighbour in reach, not a poorer one', () => {
+    const w = world({ ...CALM, 'terrain.enabled': false, 'human.tribes': 2, 'human.raidRate': 1, 'items.fire': 0, 'items.flintStock': 0 }, 3); // (no chores: idle hands)
+    const [a, b] = w.tribes;
+    a.aggression = 1;
+    b.aggression = 0;
+    b.camp.x = (a.camp.x + 300) % w.width; // (within raidRange)
+    b.camp.y = a.camp.y;
+    const raiders = () => w.humans.goal.subarray(0, w.humans.n).filter((g) => g === b.id).length;
+    // Poorer (a member) than the raiders: nobody sets out.
+    for (let k = 0; k < 50; k++) {
+        a.store = 1000 * a.members;
+        b.store = 500;
+        w.step();
+    }
+    assert.equal(raiders(), 0, 'not worth it');
+    // Richer: they go, though their own store is full.
+    for (let k = 0; k < 50; k++) {
+        a.store = 100 * a.members;
+        b.store = 1000 * b.members;
+        w.step();
+    }
+    assert.ok(raiders() > 0, 'raiders on their way');
+});
+
+test('hawks meet and fight; one hurt below human.beaten runs from it', () => {
+    const w = world({ ...CALM, 'terrain.enabled': false, 'human.tribes': 2, 'items.fire': 0, 'items.flintStock': 0 }, 3);
+    w.step();
+    const [a, b] = w.tribes;
+    a.aggression = 1;
+    b.aggression = 1;
+    const pop = w.humans;
+    const [i] = adultsOf(w, a);
+    const [j] = adultsOf(w, b);
+    const [x, y] = [(a.camp.x + 150) % w.width, a.camp.y];
+    for (const [k, dx, e] of [[i, 0, 140], [j, 4, 60]]) {
+        pop.x[k] = (x + dx) % w.width;
+        pop.y[k] = y;
+        pop.energy[k] = e;
+        pop.task[k] = TASK.NONE;
+        pop.timer[k] = 0;
+    }
+    const [idI, idJ] = [pop.id[i], pop.id[j]];
+    w.step();
+    const at = (id) => pop.id.subarray(0, pop.n).indexOf(id);
+    assert.equal(pop.state[at(idI)], STATE.FIGHTING, 'the hale one fights');
+    assert.equal(pop.state[at(idJ)], STATE.FLEEING, `the hurt one (${w.p.human.beaten * w.p.human.maxEnergy} and less) runs`);
 });
 
 test('Gather wood and flint are refused without items or a spot', () => {

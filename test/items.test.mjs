@@ -517,8 +517,10 @@ test('a hunter\'s kill waits in a carcass: it cuts it up (items.butcher steps), 
     assert.equal(knifeSteps, w.p.items.butcher / 2);
 });
 
-test('a big kill: tribe-mates near help carry it, and the camp fetches the rest', () => {
-    const w = world({ ...EMPTY, ...ALLDAY, 'human.perTribe': 6 });
+test('a big kill: tribe-mates near help carry it, and the camp fetches the rest (while it could use it)', () => {
+    const w = world({ ...EMPTY, ...ALLDAY, 'human.perTribe': 6, 'human.fetchBelow': 100 }); // (a camp that could use all of it)
+    w.step(); // (the tribe counts its members; then nobody has anything to do)
+    for (let i = 0; i < w.humans.n; i++) [w.humans.task[i], w.humans.work[i], w.humans.goal[i]] = [TASK.NONE, 0, 0];
     const t = w.tribes[0];
     t.store = 0; // (a camp that could use the meat)
     const P = w.p.human;
@@ -556,6 +558,59 @@ test('a big kill: tribe-mates near help carry it, and the camp fetches the rest'
     }
     assert.ok(stored > c.total * 0.5, `most of it home: ${stored.toFixed(0)} of ${c.total.toFixed(0)}`);
     assert.equal(t.hide, 1, 'and the hide');
+});
+
+test('a full camp takes a load of a kill, no more: nobody comes to help or fetch, the rest is carrion', () => {
+    const w = world({ ...EMPTY, ...ALLDAY, 'human.perTribe': 6 });
+    w.step(); // (the tribe counts its members; then nobody has anything to do)
+    for (let i = 0; i < w.humans.n; i++) [w.humans.task[i], w.humans.work[i], w.humans.goal[i]] = [TASK.NONE, 0, 0];
+    const t = w.tribes[0];
+    const P = w.p.human;
+    t.store = 10 * P.storeTarget * 6; // (full)
+    const all = adults(w);
+    const [hunter, mate] = all;
+    const x = t.camp.x + 150;
+    alone(w, hunter, x, t.camp.y);
+    alone(w, mate, x + 10, t.camp.y);
+    const g = grazer(w, x + 2, t.camp.y, { energy: 80 });
+    const j = indexIn(w.herbivores, g);
+    w.herbivores.age[j] = w.p.herbivore.maturity;
+    killed(w, hunter, w.herbivores, j, efficiencyOf(w, w.humans, hunter));
+    w.die(w.herbivores, j, 'hunted', w.humans.id[hunter]);
+    const total = w.carcasses.get(g).total;
+    w.step();
+    assert.equal(w.humans.task[mate], TASK.NONE, 'no helper');
+    for (let k = 0; k < 3000; k++) {
+        w.step();
+        for (const i of all.slice(1)) assert.notEqual(w.humans.task[i] === TASK.BUTCHER && w.humans.work[i] === g, true, 'nobody fetches');
+    }
+    const c = w.carcasses.get(g);
+    assert.ok(c, 'it lies there (no predator about)');
+    assert.ok(total - c.meat <= P.carryMax + P.maxEnergy, `the hunter's load (and its meal): ${(total - c.meat).toFixed(0)} cut of ${total.toFixed(0)}`);
+});
+
+test('a kill inside the camp is still cut a load at a time: the store gets what the hands carry', () => {
+    const w = world({ ...EMPTY, ...ALLDAY, 'human.perTribe': 2 });
+    w.step(); // (the tribe counts its members; then nobody has anything to do)
+    for (let i = 0; i < w.humans.n; i++) [w.humans.task[i], w.humans.work[i], w.humans.goal[i]] = [TASK.NONE, 0, 0];
+    const t = w.tribes[0];
+    const P = w.p.human;
+    t.store = 10 * P.storeTarget * 2; // (full: nobody fetches)
+    const [hunter] = adults(w);
+    alone(w, hunter, t.camp.x + 3, t.camp.y);
+    const g = grazer(w, t.camp.x + 5, t.camp.y, { energy: 80 });
+    const j = indexIn(w.herbivores, g);
+    w.herbivores.age[j] = w.p.herbivore.maturity;
+    killed(w, hunter, w.herbivores, j, efficiencyOf(w, w.humans, hunter));
+    w.die(w.herbivores, j, 'hunted', w.humans.id[hunter]);
+    const store = t.store;
+    let most = 0;
+    for (let k = 0; k < 200; k++) {
+        w.step();
+        most = Math.max(most, t.store - store);
+    }
+    assert.ok(most <= P.carryMax + 1e-6, `one load in: ${most.toFixed(0)}`);
+    assert.ok(w.carcasses.has(g), 'the rest lies there');
 });
 
 test('in a whole world, hunters butcher their kills and hides reach the stores', () => {

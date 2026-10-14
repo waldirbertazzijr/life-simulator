@@ -11,11 +11,12 @@
 // predator dies, killed; a person of another tribe loses play.spearDamage,
 // and dies of it at 0. The player's kills do not go straight into the hands
 // as a hunter's do: the meat waits in a carcass (world.carcasses, by the
-// dead creature's id) to be butchered (acts/hands.js), and spoils if left.
+// dead creature's id) to be butchered (acts/hands.js), as long as it takes.
 //
-// world.spears holds the spears in flight; World.step calls stepSpears and
-// spoilCarcasses only while there is one, so a world nobody plays in never
-// runs any of this, and none of it draws a random number.
+// world.spears holds the spears in flight; World.step calls stepSpears only
+// while there is one, so a world nobody plays in never runs any of this, and
+// none of it draws a random number. Carcasses (below) never rot: they are
+// cut up, or eaten by predators (carrion).
 //
 // With items (items.js) a projectile is a spear or an arrow (`kind`, a KIND
 // code: an arrow flies farther and faster, and its reach for a hit is a
@@ -196,15 +197,71 @@ export function strike(world, pop, i, by, ux, uy, weapon = KIND.SPEAR, item = 0,
     return true;
 }
 
-// Carcasses left untouched for play.spoil steps rot away.
-export function spoilCarcasses(world) {
-    const { time } = world;
-    const spoil = world.p.play.spoil;
-    for (const [id, c] of world.carcasses) {
-        if (time - c.born < spoil) continue;
-        world.carcasses.delete(id);
-        world.events.push({ type: 'spoiled', carcass: id, time });
+// ---- Carcasses ----
+//
+// Nothing rots: a carcass lies until its meat is gone. People cut it up (its
+// hunter and tribe-mates, and the camp fetching the rest: tasks.js; the
+// player: acts/hands.js), and predators eat from it: a hungry one with a
+// carcass in sight goes to it instead of hunting (World.stepCarnivores).
+// Emptied, it is used up and goes ('used', or 'butchered' by a person). The
+// player's own kills are no predator's while it plays: they wait as long
+// as it takes.
+
+// Where the carcass carrion() found lies from where it looked. Read at once.
+export const CARRION = { dx: 0, dy: 0, d2: 0 };
+
+// The nearest carcass with meat within r of (x, y), if a predator there may
+// take it (not the player's own kill, and nobody within `wary` of it) and
+// can walk straight to it (no water or cliff between); else null. Its
+// offset is left in CARRION.
+export function carrion(world, x, y, r, wary) {
+    const { width: W, height: H } = world;
+    const mine = world.player !== null ? world.player.id : 0;
+    const people = world.humans.n !== 0 ? world.humanHash : null;
+    let best = null;
+    let bestD2 = r * r;
+    let bx = 0;
+    let by = 0;
+    for (const c of world.carcasses.values()) {
+        if (mine !== 0 && c.by === mine) continue;
+        const dx = wrapDelta(c.x - x, W);
+        if (dx > r || dx < -r) continue;
+        const dy = wrapDelta(c.y - y, H);
+        if (dy > r || dy < -r) continue;
+        const d2 = dx * dx + dy * dy;
+        if (d2 >= bestD2) continue;
+        if (people !== null && people.nearest(c.x, c.y, wary) >= 0) continue; // (people at it: it waits)
+        best = c;
+        bestD2 = d2;
+        bx = dx;
+        by = dy;
     }
+    if (best === null || (world.terrain !== null && !straight(world.terrain, x, y, bx, by, bestD2))) return null;
+    CARRION.dx = bx;
+    CARRION.dy = by;
+    CARRION.d2 = bestD2;
+    return best;
+}
+
+// Is the ground open all the way from (x, y) along (dx, dy), d2 long
+// (squared)? Looked at every 2 units.
+function straight(terrain, x, y, dx, dy, d2) {
+    const n = Math.ceil(Math.sqrt(d2) / 2);
+    for (let k = 1; k <= n; k++) if (terrain.blocked(x + (dx * k) / n, y + (dy * k) / n)) return false;
+    return true;
+}
+
+// The predator `by` eats from carcass c, up to `room` of its meat. What it
+// took. Emptied, the carcass is used up and goes.
+export function eatCarcass(world, c, room, by) {
+    const take = room < c.meat ? room : c.meat;
+    c.meat -= take;
+    c.cut = 1 - c.meat / c.total;
+    if (c.meat <= 1e-6) {
+        world.carcasses.delete(c.id);
+        world.events.push({ type: 'used', carcass: c.id, by, time: world.time });
+    }
+    return take;
 }
 
 // For the page (snapshot.carcasses): the kills still lying there, the

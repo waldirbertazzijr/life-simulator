@@ -365,7 +365,7 @@ test('defend camp: a raider meets every adult', () => {
     assert.ok(plain.alive && plain.carry >= 150, 'an empty camp is robbed');
     const ordered = run(true);
     assert.ok(ordered.defenders > 3);
-    assert.equal(ordered.alive, false, 'every adult defends it, wherever they are');
+    assert.ok(!ordered.alive || ordered.carry === 0, 'every adult defends it, wherever they are: the raider is beaten off empty-handed');
 });
 
 // ---- calls from the player, and the rally ------------------------------------------

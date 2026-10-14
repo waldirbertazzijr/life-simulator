@@ -4,7 +4,7 @@
 // here is ever called, and the world is the one of before items, to the bit.
 //
 // Materials. A tribe's store holds wood, flint and hide besides its food
-// (numbers on the tribe; they do not spoil). Wood is chopped in forest, and a
+// (numbers on the tribe; nothing spoils). Wood is chopped in forest, and a
 // little anywhere grass grows; flint is quarried on bare rock, and a little on
 // tundra (on a flat world, a little anywhere); hides come with kills. Each
 // tribe finds its nearest good spots when it is founded (findSpots), each with

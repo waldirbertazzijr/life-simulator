@@ -16,6 +16,7 @@ import { availableParallelism } from 'node:os';
 import { params as defaults } from '../src/config.js';
 import { World } from '../src/world.js';
 import { ITEM_KINDS } from '../src/items.js';
+import { STATE, STATE_LABEL } from '../src/population.js';
 import { SEASONS, WINTERS, winterOf } from '../src/calendar.js';
 
 const KINDS = ['herbivore', 'carnivore', 'human'];
@@ -32,7 +33,8 @@ function seasonBook(world) {
     const out = [];
     let cur = null;
     const open = (k) => {
-        cur = { k, year: Math.floor(k / 4) + 1, season: k % 4, winter: winterOf(c, world.seed, Math.floor(k / 4) + 1), sum: {}, min: {}, end: {}, fat: {}, grass: 0, under: 0, low: 0, samples: 0, born: {}, died: {}, start: {}, deaths: {}, tribes: 0 };
+        cur = { k, year: Math.floor(k / 4) + 1, season: k % 4, winter: winterOf(c, world.seed, Math.floor(k / 4) + 1), sum: {}, min: {}, end: {}, fat: {}, grass: 0, under: 0, low: 0, samples: 0, born: {}, died: {}, start: {}, deaths: {}, tribes: 0,
+            store: 0, storeMax: 0, perMember: 0, carcasses: 0, carcassMax: 0, lying: 0 };
         for (const kind of KINDS) {
             cur.start[kind] = pops[kind].n;
             cur.deaths[kind] = { ...world.deaths[kind] };
@@ -82,13 +84,28 @@ function seasonBook(world) {
                 for (let i = 0; i < h.n; i++) low += world.lowland[world.grass.index(h.x[i], h.y[i])];
                 cur.low += h.n ? low / h.n : 0;
             }
+            // The tribes' stores (mean a tribe, the largest, a member), and
+            // the carcasses lying (how many, the most, their meat).
+            let store = 0;
+            let members = 0;
+            for (const t of world.tribes) {
+                store += t.store;
+                members += t.members;
+                if (t.store > cur.storeMax) cur.storeMax = t.store;
+            }
+            cur.store += world.tribes.length ? store / world.tribes.length : 0;
+            cur.perMember += members ? store / members : 0;
+            const n = world.carcasses.size;
+            cur.carcasses += n;
+            if (n > cur.carcassMax) cur.carcassMax = n;
+            for (const cc of world.carcasses.values()) cur.lying += cc.meat;
             for (const kind of KINDS) {
                 const pop = pops[kind];
                 const v = pop.n;
                 cur.sum[kind] += v;
                 if (v < cur.min[kind]) cur.min[kind] = v;
                 let fat = 0;
-                for (let i = 0; i < v; i++) fat += pop.fat[i];
+                if (pop.fat) for (let i = 0; i < v; i++) fat += pop.fat[i]; // (no fat before stage 4)
                 cur.fat[kind] += v ? fat / v : 0;
             }
         },
@@ -99,6 +116,7 @@ function seasonBook(world) {
                 s.grass = s.samples ? s.grass / s.samples : 0;
                 s.under = s.samples ? s.under / s.samples : 0;
                 s.low = s.samples ? s.low / s.samples : 0;
+                for (const key of ['store', 'perMember', 'carcasses', 'lying']) s[key] = s.samples ? s[key] / s.samples : 0;
                 s.mean = {};
                 for (const kind of KINDS) {
                     s.mean[kind] = s.samples ? s.sum[kind] / s.samples : s.end[kind];
@@ -113,7 +131,7 @@ function seasonBook(world) {
 function runSeed({ params, seed, steps, sample, shock, aspect }) {
     const world = new World(params, { seed, aspect });
     const book = seasonBook(world);
-    const series = { herbivore: [], carnivore: [], grass: [], human: [], tribes: [] };
+    const series = { herbivore: [], carnivore: [], grass: [], human: [], tribes: [], carcasses: [] };
     // With biomes: where the herds graze, summed over the samples.
     const biomeOf = world.terrain ? world.terrain.biomeGrid : null;
     const herds = biomeOf ? new Array(world.terrain.biomes.length).fill(0) : null;
@@ -126,6 +144,19 @@ function runSeed({ params, seed, steps, sample, shock, aspect }) {
     let raids = 0;
     let raiding = new Set();
     let raidingNow = new Set();
+    const ends = { butchered: 0, used: 0, spoiled: 0 };
+    // How lively a day is: adults' states by daylight (step by step), throws,
+    // fights with strangers (a person taking one up), predators' chases; and
+    // tribe-steps and predator-steps to make them rates.
+    const lively = { states: new Array(STATE_LABEL.length).fill(0), throws: 0, fights: 0, chases: 0, tribeSteps: 0, predatorSteps: 0,
+        into: { meat: 0, plant: 0, other: 0 }, killsFull: 0, killsShort: 0 };
+    const carried = new Map(); // (a person's id → what it carries, by where it came from)
+    const wrap = (d, size) => (d > size / 2 ? d - size : d < -size / 2 ? d + size : d);
+    let fighting = new Set();
+    let fightingNow = new Set();
+    let chasing = new Set();
+    let chasingNow = new Set();
+    const humanIds = new Set();
     const t0 = performance.now();
 
     for (let t = 1; t <= steps; t++) {
@@ -136,6 +167,79 @@ function runSeed({ params, seed, steps, sample, shock, aspect }) {
         }
         world.step();
         book.step();
+        // How carcasses end: cut up, or eaten to the bone ('used').
+        for (const e of world.events) {
+            if (e.type in ends) ends[e.type]++;
+            else if (e.type === 'throw' || e.type === 'swing') lively.throws++;
+        }
+        lively.tribeSteps += world.tribes.length;
+        lively.predatorSteps += world.carnivores.n;
+        {
+            const c = world.carnivores;
+            chasingNow.clear();
+            for (let i = 0; i < c.n; i++) {
+                if (c.state[i] !== STATE.CHASING) continue;
+                chasingNow.add(c.id[i]);
+                if (!chasing.has(c.id[i])) lively.chases++;
+            }
+            [chasing, chasingNow] = [chasingNow, chasing];
+        }
+        if (hadHumans) {
+            const pop = world.humans;
+            const adult = world.p.human.maturity;
+            const day = !world.night && !world.dusk;
+            fightingNow.clear();
+            let any = false;
+            for (let i = 0; i < pop.n; i++) {
+                if (day && pop.age[i] >= adult) lively.states[pop.state[i]]++;
+                if (pop.state[i] === STATE.FIGHTING) any = true;
+            }
+            if (any) {
+                humanIds.clear();
+                for (let i = 0; i < pop.n; i++) humanIds.add(pop.id[i]);
+                for (let i = 0; i < pop.n; i++) {
+                    if (pop.state[i] !== STATE.FIGHTING || !humanIds.has(pop.focus[i])) continue;
+                    fightingNow.add(pop.id[i]);
+                    if (!fighting.has(pop.id[i])) lively.fights++;
+                }
+            }
+            [fighting, fightingNow] = [fightingNow, fighting];
+            // Food into the stores, by where it came from: what each person
+            // carries is tallied by what it was doing as it grew (cutting a
+            // kill: meat; gathering: plants; else: robbed, looted, taken),
+            // and counted in as it is put down at its own camp. And the
+            // grazers people killed with their store full, or not.
+            const R = world.p.human.campRadius;
+            for (let i = 0; i < pop.n; i++) {
+                let f = carried.get(pop.id[i]);
+                if (f === undefined) carried.set(pop.id[i], (f = { c: pop.carry[i], meat: 0, plant: 0, other: 0 }));
+                const dc = pop.carry[i] - f.c;
+                if (dc > 0) {
+                    const s = pop.state[i];
+                    if (s === STATE.BUTCHERING) f.meat += dc;
+                    else if (s === STATE.GATHERING) f.plant += dc;
+                    else f.other += dc;
+                } else if (dc < 0 && f.c > 0) {
+                    const k = -dc / f.c;
+                    const t = world.tribeById.get(pop.tribe[i]);
+                    if (t && Math.hypot(wrap(t.camp.x - pop.x[i], world.width), wrap(t.camp.y - pop.y[i], world.height)) < R) {
+                        lively.into.meat += f.meat * k;
+                        lively.into.plant += f.plant * k;
+                        lively.into.other += f.other * k;
+                    }
+                    f.meat -= f.meat * k;
+                    f.plant -= f.plant * k;
+                    f.other -= f.other * k;
+                }
+                f.c = pop.carry[i];
+            }
+            for (const e of world.events) {
+                if (e.type !== 'death' || e.cause !== 'hunted' || !e.by) continue;
+                const found = world.find(e.by);
+                const t = found && found.kind === 'human' ? world.tribeById.get(found.pop.tribe[found.i]) : null;
+                if (t) lively[t.store >= world.p.human.storeTarget * t.members ? 'killsFull' : 'killsShort']++;
+            }
+        }
         if (hadHumans) {
             const pop = world.humans;
             raidingNow.clear();
@@ -153,6 +257,7 @@ function runSeed({ params, seed, steps, sample, shock, aspect }) {
             series.grass.push(+world.grass.mean().toFixed(3));
             series.human.push(world.humans.n);
             series.tribes.push(world.tribes.length);
+            series.carcasses.push(world.carcasses.size);
             if (herds) {
                 const h = world.herbivores;
                 for (let i = 0; i < h.n; i++) herds[biomeOf[world.grass.index(h.x[i], h.y[i])]]++;
@@ -197,7 +302,7 @@ function runSeed({ params, seed, steps, sample, shock, aspect }) {
             hunted: world.deaths.herbivore.hunted ?? 0,
         } : null,
         items: world.itemsOn ? itemSummary(world) : null,
-        pace: paceSummary(world, start, raids),
+        pace: { ...paceSummary(world, start, raids), ends, lively },
         seasons: book.done(),
     };
 }
@@ -347,7 +452,7 @@ function period(a, sample) {
 
 function summarise(r) {
     const out = { seed: r.seed, steps: r.steps, extinct: r.extinct, stepsPerSec: r.stepsPerSec, genes: r.genes, terrain: r.terrain, biomes: r.biomes, items: r.items, pace: r.pace, seasons: r.seasons };
-    for (const s of ['herbivore', 'carnivore', 'grass', 'human', 'tribes']) {
+    for (const s of ['herbivore', 'carnivore', 'grass', 'human', 'tribes', 'carcasses']) {
         const ser = r.series[s];
         const back = ser.slice(Math.floor(ser.length / 2));
         const m = mean(back);
@@ -423,6 +528,18 @@ function seasonReport(sums, f) {
             if (ends.length) line.push(`y${y} ${f(avg(ends.map((x) => x.tribes)), 1)} (${Math.min(...ends.map((x) => x.tribes))}) ${f(avg(ends.map((x) => x.end.human)))}p`);
         }
         console.log(`  tribes at each year's end, mean (lowest), and people: ${line.join(' · ')}`);
+        // Year by year, over the seeds: people born, the stores (mean a
+        // tribe; the largest any tribe held), and the carcasses lying (mean;
+        // the most at any sample; the meat in them, mean).
+        const yearly = [];
+        for (let y = 1; y <= years; y++) {
+            const xs = all.filter((x) => x.year === y);
+            if (xs.length < 4 * book.length) continue;
+            const born = xs.reduce((s, x) => s + (x.born.human ?? 0), 0) / book.length;
+            yearly.push(`y${y} born ${f(born)} · store ${f(avg(xs.map((x) => x.store)))} (max ${f(Math.max(...xs.map((x) => x.storeMax)))}, ${f(avg(xs.map((x) => x.perMember)))}/member)` +
+                ` · carcasses ${f(avg(xs.map((x) => x.carcasses)), 1)} (max ${Math.max(...xs.map((x) => x.carcassMax))}, meat ${f(avg(xs.map((x) => x.lying)))})`);
+        }
+        if (yearly.length) console.log(`  year by year, a seed:\n    ${yearly.join('\n    ')}`);
     }
 }
 
@@ -598,6 +715,41 @@ function report(opts, sums, results) {
             console.log(`        tribes ${f(m((s) => s.tribes.mean), 1)} (2nd half; lowest seed ${f(Math.min(...paced.map((s) => s.tribes.mean)), 1)}, at the end ${f(m((s) => s.humans.tribes), 1)}) · ` +
                 `splits ${f(m((s) => per(s, s.pace.splits)), 2)} · raids ${f(m((s) => per(s, s.pace.raids)), 1)}` +
                 (withItems.length ? ` · crafted ${f(m((s) => per(s, s.pace.crafted ?? 0)), 1)} · errands ${f(m((s) => per(s, s.pace.errands ?? 0)), 1)} · butchered ${f(m((s) => per(s, s.pace.butchered ?? 0)), 1)}` : ''));
+        }
+        const lively = paced.filter((s) => s.pace.lively);
+        if (lively.length && withPeople.length) {
+            // A lively day? Adults' daylight steps by state; people's hunts
+            // (grazers killed) and throws a tribe a day; raids set off,
+            // fights with strangers taken up and people killed, a year;
+            // predators' kills a day (all of them, and each) and chases each.
+            const DAY = defaults.calendar.day;
+            const YEAR = DAY * defaults.calendar.seasonDays * 4;
+            const mm = (get) => mean(lively.map(get));
+            const states = new Array(STATE_LABEL.length).fill(0);
+            for (const s of lively) {
+                const tot = s.pace.lively.states.reduce((a, b) => a + b, 0) || 1;
+                s.pace.lively.states.forEach((v, k) => { states[k] += v / tot / lively.length; });
+            }
+            const shares = states.map((v, k) => [STATE_LABEL[k], v]).filter(([, v]) => v >= 0.005).sort((a, b) => b[1] - a[1]);
+            console.log(`lively: adults by daylight ${shares.map(([k, v]) => `${k} ${f(100 * v)}%`).join(', ')}`);
+            const tribeDays = (s) => s.pace.lively.tribeSteps / DAY || 1;
+            const years = (s) => s.pace.steps / YEAR;
+            const eaten = (s) => (s.pace.herbivore.died.eaten ?? 0) + (s.pace.human.died.eaten ?? 0);
+            console.log(`        a tribe a day: hunts (grazers killed) ${f(mm((s) => (s.pace.herbivore.died.hunted ?? 0) / tribeDays(s)), 2)} · throws ${f(mm((s) => s.pace.lively.throws / tribeDays(s)), 1)}` +
+                ` · a year: raids ${f(mm((s) => s.pace.raids / years(s)), 1)} · fights taken up ${f(mm((s) => s.pace.lively.fights / years(s)), 1)} · people killed ${f(mm((s) => (s.pace.human.died.killed ?? 0) / years(s)), 1)}` +
+                ` (a tribe a year: raids ${f(mm((s) => s.pace.raids / (tribeDays(s) * DAY / YEAR)), 1)}, fights ${f(mm((s) => s.pace.lively.fights / (tribeDays(s) * DAY / YEAR)), 1)})`);
+            const into = (k) => f(mm((s) => (s.pace.lively.into?.[k] ?? 0) / tribeDays(s)));
+            const full = mm((s) => s.pace.lively.killsFull ?? 0);
+            const short = mm((s) => s.pace.lively.killsShort ?? 0);
+            console.log(`        into the store a tribe a day: meat ${into('meat')} · plants ${into('plant')} · robbed, looted, taken ${into('other')}` +
+                ` · grazers killed with the store full ${f((100 * full) / (full + short || 1))}%`);
+            console.log(`        predators: kills a day ${f(mm((s) => eaten(s) / (s.pace.steps / DAY)), 1)} (each ${f(mm((s) => eaten(s) / (s.pace.lively.predatorSteps / DAY || 1)), 3)})` +
+                ` · chases each a day ${f(mm((s) => s.pace.lively.chases / (s.pace.lively.predatorSteps / DAY || 1)), 2)}`);
+        }
+        if (paced.some((s) => s.pace.ends)) {
+            const end = (k) => f(m((s) => per(s, s.pace.ends?.[k] ?? 0)), 1);
+            console.log(`        carcasses ended: cut up ${end('butchered')} · eaten to the bone ${end('used')} · spoiled ${end('spoiled')}` +
+                ` · lying ${f(m((s) => s.carcasses?.mean ?? 0), 1)} (2nd half; most ${Math.max(...paced.map((s) => s.carcasses?.max ?? 0))})`);
         }
     }
     console.log(`\n${ok}/${sums.length} ecosystems persisted${withPeople.length ? ` · people survived in ${peopleOk}/${withPeople.length}` : ''} · median ${f(sums.map((s) => s.stepsPerSec).sort((a, b) => a - b)[Math.floor(sums.length / 2)])} steps/s per core\n`);
