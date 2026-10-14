@@ -66,6 +66,9 @@ export class Population {
             this[f] = next;
         }
         this.columns = [...FLOAT_FIELDS, ...INT_FIELDS].map((f) => this[f]);
+        // (The same, by kind, so compact() copies each kind in a loop of its own.)
+        this.floatColumns = FLOAT_FIELDS.map((f) => this[f]);
+        this.intColumns = INT_FIELDS.map((f) => this[f]);
         this.capacity = capacity;
     }
 
@@ -85,7 +88,7 @@ export class Population {
     // Drop everyone with energy <= 0 by moving the last individual into each
     // gap: only the dead cost anything.
     compact() {
-        const { energy, columns } = this;
+        const { energy, floatColumns, intColumns } = this;
         let n = this.n;
         for (let i = 0; i < n; ) {
             if (energy[i] > 0) {
@@ -93,7 +96,10 @@ export class Population {
                 continue;
             }
             n--;
-            if (i !== n) for (let k = 0; k < columns.length; k++) columns[k][i] = columns[k][n];
+            if (i !== n) {
+                for (let k = 0; k < floatColumns.length; k++) floatColumns[k][i] = floatColumns[k][n];
+                for (let k = 0; k < intColumns.length; k++) intColumns[k][i] = intColumns[k][n];
+            }
         }
         this.n = n;
     }

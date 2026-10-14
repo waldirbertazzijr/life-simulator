@@ -202,7 +202,7 @@ export function stepHumans(world) {
         me.campD = campD;
 
         const threat = predators.nearest(x[i], y[i], me.sense);
-        const stranger = threat < 0 && adult ? people.nearest(x[i], y[i], P.meetRadius, i, tribeOf, tribeOf[i], false) : -1;
+        const stranger = threat < 0 && adult ? people.strangerNear(x[i], y[i], P.meetRadius, i, tribeOf, tribeOf[i]) : -1;
 
         if (threat >= 0) facePredator(world, i, tribe, threat);
         else if (stranger >= 0) meetStranger(world, i, tribe, stranger);

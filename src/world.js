@@ -104,8 +104,11 @@ export class World {
         this.carnivores = new Population();
         this.humans = new Population();
         this.herbivoreHash = new SpatialHash(width, height, params.world.hashCell);
-        this.carnivoreHash = new SpatialHash(width, height, params.world.hashCell);
-        this.humanHash = new SpatialHash(width, height, params.world.hashCell);
+        this.facing = new Float64Array(0); // (stepHerbivores: headings' cos and sin, kept)
+        this.facingCos = this.facing;
+        this.facingSin = this.facing;
+        this.carnivoreHash = new SpatialHash(width, height, params.world.hashCell, true);
+        this.humanHash = new SpatialHash(width, height, params.world.hashCell, true, 'tribe');
         this.tribes = [];          // living tribes
         this.tribeById = new Map();
         this.fallen = [];          // the most recent tribes to die out
@@ -347,8 +350,7 @@ export class World {
         // where the others are as they move.)
         if (this.night || this.cold > 0.5) this.herbivoreHash.build(this.herbivores);
         this.stepHerbivores();
-        this.herbivoreHash.build(this.herbivores);
-        if (this.hidden !== null) this.markCover();
+        this.herbivoreHash.build(this.herbivores); // (stepHerbivores noted who stands in forest: hidden)
         this.stepCarnivores();
         if (this.humans.n) stepHumans(this);
         if (this.spears.n) stepSpears(this);            // the player's, in flight (spears.js)
@@ -385,6 +387,12 @@ export class World {
         // (0: nobody crouches), and that fraction of a grazer's range.
         const creeper = this.player !== null && this.player.crouch ? this.player.id : 0;
         const creep = creeper ? this.p.play.crouchSense : 0;
+        // The predators' and the people's marks (spatial.js empty()), read
+        // here for both at once when their hashes share their buckets.
+        const marks = threats.twin(hunters);
+        const small = threats.small;
+        const threatNear = threats.near;
+        const hunterNear = hunters.near;
         // The season and the hour.
         const cold = this.cold;
         const biteMax = P.bite * (1 - P.snowBite * cold);
@@ -397,12 +405,30 @@ export class World {
         const breed = lush <= 0 ? 0 : lush >= 1 ? this.breedH : this.breedH * lush;
         const herding = this.night || cold > 0.5; // (step() built the herd's hash for it)
         const near2 = P.herd * P.herd;
+        let moved = 0; // the farthest any grazer has moved this step (since the herd's hash was built: closeBy)
         const lowland = this.lowland;
         const down = lowland !== null ? P.descend * cold : 0;
+        // A heading and its cos and sin, each grazer's last worked out: one
+        // that searches on in the same direction needs them again. (A slot
+        // may hold another's after compact(): only the heading tells.)
+        if (this.facing.length < pop.capacity) {
+            this.facing = new Float64Array(pop.capacity).fill(NaN);
+            this.facingCos = new Float64Array(pop.capacity);
+            this.facingSin = new Float64Array(pop.capacity);
+        }
+        const { facing, facingCos, facingSin } = this;
+        // Forest cover (params.biomes.cover): which grazers stand in forest
+        // when the step is done, where hunters see them only from closer
+        // (spot). Noted for each where it ends its step, the newborn below.
+        if (this.hidden !== null && this.hidden.length < pop.capacity) this.hidden = new Uint8Array(pop.capacity);
+        const hidden = this.hidden;
+        const biomeOf = hidden !== null ? this.terrain.biomeGrid : null;
+        const FOREST = BIOME.FOREST;
 
         for (let i = 0; i < n; i++) {
             if (++age[i] > lifespan[i]) {
                 this.die(pop, i, 'old age');
+                if (hidden !== null) hidden[i] = biomeOf[grass.index(x[i], y[i])] === FOREST ? 1 : 0;
                 continue;
             }
             const sg = speedGene[i];
@@ -412,24 +438,38 @@ export class World {
             let v = 0;
             let dx = 0;
             let dy = 0;
+            let gi = -1; // the grass patch underfoot, once looked up
             state[i] = STATE.GRAZING;
             focus[i] = 0;
 
-            // The closest danger: a carnivore, or a human hunter.
-            let threat = threats.nearest(x[i], y[i], P.sense * vg);
-            let tdx = threats.dx;
-            let tdy = threats.dy;
-            let threatId = threat >= 0 ? predatorIds[threat] : 0;
-            if (anyHunters) {
-                const k = hunters.nearest(x[i], y[i], P.sense * vg);
-                // (If the nearest person is the player creeping up from farther
-                // than it can tell, it takes no notice of people this step.)
-                if (k >= 0 && (threat < 0 || hunters.d2 < threats.d2)
-                    && (hunterIds[k] !== creeper || hunters.d2 < (creep * P.sense * vg) ** 2)) {
-                    threat = k;
-                    tdx = hunters.dx;
-                    tdy = hunters.dy;
-                    threatId = hunterIds[k];
+            // The closest danger: a carnivore, or a human hunter. (Most often
+            // the hashes' marks tell at once that neither is near: then both
+            // searches are passed by, leaving what they would leave, d2 = r².)
+            const sense = P.sense * vg;
+            const q = marks && sense <= small ? threats.bucketOf(x[i], y[i]) : -1;
+            let threat = -1;
+            let tdx = 0;
+            let tdy = 0;
+            let threatId = 0;
+            if (q >= 0 && threatNear[q] === 0 && hunterNear[q] === 0) {
+                threats.d2 = sense * sense;
+                if (anyHunters) hunters.d2 = sense * sense;
+            } else {
+                threat = threats.nearest(x[i], y[i], sense);
+                tdx = threats.dx;
+                tdy = threats.dy;
+                threatId = threat >= 0 ? predatorIds[threat] : 0;
+                if (anyHunters) {
+                    const k = hunters.nearest(x[i], y[i], sense);
+                    // (If the nearest person is the player creeping up from farther
+                    // than it can tell, it takes no notice of people this step.)
+                    if (k >= 0 && (threat < 0 || hunters.d2 < threats.d2)
+                        && (hunterIds[k] !== creeper || hunters.d2 < (creep * P.sense * vg) ** 2)) {
+                        threat = k;
+                        tdx = hunters.dx;
+                        tdy = hunters.dy;
+                        threatId = hunterIds[k];
+                    }
                 }
             }
             if (threat >= 0) {
@@ -441,24 +481,39 @@ export class World {
                 v = top;
                 state[i] = STATE.FLEEING;
                 focus[i] = threatId;
-            } else if (herding && herd.nearest(x[i], y[i], P.herdSight, i) >= 0 && herd.d2 > near2) {
+            } else if (herding && !herd.closeBy(x[i], y[i], P.herdSight, i, P.herd, moved)
+                && herd.nearest(x[i], y[i], P.herdSight, i) >= 0 && herd.d2 > near2) {
                 // Alone at night or in winter: back to the others, the nearest first.
+                // (The usual case, another within `herd` already, closeBy()
+                // tells sooner than nearest() would, and with the same answer.)
                 const d = Math.sqrt(herd.d2);
                 dx = herd.dx / d;
                 dy = herd.dy / d;
                 h = Math.atan2(dy, dx);
                 v = top * P.cruise;
                 state[i] = STATE.SEARCHING;
-            } else if (g[grass.index(x[i], y[i])] < biteMax) {
+            } else if (g[gi = grass.index(x[i], y[i])] < biteMax) {
                 state[i] = STATE.SEARCHING;
                 // Patch grazed out: peek straight ahead and 0.8 rad to either
                 // side, and head for the greenest (in winter, counting lower
                 // ground as greener). If none is better than here, wander off
                 // in a new direction.
                 const look = P.sense * vg;
-                const ch = Math.cos(h);
-                const sh = Math.sin(h);
-                const here = grass.index(x[i], y[i]);
+                // (cos h and sin h, unless known from its last step: the same h.
+                // Not for 0, which === takes for -0, whose sine is -0.)
+                let ch;
+                let sh;
+                if (facing[i] === h && h !== 0) {
+                    ch = facingCos[i];
+                    sh = facingSin[i];
+                } else {
+                    ch = Math.cos(h);
+                    sh = Math.sin(h);
+                    facing[i] = h;
+                    facingCos[i] = ch;
+                    facingSin[i] = sh;
+                }
+                const here = gi;
                 let best = down > 0 ? g[here] - down * lowland[here] : g[here];
                 let turn = 2; // none found yet
                 for (let k = -1; k <= 1; k++) {
@@ -482,6 +537,9 @@ export class World {
                     h += (rng.next() - 0.5) * 2;
                     dx = Math.cos(h);
                     dy = Math.sin(h);
+                    facing[i] = h;
+                    facingCos[i] = dx;
+                    facingSin[i] = dy;
                 } else {
                     h += turn * LOOK_ANGLE;
                 }
@@ -503,14 +561,17 @@ export class World {
                 x[i] = nx;
                 y[i] = ny;
                 heading[i] = h;
+                if (v > moved) moved = v;
             }
 
             let e = energy[i] - P.baseCost * upkeep[i] - P.moveCost * v * v;
             let f = fat[i];
 
             // Graze: into the stomach, and past a full one into fat, as far as
-            // the season lets it fatten. Hungry, it draws on its fat.
-            const gi = grass.index(x[i], y[i]);
+            // the season lets it fatten. Hungry, it draws on its fat. (The
+            // patch underfoot is known already if it has not moved.)
+            if (v > 0 || gi < 0) gi = grass.index(x[i], y[i]);
+            if (hidden !== null) hidden[i] = biomeOf[gi] === FOREST ? 1 : 0;
             const room = P.maxEnergy - e + (f < fatCap ? fatCap - f : 0);
             if (room > 0) {
                 let bite = g[gi];
@@ -542,6 +603,7 @@ export class World {
             energy[i] = e;
             fat[i] = f;
         }
+        if (hidden !== null) for (let k = n; k < pop.n; k++) hidden[k] = biomeOf[grass.index(x[k], y[k])] === FOREST ? 1 : 0;
     }
 
     // One step of every predator: hunting when its stomach and fat run low
@@ -565,6 +627,10 @@ export class World {
         const roam = 1 + (night ? P.roamNight : 0) + P.roamWinter * this.cold;
         const drawAt = P.draw * P.maxEnergy;
         const breed = this.breedC;
+        // (Counting rivals and prey only as far as the answer needs: more
+        // than `rivals`, at least `prey`.)
+        const tooMany = Math.floor(P.rivals) + 1;
+        const enough = Math.ceil(P.prey);
 
         for (let i = 0; i < n; i++) {
             if (++age[i] > lifespan[i]) {
@@ -699,7 +765,8 @@ export class World {
             // for it: no more than `rivals` others within its territory, and
             // prey enough there (at least `prey` grazers) to raise it on.
             if (breed > 0 && age[i] >= P.maturity && e + f >= P.birthReserve && time - bred[i] >= P.birthGap
-                && rivals.count(x[i], y[i], P.territory, i) <= P.rivals && grazers.count(x[i], y[i], P.territory) >= P.prey
+                && rivals.count(x[i], y[i], P.territory, i, null, 0, true, tooMany) <= P.rivals
+                && grazers.count(x[i], y[i], P.territory, -1, null, 0, true, enough) >= P.prey
                 && rng.next() < breed) {
                 this.bear(pop, P, i, e, f);
                 e = born.e;
@@ -708,16 +775,6 @@ export class World {
             energy[i] = e;
             fat[i] = f;
         }
-    }
-
-    // Forest cover: note which grazers stand in forest this step.
-    markCover() {
-        const pop = this.herbivores;
-        if (this.hidden.length < pop.capacity) this.hidden = new Uint8Array(pop.capacity);
-        const { hidden, grass } = this;
-        const biomeOf = this.terrain.biomeGrid;
-        const { x, y } = pop;
-        for (let i = 0; i < pop.n; i++) hidden[i] = biomeOf[grass.index(x[i], y[i])] === BIOME.FOREST ? 1 : 0;
     }
 
     // The nearest grazer a hunter at (px, py) who sees as far as r can make

@@ -62,6 +62,9 @@ const APART = new Set([
     'p', 'origin', 'seed', 'width', 'height', 'rng', 'events',
     'herbivores', 'carnivores', 'humans', 'spears', 'grass',
     'terrain', 'lowland', 'hidden', 'herbivoreHash', 'carnivoreHash', 'humanHash', 'tribeById',
+    // (A cache, World.stepHerbivores: headings with their cos and sin. A new
+    // world's is empty, which changes nothing but how soon they are known.)
+    'facing', 'facingCos', 'facingSin',
 ]);
 
 // A save that cannot be loaded: the message says why, for the player.

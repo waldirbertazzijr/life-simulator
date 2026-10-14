@@ -36,6 +36,21 @@ export class Grass {
         }
         this.boost = compensate && supply > 0 ? (g.length * (1 - grazed)) / supply : 1;
         this.level = this.mean();
+        // The runs of patches that can grow anything (from, to, from, to, ...).
+        // Where nothing grows (fertility 0: water, bare rock), the grass is 0
+        // and stays 0 (it was cut down to 0 above, and grazing and gathering
+        // only ever take what is there), so regrow() can pass it by.
+        const runs = [];
+        for (let i = 0; i < g.length;) {
+            if (fertility[i] === 0) {
+                i++;
+                continue;
+            }
+            const from = i;
+            while (i < g.length && fertility[i] !== 0) i++;
+            runs.push(from, i);
+        }
+        this.runs = Int32Array.from(runs);
     }
 
     index(x, y) {
@@ -59,7 +74,16 @@ export class Grass {
             for (let i = 0; i < g.length; i++) sum += g[i] += rate * (1 - g[i]);
         } else {
             const r = rate * this.boost;
-            for (let i = 0; i < g.length; i++) sum += g[i] += r * (f[i] - g[i]);
+            if (Number.isFinite(r)) {
+                // Only where grass grows: elsewhere g is 0, stays 0 (0 + r·(0 − 0)),
+                // and adds 0 to the sum, so the sum is the same to the bit.
+                const runs = this.runs;
+                for (let k = 0; k < runs.length; k += 2) {
+                    for (let i = runs[k], end = runs[k + 1]; i < end; i++) sum += g[i] += r * (f[i] - g[i]);
+                }
+            } else {
+                for (let i = 0; i < g.length; i++) sum += g[i] += r * (f[i] - g[i]);
+            }
         }
         this.level = sum / (this.land || 1);
     }
