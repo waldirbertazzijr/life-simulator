@@ -9,13 +9,26 @@
 //      all), draw it out into shafts, which the land, the trees and the
 //      bodies between cut; they are added over the scene in the light's
 //      colour, strongest near it (graphics.js rayStrength: dawn and dusk);
-//   2. a subtle bloom (three.js's UnrealBloomPass): only what is brighter
-//      than white glows: the sun's disc, the moon's (sky.js glare), torches'
-//      flames, legends' glints, the snow's glints (terrain-mesh.js);
+//   2. a subtle bloom (three.js's UnrealBloomPass) of only what gives light
+//      of its own: the sun's disc and the moon's (sky.js), torches' flames
+//      and legends' glints (items.js). Not by brightness: a white flower or
+//      a snowfield lit by the noon sun is about as bright as a flame at
+//      night, so a threshold either blooms the lit land (in squares, at
+//      every speck) or misses the flames. Instead each light marks itself
+//      (the glow mark, below) and the bloom takes only what is marked;
 //   3. the output: to the screen's sRGB (OutputPass).
 // The haze is mixed as on the screen (haze.js), so it looks the same; the
 // HUD and the panel are the page's, over the canvas, and untouched.
 // Medium and Low draw straight to the screen and never come here.
+//
+// The glow mark: in the render target, a pixel's alpha above 1 is its own
+// light (its luminance, linear). Everything else leaves alpha at 1: opaque
+// surfaces write 1 and the clear is 1, see-through ones blend toward 1 (so
+// a pane of water or smoke in front dims a mark, and anything solid in
+// front hides it), and additive ones that do not glow (stars, a spear's
+// streak, the light rays) leave it as it is (`unmarked`). What glows adds
+// its own light to it (`glowing`, glowOf). On the screen, alpha is never
+// seen: Medium and Low look the same.
 import * as THREE from 'three';
 import { EffectComposer } from '../../vendor/three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from '../../vendor/three/examples/jsm/postprocessing/RenderPass.js';
@@ -23,9 +36,47 @@ import { UnrealBloomPass } from '../../vendor/three/examples/jsm/postprocessing/
 import { OutputPass } from '../../vendor/three/examples/jsm/postprocessing/OutputPass.js';
 import { Pass, FullScreenQuad } from '../../vendor/three/examples/jsm/postprocessing/Pass.js';
 
-// The bloom: how strong, how wide, and from what brightness (linear; 1 is
-// white) it starts, over how much.
-export const BLOOM = { strength: 0.38, radius: 0.55, threshold: 0.95, soft: 0.5, most: 6 };
+// The bloom: how strong, and how wide. A pixel blooms by its own light (its
+// mark, up to 1: from then on the whole pixel), and none brighter than
+// `most` (linear; 1 is white).
+export const BLOOM = { strength: 0.38, radius: 0.55, most: 6 };
+
+// The glow mark's GLSL: how much light a colour (linear) is.
+export const GLOW_GLSL = 'float glowOf( vec3 c ) { return dot( c, vec3( 0.2126, 0.7152, 0.0722 ) ); }';
+
+// An additive material that glows: its colour is added as before (it writes
+// alpha = its own light, glowOf, which is added to the mark).
+export function glowing(material) {
+    return Object.assign(material, {
+        transparent: true, blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
+        blendSrc: THREE.OneFactor, blendDst: THREE.OneFactor, blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.OneFactor,
+    });
+}
+
+// An additive material that does not: its colour is added as three.js's
+// AdditiveBlending adds it (times its alpha), the mark left as it was.
+export function unmarked(material) {
+    return Object.assign(material, {
+        transparent: true, blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
+        blendSrc: THREE.SrcAlphaFactor, blendDst: THREE.OneFactor, blendSrcAlpha: THREE.ZeroFactor, blendDstAlpha: THREE.OneFactor,
+    });
+}
+
+// The bloom's bright pass: the marked pixels only, by their mark. (A pixel
+// gone wrong, NaN or past half float, is left out: in the blurs it would
+// spread into a square.)
+const BRIGHT_FRAGMENT = /* glsl */ `
+uniform sampler2D tDiffuse;
+varying vec2 vUv;
+${GLOW_GLSL}
+void main() {
+    vec4 texel = texture2D( tDiffuse, vUv );
+    float own = texel.a - 1.0;
+    float light = glowOf( texel.rgb );
+    vec3 glow = vec3( 0.0 );
+    if ( own > 0.001 && light >= 0.0 && light < 60000.0 ) glow = min( texel.rgb * min( own, 1.0 ), vec3( ${BLOOM.most.toFixed(1)} ) );
+    gl_FragColor = vec4( glow, 1.0 );
+}`;
 // The rays: how bright at full strength (times the light's colour), the
 // mask's glow about the light (a share of the screen's height), and how far
 // from the light they fade (the same).
@@ -106,11 +157,10 @@ class RaysPass extends Pass {
             uniforms: { tInput: { value: null }, uLight: { value: this.light }, uSpan: { value: 1 } },
             vertexShader: FULL_VERTEX, fragmentShader: BLUR_FRAGMENT, depthTest: false, depthWrite: false,
         });
-        this.combine = new THREE.ShaderMaterial({
+        this.combine = unmarked(new THREE.ShaderMaterial({
             uniforms: { tRays: { value: null }, uColor: { value: this.color }, uLight: { value: this.light }, uAspect: { value: 1 }, uFall: { value: RAYS.fall } },
-            vertexShader: FULL_VERTEX, fragmentShader: COMBINE_FRAGMENT,
-            blending: THREE.AdditiveBlending, transparent: true, depthTest: false, depthWrite: false,
-        });
+            vertexShader: FULL_VERTEX, fragmentShader: COMBINE_FRAGMENT, depthTest: false, depthWrite: false,
+        }));
         this.quad = new FullScreenQuad(null);
     }
 
@@ -169,16 +219,9 @@ export class Post {
         });
         this.composer = new EffectComposer(gl, this.target);
         this.rays = new RaysPass();
-        this.bloom = new UnrealBloomPass(size, BLOOM.strength, BLOOM.radius, BLOOM.threshold);
-        this.bloom.highPassUniforms.smoothWidth.value = BLOOM.soft;
-        // Nothing glows brighter than BLOOM.most: a stray pixel far past
-        // white (a speck of the sky through a seam, a stack of glows) would
-        // otherwise spread into a blinding disc.
-        const pass = this.bloom.materialHighPassFilter;
-        pass.fragmentShader = pass.fragmentShader.replace(
-            'vec4 texel = texture2D( tDiffuse, vUv );',
-            `vec4 texel = min( texture2D( tDiffuse, vUv ), vec4( ${BLOOM.most.toFixed(1)} ) );`,
-        );
+        this.bloom = new UnrealBloomPass(size, BLOOM.strength, BLOOM.radius, 0);
+        // Its bright pass takes the glow mark instead of a brightness.
+        this.bloom.materialHighPassFilter.fragmentShader = BRIGHT_FRAGMENT;
         this.composer.addPass(new RenderPass(scene, camera));
         this.composer.addPass(this.rays);
         this.composer.addPass(this.bloom);

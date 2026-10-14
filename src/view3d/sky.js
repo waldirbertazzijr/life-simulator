@@ -16,6 +16,7 @@
 // turning frame, and hides the stars behind the moon and the sun.
 import * as THREE from 'three';
 import { HAZE } from './haze.js';
+import { GLOW_GLSL, unmarked } from './post.js';
 import { daylight } from './daylight.js';
 import { moonOf } from './almanac.js';
 import { DEG, TAU, smoothstep } from './util.js';
@@ -116,7 +117,9 @@ uniform float uMilky;
 uniform sampler2D uMilkyWay;
 uniform vec4 uShootA;    // a shooting star: from, and how far along (-1: none)
 uniform vec4 uShootB;    // to, and how bright
+uniform vec2 uMark;      // what glows (post.js's glow mark): the sun's disc, the moon's
 varying vec3 vDir;
+${GLOW_GLSL}
 
 float h31( vec3 p ) {
     p = fract( p * 0.3183099 + 0.1 );
@@ -157,8 +160,10 @@ void main() {
         col += mix( vec3( 0.040, 0.046, 0.066 ), vec3( 0.062, 0.052, 0.046 ), mw.g ) * mw.r * 2.2 * uMilky * smoothstep( -0.02, 0.3, up );
     }
 
-    // The sun's disc.
-    col += uDisc * smoothstep( cos( ${(SUN_R * 1.15).toFixed(5)} ), cos( ${SUN_R.toFixed(5)} ), cs ) * uSun.w;
+    // The sun's disc: light of its own (the bloom's, post.js).
+    vec3 sunDisc = uDisc * smoothstep( cos( ${(SUN_R * 1.15).toFixed(5)} ), cos( ${SUN_R.toFixed(5)} ), cs ) * uSun.w;
+    col += sunDisc;
+    float own = glowOf( sunDisc ) * uMark.x;
 
     // The moon: a sphere lit from the sun's side, the dark part hiding what is behind.
     if ( uMoon.w > 0.0 ) {
@@ -175,8 +180,10 @@ void main() {
                 float lit = smoothstep( -0.04, 0.1, dot( n, L ) );
                 // Grey seas on the face.
                 float sea = smoothstep( 0.45, 0.7, noise( vec3( p * 2.6, 7.0 ) ) );
+                vec3 face = uMoonLight * ( 1.0 - 0.22 * sea );
                 col = mix( col, base * 0.92, disc );
-                col = mix( col, uMoonLight * ( 1.0 - 0.22 * sea ), disc * lit );
+                col = mix( col, face, disc * lit );
+                own = mix( own, glowOf( face ) * uMark.y, disc * lit );
             }
         }
     }
@@ -195,7 +202,7 @@ void main() {
             col += vec3( 1.0, 0.97, 0.9 ) * streak * exp( -off * off / 0.0000035 ) * uShootB.w;
         }
     }
-    gl_FragColor = vec4( col, 1.0 );
+    gl_FragColor = vec4( col, 1.0 + own );
     #include <colorspace_fragment>
 }`;
 
@@ -289,6 +296,7 @@ export class Sky {
             uMilkyWay: { value: milkyWay() },
             uShootA: { value: new THREE.Vector4(0, 1, 0, -1) },
             uShootB: { value: new THREE.Vector4(1, 0, 0, 0) },
+            uMark: { value: new THREE.Vector2(1, 0) },
         };
         this.dome = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 16), new THREE.ShaderMaterial({
             uniforms: this.u, vertexShader: DOME_VERTEX, fragmentShader: DOME_FRAGMENT,
@@ -300,10 +308,10 @@ export class Sky {
             uStarSky: this.u.uStarSky, uMoon: this.u.uMoon, uSun: this.u.uSun,
             uShow: { value: 0 }, uTime: { value: 0 }, uPx: { value: 1 },
         };
-        this.stars = new THREE.Points(starGeometry(), new THREE.ShaderMaterial({
-            uniforms: this.starU, vertexShader: STAR_VERTEX, fragmentShader: STAR_FRAGMENT,
-            transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-        }));
+        // (Added to the sky, but not glowing: post.js's mark is left alone.)
+        this.stars = new THREE.Points(starGeometry(), unmarked(new THREE.ShaderMaterial({
+            uniforms: this.starU, vertexShader: STAR_VERTEX, fragmentShader: STAR_FRAGMENT, depthWrite: false,
+        })));
         this.stars.frustumCulled = false;
         // The lights: the sky's (hemisphere) and the sun's or the moon's.
         this.ambient = new THREE.HemisphereLight('#e0e9f0', '#6a6c5a', 2.6);
@@ -367,6 +375,8 @@ export class Sky {
         u.uMoonV.value.crossVectors(md, u.uMoonU.value).normalize();
         u.uMoonPhase.value = Math.acos(Math.max(-1, Math.min(1, sun.dot(md))));
         lin(u.uMoonLight.value, [236, 234, 222], (0.55 + 0.45 * night) * (1 + (this.glare - 1) * night));
+        // What glows (post.js): the sun's disc, and the moon's by night.
+        u.uMark.value.set(1, night);
         lin(u.uMoonGlow.value, [150, 170, 210], 0.6 * moon.lit * night);
 
         // The stars' frame: a turn about the pole, once a day and a year's share more.

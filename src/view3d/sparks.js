@@ -13,6 +13,7 @@ import { offScreen } from './creatures.js';
 import { wrapDelta } from './util.js';
 import { kindName } from '../play/gear.js';
 import { showWhile } from './items.js';
+import { unmarked } from './post.js';
 
 const CAP = 600;          // particles at most
 const G = 22;             // gravity, units/s² (seconds at 1×)
@@ -46,7 +47,7 @@ export class Sparks {
         this.streaks = [];
         this.rings = [];
         for (let k = 0; k < POOL; k++) {
-            const s = new THREE.Mesh(streak, new THREE.MeshBasicMaterial({ color: '#fff3d0', transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+            const s = new THREE.Mesh(streak, unmarked(new THREE.MeshBasicMaterial({ color: '#fff3d0', depthWrite: false }))); // (added, not glowing: post.js)
             const r = new THREE.Mesh(ring, new THREE.MeshBasicMaterial({ color: '#b8a888', transparent: true, depthWrite: false, side: THREE.DoubleSide }));
             r.renderOrder = 1;
             s.visible = false;

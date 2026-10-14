@@ -1,9 +1,10 @@
 // The graphics setting and the light's numbers (src/view3d/graphics.js):
 // the setting's defaults and how it is kept, how dark the shadows are by the
 // sun's height (and the moon's), and how strong the light rays are by where
-// the light stands.
+// the light stands. And the bloom's glow mark (post.js): what blooms.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { register } from 'node:module';
 import {
     QUALITIES, PRESETS, GRAPHICS_KEY, defaultQuality, phoneLike, loadQuality, saveQuality,
     initQuality, getQuality, setQuality, onQuality, shadowStrength, rayStrength, SUN_LIGHT_MIN,
@@ -131,4 +132,67 @@ test('light rays: on screen, strongest at dawn and dusk, faint by moonlight', ()
     assert.ok(moon(0.4) < moon(1), 'and by its phase');
     assert.equal(moon(0), 0);
     assert.equal(moon(1, -5), 0, 'set: none');
+});
+
+// ---- The bloom's glow mark (post.js) ----
+
+// The view's modules import 'three', which the page maps to the vendored
+// copy; here a loader hook does the same (as in animate.test.mjs).
+const THREE_URL = new URL('../vendor/three/three.module.min.js', import.meta.url).href;
+register(`data:text/javascript,${encodeURIComponent(
+    `export async function resolve(s, c, next) { return s === 'three' ? { url: ${JSON.stringify(THREE_URL)}, shortCircuit: true } : next(s, c); }`,
+)}`);
+
+// A material's shaders as three.js would compile them (its patches applied).
+function compiled(THREE, material, lib) {
+    const shader = { uniforms: {}, vertexShader: THREE.ShaderLib[lib].vertexShader, fragmentShader: THREE.ShaderLib[lib].fragmentShader };
+    material.onBeforeCompile(shader);
+    return shader;
+}
+
+test('the bloom takes only what gives light: the sun, the moon, flames and glints mark themselves', async () => {
+    const THREE = await import('three');
+    const { BLOOM, glowing, unmarked } = await import('../src/view3d/post.js');
+    assert.ok(!('threshold' in BLOOM), 'no brightness threshold: a lit white flower is as bright as a flame');
+    // Glowing: the colour added whole, as before, and its own light added to the mark (alpha).
+    const g = glowing(new THREE.MeshBasicMaterial());
+    assert.equal(g.blending, THREE.CustomBlending);
+    assert.deepEqual([g.blendSrc, g.blendDst, g.blendSrcAlpha, g.blendDstAlpha], [THREE.OneFactor, THREE.OneFactor, THREE.OneFactor, THREE.OneFactor]);
+    // Unmarked: the colour added as AdditiveBlending adds it, the mark kept.
+    const u = unmarked(new THREE.MeshBasicMaterial());
+    assert.deepEqual([u.blendSrc, u.blendDst, u.blendSrcAlpha, u.blendDstAlpha], [THREE.SrcAlphaFactor, THREE.OneFactor, THREE.ZeroFactor, THREE.OneFactor]);
+    assert.ok(g.transparent && u.transparent);
+
+    const scene = new THREE.Scene();
+    const { Sky } = await import('../src/view3d/sky.js');
+    const { Items } = await import('../src/view3d/items.js');
+    const { Sparks } = await import('../src/view3d/sparks.js');
+    const sky = new Sky(scene);
+    const items = new Items(scene);
+    new Sparks(scene);
+    assert.match(sky.dome.material.fragmentShader, /gl_FragColor = vec4\( col, 1\.0 \+ own \)/, "the sky marks the sun's disc and the moon's");
+    assert.equal(items.sparkles.mesh.material.blendDstAlpha, THREE.OneFactor, 'flames and glints glow');
+    assert.match(compiled(THREE, items.sparkles.mesh.material, 'basic').fragmentShader, /gl_FragColor\.a = glowOf\( outgoingLight \)/);
+    // Nothing else is added to the mark: every other additive material leaves it alone.
+    scene.traverse((o) => {
+        if (!o.material || o === items.sparkles.mesh) return;
+        assert.notEqual(o.material.blending, THREE.AdditiveBlending, `${o.type}: additive would mark it`);
+        if (o.material.blending === THREE.CustomBlending) assert.equal(o.material.blendSrcAlpha, THREE.ZeroFactor);
+    });
+});
+
+test('no glints on the snow; the lilies have no light of their own', async () => {
+    const THREE = await import('three');
+    const { Ground } = await import('../src/view3d/terrain-mesh.js');
+    const { Lilies } = await import('../src/view3d/lilies.js');
+    const ground = new Ground(new THREE.Scene(), { capabilities: { getMaxAnisotropy: () => 1 } });
+    assert.equal(ground.glint, undefined);
+    assert.doesNotMatch(compiled(THREE, ground.material, 'lambert').fragmentShader, /glint/i);
+    const lilies = new Lilies(new THREE.Scene());
+    for (const part of [lilies.pads, lilies.flowers]) {
+        const s = compiled(THREE, part.mesh.material, 'lambert');
+        assert.doesNotMatch(s.fragmentShader, /totalEmissiveRadiance \+=/, 'no glow');
+        assert.match(s.vertexShader, /centroid varying vec3 vColor/, 'colours taken where the pixel is covered');
+        assert.match(s.fragmentShader, /centroid varying vec3 vColor/);
+    }
 });

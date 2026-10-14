@@ -9,8 +9,10 @@
 // Like the trees, each instance's place (world x, height, world y) and size
 // are written once; the vertex shader puts it beside the floating origin
 // (util.js), turns it, and lets it drift and rock very gently on the water.
-// A pad or flower smaller than a pixel or so on screen shrinks away, so from
-// high over the map there is nothing to draw. Per frame: a few uniforms.
+// A pad smaller than a pixel or so on screen shrinks away (a flower, a few
+// pixels), and a small one loses its rim, so from afar a colony is plain
+// green leaves rather than coloured specks, and from high over the map there
+// is nothing to draw. Per frame: a few uniforms.
 import * as THREE from 'three';
 import { placeLilies } from './lily-places.js';
 
@@ -32,8 +34,16 @@ const LIP = linear([150, 96, 80]);
 const RIM_OUT = linear([118, 56, 58]);
 const SEPAL = linear([104, 58, 50]);
 const HEART = linear([206, 180, 98]);
-const WHITE = linear([222, 218, 206]);
-const PINK = linear([200, 112, 140]);
+// The petals: pale by their colour (no light of their own, so nothing for
+// the bloom: post.js).
+const WHITE = linear([238, 235, 224]);
+const PINK = linear([216, 128, 158]);
+// From afar (a pad under DETAIL pixels across, radius), the rim sinks into
+// the leaf and takes its colour, and a flower under FLOWER_PX is not drawn:
+// a few pixels of red rim, green leaf and white petals would only be
+// coloured specks. (Both fade in over the range.)
+const DETAIL = [2.5, 6];
+const FLOWER_PX = [1.6, 3];
 
 // Indexed geometry with a colour per corner, triangles turned to face a
 // given way (so single-sided materials show the right faces).
@@ -186,14 +196,25 @@ vec3 nearOrigin( vec3 p ) {
         p.y,
         mod( p.z - uOrigin.y + 0.5 * uWorld.y, uWorld.y ) - 0.5 * uWorld.y );
 }
+// How many pixels a radius r at 'at' spans on screen.
+float pixels( vec3 at, float r ) {
+    return r / max( distance( at, uCam ) * uUnitPx, 1e-6 );
+}
 float onScreen( vec3 at, float r ) {
-    return smoothstep( 0.7, 1.5, r / max( distance( at, uCam ) * uUnitPx, 1e-6 ) ) * uSeason;
+    return smoothstep( 0.7, 1.5, pixels( at, r ) ) * uSeason;
 }
 `;
+
+// The colour per corner, taken where the pixel is covered (centroid): a
+// sliver of rim or petal smaller than a pixel would otherwise stretch its
+// colours far past their own (bright, or below black) on the antialiased
+// edges.
+const CENTROID = 'centroid varying vec3 vColor;';
 
 const PAD_PARS = /* glsl */ `
 attribute vec4 pad;   // world x, height, world y, radius
 attribute float seed; // 0..1: which way it is turned, and its own shade
+uniform vec3 uLeaf;
 ${COMMON}
 `;
 
@@ -203,6 +224,12 @@ vec3 transformed = vec3( position );
     vec3 at = nearOrigin( pad.xyz );
     float r = pad.w;
     float show = onScreen( at, r );
+    // From afar the rim (all beyond the leaf's edge) sinks into the leaf.
+    if ( length( position.xz ) > 0.985 ) {
+        float detail = smoothstep( ${DETAIL[0].toFixed(1)}, ${DETAIL[1].toFixed(1)}, pixels( at, r ) );
+        vColor = mix( uLeaf * 0.95, vColor, detail );
+        transformed.y *= detail;
+    }
     float a = seed * 6.2831853 + 0.04 * sin( uTime * 0.21 + seed * 41.0 );
     float c = cos( a );
     float s = sin( a );
@@ -224,7 +251,6 @@ attribute vec4 bloom;  // world x, height, world y, size
 attribute vec2 look;   // which way it is turned (0..1), how pink (0..1)
 uniform vec3 uWhite;
 uniform vec3 uPink;
-varying vec3 vGlow;    // petals let light through: even the shaded side stays pale
 ${COMMON}
 `;
 
@@ -233,7 +259,7 @@ vec3 transformed = vec3( position );
 {
     vec3 at = nearOrigin( bloom.xyz );
     float size = bloom.w;
-    float show = onScreen( at, 0.6 * size );
+    float show = smoothstep( ${FLOWER_PX[0].toFixed(1)}, ${FLOWER_PX[1].toFixed(1)}, pixels( at, 0.6 * size ) ) * uSeason;
     float a = look.x * 6.2831853 + 0.05 * sin( uTime * 0.27 + look.x * 31.0 );
     float c = cos( a );
     float s = sin( a );
@@ -241,31 +267,23 @@ vec3 transformed = vec3( position );
     transformed *= size * show;
     transformed.y += 0.015 * sin( uTime * 0.9 + look.x * 13.0 );
     transformed += at;
-    vGlow = vec3( 0.0 );
     if ( color.b < 0.0 ) {
         // A petal: white, or pink (the inner petals pinker still).
         float pink = clamp( look.y * ( 1.0 + 0.3 * color.g ), 0.0, 1.0 );
         vColor = mix( uWhite, uPink, pink ) * color.r;
-        vGlow = vColor * 0.3;
     }
 }
 `;
 
-const FLOWER_FRAGMENT_PARS = 'varying vec3 vGlow;';
-const FLOWER_GLOW = '#include <emissivemap_fragment>\ntotalEmissiveRadiance += vGlow;';
-
-function material(name, pars, main, uniforms, extra = {}, fragment = null) {
+function material(name, pars, main, uniforms, extra = {}) {
     const m = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, ...extra });
     m.onBeforeCompile = (shader) => {
         Object.assign(shader.uniforms, uniforms);
         shader.vertexShader = shader.vertexShader
             .replace('#include <common>', `#include <common>\n${pars}`)
+            .replace('#include <color_pars_vertex>', CENTROID)
             .replace('#include <begin_vertex>', main);
-        if (fragment) {
-            shader.fragmentShader = shader.fragmentShader
-                .replace('#include <common>', `#include <common>\n${fragment.pars}`)
-                .replace('#include <emissivemap_fragment>', fragment.main);
-        }
+        shader.fragmentShader = shader.fragmentShader.replace('#include <color_pars_fragment>', CENTROID);
     };
     m.customProgramCacheKey = () => name;
     return m;
@@ -282,10 +300,10 @@ export class Lilies {
             uSeason: { value: 1 },
         };
         const flowerUniforms = { ...this.uniforms, uWhite: { value: WHITE }, uPink: { value: PINK } };
-        this.pads = this.part(scene, padGeometry(), material('lily-pads', PAD_PARS, PAD_MAIN, this.uniforms));
+        const padUniforms = { ...this.uniforms, uLeaf: { value: LEAF } };
+        this.pads = this.part(scene, padGeometry(), material('lily-pads', PAD_PARS, PAD_MAIN, padUniforms));
         this.flowers = this.part(scene, flowerGeometry(),
-            material('lily-flowers', FLOWER_PARS, FLOWER_MAIN, flowerUniforms, { side: THREE.DoubleSide },
-                { pars: FLOWER_FRAGMENT_PARS, main: FLOWER_GLOW }));
+            material('lily-flowers', FLOWER_PARS, FLOWER_MAIN, flowerUniforms, { side: THREE.DoubleSide }));
         this.places = null;
         this.start = performance.now();
         this.stats = { pads: 0, flowers: 0, colonies: 0, buildMs: 0 };

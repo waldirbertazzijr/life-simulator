@@ -1,9 +1,9 @@
 // The graphics setting, and the numbers the light's effects are made from.
 //
 // One switch, three steps (the panel shows it in the god view):
-//   high    shadows (a large map), and the light's diffusion: bloom, the
-//           light rays, the soft darkness where things meet the ground,
-//           glints on the snow;
+//   high    shadows (a large map), and the light's diffusion: the bloom
+//           of what gives light (the sun, the moon, flames, legends), the
+//           light rays, the soft darkness where things meet the ground;
 //   medium  shadows only (a smaller map), drawn straight to the screen;
 //   low     none of it: the view exactly as it was before any of them.
 // A desktop starts on High, a phone on Low; the choice is kept by the
@@ -20,7 +20,7 @@ export const QUALITIES = ['high', 'medium', 'low'];
 export const GRAPHICS_KEY = 'life-simulator.graphics';
 
 // Per setting: the shadow map's size (0: no shadows), and whether the
-// light's diffusion is drawn (post.js, contact.js, the snow's glints).
+// light's diffusion is drawn (post.js, contact.js, sky.js glare).
 export const PRESETS = {
     high: { shadowMap: 2048, diffusion: true },
     medium: { shadowMap: 1024, diffusion: false },

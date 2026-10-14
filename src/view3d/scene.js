@@ -39,8 +39,9 @@
 // The graphics setting (graphics.js: High, Medium, Low; setQuality): Medium
 // and High add shadows (shadows.js: one more pass, the shadow map, with the
 // casters' draw calls); High adds the light's diffusion: a soft darkness
-// where things meet the ground (contact.js: one draw call), glints on the
-// snow, and the screen's passes (post.js: the light rays and the bloom).
+// where things meet the ground (contact.js: one draw call), and the
+// screen's passes (post.js: the light rays, and the bloom of what gives
+// light of its own: the sun, the moon, flames, legends' glints).
 // Low is the view as it was before them.
 //
 // Items (package 3): what people hold and what lies about (items.js: one
@@ -87,9 +88,8 @@ const FOG_NEAR = { ground: 0.5, map: 0.62 };
 const CLOUDED = 0.4;
 const NONE = Object.freeze([]);
 // With the light's diffusion (High): how much brighter than white the moon's
-// disc is at night (sky.js glare), and the snow's glints (terrain-mesh.js).
+// disc is at night (sky.js glare).
 const GLARE = 1.9;
-const GLINT = 5;
 // With shadows: how much more a low sun lights the grass (terrain-mesh.js).
 const GRASS_LIGHT = 0.45;
 
@@ -162,7 +162,6 @@ export class View3D {
             this.post = null;
         }
         this.sky.glare = diffusion ? GLARE : 1;
-        this.ground.glint.value = diffusion ? GLINT : 0;
         this.ground.grassLight.value = this.shadows.on ? GRASS_LIGHT : 0;
         this.contact.set(diffusion, this.world, this.ground, this.forest);
     }

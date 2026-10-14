@@ -251,9 +251,14 @@ export class Tufts {
         this.material = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
         this.material.onBeforeCompile = (shader) => {
             Object.assign(shader.uniforms, this.uniforms);
+            // The colour runs from root to tip; taken where the pixel is
+            // covered (centroid), a blade thinner than a pixel does not
+            // stretch it past either end on the antialiased edges.
             shader.vertexShader = shader.vertexShader
                 .replace('#include <common>', `#include <common>\n${VERTEX_PARS}\n${SNOW_GLSL}`)
+                .replace('#include <color_pars_vertex>', 'centroid varying vec3 vColor;')
                 .replace('#include <begin_vertex>', VERTEX_MAIN);
+            shader.fragmentShader = shader.fragmentShader.replace('#include <color_pars_fragment>', 'centroid varying vec3 vColor;');
             // Seen from behind, a double-sided triangle normally turns its
             // normal around; a blade should be lit the same from both sides.
             shader.fragmentShader = shader.fragmentShader.replace(

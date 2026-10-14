@@ -33,6 +33,7 @@ import { offScreen, CHILD } from './creatures.js';
 import { TAU, wrapDelta, hash } from './util.js';
 import { kindName } from '../play/gear.js';
 import { HAZE, TORCHES } from './haze.js';
+import { glowing, GLOW_GLSL } from './post.js';
 
 export const ITEM_SHAPES = ['spear', 'bow', 'club', 'knife', 'basket', 'torch'];
 const FAR = 220;          // items farther than this from the camera are not drawn
@@ -418,16 +419,18 @@ function itemMaterial() {
 }
 
 // Unlit, added to what is behind, and soft: brightest where it faces the
-// camera, fading to nothing at its rim, so a glow has no edge.
+// camera, fading to nothing at its rim, so a glow has no edge. Light of its
+// own: the bloom takes it (post.js's glow mark).
 function sparkleMaterial() {
-    const material = new THREE.MeshBasicMaterial({ transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+    const material = glowing(new THREE.MeshBasicMaterial({ depthWrite: false }));
     material.onBeforeCompile = (shader) => {
         shader.vertexShader = shader.vertexShader
             .replace('#include <common>', '#include <common>\nvarying float vFacing;')
             .replace('#include <project_vertex>', '#include <project_vertex>\nvFacing = abs( normalize( mat3( modelViewMatrix ) * mat3( instanceMatrix ) * normal ).z );');
         shader.fragmentShader = shader.fragmentShader
-            .replace('#include <common>', '#include <common>\nvarying float vFacing;')
-            .replace('vec4 diffuseColor = vec4( diffuse, opacity );', 'vec4 diffuseColor = vec4( diffuse * vFacing * vFacing, opacity );');
+            .replace('#include <common>', `#include <common>\nvarying float vFacing;\n${GLOW_GLSL}`)
+            .replace('vec4 diffuseColor = vec4( diffuse, opacity );', 'vec4 diffuseColor = vec4( diffuse * vFacing * vFacing, opacity );')
+            .replace('#include <premultiplied_alpha_fragment>', 'gl_FragColor.a = glowOf( outgoingLight );\n#include <premultiplied_alpha_fragment>');
     };
     material.customProgramCacheKey = () => 'sparkles';
     return material;
