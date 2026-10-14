@@ -381,3 +381,24 @@ test('a loaded player numbers its inputs afresh and is jumped to (the Sim)', () 
     sim.handle({ type: 'input', seq: 1, x: pl.x, y: pl.y, heading: 0, speed: 0, crouch: false });
     assert.equal(sim.world.player.input?.seq, 1);
 });
+
+test('a save missing params added since gets the defaults, not NaN', () => {
+    const world = new World(defaults, { seed: 11 });
+    for (let k = 0; k < 200; k++) world.step();
+    const data = saveWorld(world);
+    // Make it look like a save from before items.fire existed.
+    const text = typeof data.json === 'string';
+    const json = JSON.parse(text ? data.json : JSON.stringify(data.json));
+    let stripped = 0;
+    const strip = (o) => {
+        if (o && typeof o === 'object' && o.items && typeof o.items === 'object' && 'fire' in o.items) {
+            delete o.items.fire;
+            stripped++;
+        }
+        for (const v of Object.values(o ?? {})) if (v && typeof v === 'object') strip(v);
+    };
+    strip(json);
+    assert.ok(stripped >= 2, 'the param was taken out of both saved param sets');
+    const loaded = loadWorld({ ...data, json: text ? JSON.stringify(json) : json });
+    assert.equal(loaded.p.items.fire, defaults.items.fire);
+});

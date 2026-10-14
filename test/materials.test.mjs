@@ -413,7 +413,10 @@ test('the camp fire burns items.fire wood a member through the night, and goes o
         w.step();
         if (!w.night) break; // (the step that ended the night was dawn's)
         const burnt = before - tribe.wood; // (nobody puts wood in at night: errands end at dusk)
-        assert.ok(Math.abs(burnt - (w.p.items.fire * tribe.members) / night) < 1e-9, `a step's burning: ${burnt}`);
+        // (Members are counted as the step's tribes are reckoned: a birth or a
+        // death in the step can leave tribe.members one off by its end.)
+        const people = Math.round((burnt * night) / w.p.items.fire);
+        assert.ok(Math.abs(people - tribe.members) <= 1 && Math.abs(burnt - (w.p.items.fire * people) / night) < 1e-9, `a step's burning: ${burnt}`);
         steps++;
     }
     assert.ok(steps >= night - 2, `all night: ${steps} of ${night}`);

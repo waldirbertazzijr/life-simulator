@@ -45,6 +45,7 @@
 // a World holds, or what its fields mean, changes (and the populations'
 // columns, which are checked by name besides).
 import { World, worldSize } from './world.js';
+import { params as DEFAULTS } from './config.js';
 import { Population } from './population.js';
 import { Spears } from './spears.js';
 import { dateLabel } from './calendar.js';
@@ -262,6 +263,15 @@ function dec(v, paths) {
 // Set every parameter in `to` to its value in `from`, in place: the land
 // and the rest keep their references into world.p (the console's `set`
 // changes it live, and they see that).
+// A save's params over today's defaults: a save made before a param was
+// added gets the default rather than nothing (NaN). A save from today has
+// every param, so nothing changes for it.
+function withDefaults(p) {
+    const out = structuredClone(DEFAULTS);
+    assignDeep(out, p);
+    return out;
+}
+
 function assignDeep(to, from) {
     for (const k of Object.keys(from)) {
         const v = from[k];
@@ -308,13 +318,13 @@ export function readSave(data) {
 // which never walks anyone anywhere).
 export function loadWorld(data, { paths = true } = {}) {
     const s = readSave(data);
-    const origin = dec(s.origin);
+    const origin = withDefaults(dec(s.origin));
     const world = new World(origin, { seed: s.seed, aspect: s.aspect });
     if (world.width !== s.width || world.height !== s.height || world.grass.g.length !== data.bins.grass.length) {
         throw new SaveError('This save does not fit the world its seed makes here, so it cannot be loaded.');
     }
-    world.origin = { params: dec(s.origin), aspect: s.aspect };
-    assignDeep(world.p, dec(s.params));
+    world.origin = { params: withDefaults(dec(s.origin)), aspect: s.aspect };
+    assignDeep(world.p, withDefaults(dec(s.params)));
     world.rng.restore(dec(s.rng));
 
     // The populations, each in arrays as roomy as the saved ones.
