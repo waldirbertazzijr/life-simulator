@@ -48,6 +48,7 @@ import * as THREE from 'three';
 import { hash, meshHeight, smoothstep } from './util.js';
 import { TREE_KINDS } from './almanac.js';
 import { SNOW_LINE, SNOW_COLOR, SNOW_GLSL } from './haze.js';
+import { depthTwin } from './shadows.js';
 
 const SPACING = 6.5;      // between the places where a tree may stand (world units)
 const DENSE = 0.85;       // share of the places with a tree in the heart of a forest
@@ -300,12 +301,16 @@ uniform vec3 uFromB;
 uniform vec3 uToA;     // ...the key after
 uniform vec3 uToB;
 uniform vec3 uLeaf;    // the leaves' amount at each key (x, y), and how far between them (z)
+uniform vec4 uShadowBox; // the shadow map (shadows.js): the ground whose trees may cast into it, as uBox
 varying float vFade;   // 1 solid .. 0 gone
 varying float vSnow;   // snow on its upper faces
 `;
 
-// The vertex shader for one kind of tree (its sizes are written in).
-const vertexMain = (K) => /* glsl */ `
+// The vertex shader for one kind of tree (its sizes are written in). Its
+// twin for the shadow map (`depth`) places the same trees with the same
+// leaves, but keeps those that may cast into the map (uShadowBox) rather
+// than those in view, and none fades out of the camera's way.
+const vertexMain = (K, depth = false) => /* glsl */ `
 vec3 transformed = vec3( position );
 {
     // Which run this instance is in (the first whose end is past it), and so
@@ -329,8 +334,11 @@ vec3 transformed = vec3( position );
     // From high above (the map), trees grow with distance, as the creatures
     // do, so that a forest still reads as a canopy rather than as specks.
     size *= clamp( distance( at, uCam ) * uGrow, 1.0, ${MAX_GROW.toFixed(2)} );
-    vec3 mid = at + vec3( 0.0, ${K.mid.toFixed(2)} * size, 0.0 );
     float reach = ${K.reach.toFixed(2)} * size;
+${depth ? /* glsl */ `
+    bool shown = at.x >= uShadowBox.x - reach && at.x <= uShadowBox.y + reach && at.z >= uShadowBox.z - reach && at.z <= uShadowBox.w + reach;
+` : /* glsl */ `
+    vec3 mid = at + vec3( 0.0, ${K.mid.toFixed(2)} * size, 0.0 );
     bool shown = at.x >= uBox.x && at.x <= uBox.y && at.z >= uBox.z && at.z <= uBox.w;
     for ( int p = 0; p < 6; p++ ) shown = shown && dot( uPlanes[ p ].xyz, mid ) + uPlanes[ p ].w > -reach;
 
@@ -355,18 +363,19 @@ vec3 transformed = vec3( position );
         }
     }
     if ( vFade < 0.02 ) shown = false;
-
+`}
     // Its leaves this season: it turns a little before or after the others
     // (r), and leans to colour A or B (pick).
     float r = fract( seed * 53.71 );
-    float pick = fract( seed * 17.13 );
     float turn = smoothstep( 0.0, 1.0, clamp( ( uLeaf.z - 0.45 * r ) / 0.55, 0.0, 1.0 ) );
     float amount = mix( uLeaf.x, uLeaf.y, turn );
-    vec3 leaf = mix( mix( uFromA, uFromB, pick ), mix( uToA, uToB, pick ), turn );
     // A thinning crown draws in toward the middle of each clump, to nothing.
     transformed = mix( transformed, mix( part.xyz, transformed, sqrt( amount ) ), part.w );
+${depth ? '' : /* glsl */ `
+    float pick = fract( seed * 17.13 );
+    vec3 leaf = mix( mix( uFromA, uFromB, pick ), mix( uToA, uToB, pick ), turn );
     vColor *= mix( vec3( 1.0 ), leaf, part.w );
-
+`}
     float a = seed * 6.2831853;
     float c = cos( a );
     float s = sin( a );
@@ -374,10 +383,12 @@ vec3 transformed = vec3( position );
     float wide = size * ( 0.88 + 0.24 * fract( seed * 13.1 ) );
     float tall = size * ( 0.9 + 0.2 * fract( seed * 5.7 ) );
     transformed = transformed * vec3( wide, tall, wide ) * ( shown ? 1.0 : 0.0 ) + at;
+${depth ? '' : /* glsl */ `
     // Each tree a little lighter or darker, warmer or cooler.
     float warm = fract( seed * 37.7 ) - 0.5;
     vColor *= ( 0.86 + 0.28 * fract( seed * 91.3 ) ) * vec3( 1.0 + 0.16 * warm, 1.0, 1.0 - 0.16 * warm );
     vSnow = snowAt( at.y + 2.0 * size, 0.0 ) * ${K.cling.toFixed(2)};
+`}
 }
 `;
 
@@ -409,9 +420,11 @@ export class Forest {
             uFocus: { value: 1 },
             uCut: { value: 0 },
             uGrow: { value: 0 },
+            uShadowBox: { value: new THREE.Vector4() },
             uSnowLine: SNOW_LINE,
             uSnowColor: SNOW_COLOR,
         };
+        this.shadowBox = null; // the shadow map's ground (shadows.js box), while there are shadows
         this.kinds = TREE_KINDS.map((name) => {
             const geometry = SHAPES[name]();
             const own = {
@@ -435,6 +448,12 @@ export class Forest {
                     .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${FRAGMENT_SNOW}`);
             };
             material.customProgramCacheKey = () => `trees-${name}`;
+            depthTwin(material, `trees-${name}-depth`, (shader) => {
+                Object.assign(shader.uniforms, this.uniforms, own);
+                shader.vertexShader = shader.vertexShader
+                    .replace('#include <common>', `#include <common>\n${VERTEX_PARS}`)
+                    .replace('#include <begin_vertex>', vertexMain(KINDS[name], true));
+            });
             const mesh = new THREE.Mesh(geometry, material);
             // The trees stand all over the world, which the geometry's own
             // bounds know nothing about; the shader culls them instead.
@@ -577,6 +596,17 @@ export class Forest {
         this.stats.buildMs = +(performance.now() - t0).toFixed(1);
     }
 
+    // Every tree: fn(x, y, crown), its place (world units) and its crown's
+    // radius (for what is baked from them: contact.js).
+    trees(fn) {
+        for (const k of this.kinds) {
+            if (!k.texture) continue;
+            const data = k.texture.image.data;
+            const crown = KINDS[k.name].crown;
+            for (let t = 0; t < k.count; t++) fn(data[t * 4], data[t * 4 + 2], crown * (SIZE0 + SIZE1 * (data[t * 4 + 3] % 1)));
+        }
+    }
+
     // Every frame: where the camera is and what it can see, and the season's
     // leaves (almanac.js seasonLook). No tree is touched here; `focusY` is the
     // height of the point the camera looks at.
@@ -589,6 +619,8 @@ export class Forest {
         u.uFocus.value = Math.hypot(view.camX, view.camY - focusY, view.camZ);
         u.uCut.value = 1 - view.mapness;
         u.uGrow.value = (view.unitPx * MIN_PX * view.mapness) / (2 * KINDS.pine.crown);
+        const sb = this.shadowBox;
+        if (sb) u.uShadowBox.value.set(sb.minX, sb.maxX, sb.minZ, sb.maxZ);
         this.see(view);
         for (const k of this.kinds) {
             this.runs(k);
@@ -604,16 +636,18 @@ export class Forest {
 
     // The chunks in view this frame, in every copy of the world the view
     // reaches: [chunk, copy's x, copy's z (render coordinates of its corner)]
-    // in this.seen, copy by copy, each copy's chunks in order.
+    // in this.seen, copy by copy, each copy's chunks in order. With shadows,
+    // also those whose trees may cast into the shadow map (shadowBox).
     see(view) {
         const { W, H, fx, fz, minX, maxX, minZ, maxZ, planes } = view;
         const { nx, nz, w, h, low, high } = this.chunks;
+        const sb = this.shadowBox;
         const seen = this.seen;
         seen.length = 0;
-        const kx0 = Math.floor((minX + fx - MARGIN) / W);
-        const kx1 = Math.min(kx0 + MAX_COPIES - 1, Math.floor((maxX + fx + MARGIN) / W));
-        const kz0 = Math.floor((minZ + fz - MARGIN) / H);
-        const kz1 = Math.min(kz0 + MAX_COPIES - 1, Math.floor((maxZ + fz + MARGIN) / H));
+        const kx0 = Math.floor((Math.min(minX, sb ? sb.minX : minX) + fx - MARGIN) / W);
+        const kx1 = Math.min(kx0 + MAX_COPIES - 1, Math.floor((Math.max(maxX, sb ? sb.maxX : maxX) + fx + MARGIN) / W));
+        const kz0 = Math.floor((Math.min(minZ, sb ? sb.minZ : minZ) + fz - MARGIN) / H);
+        const kz1 = Math.min(kz0 + MAX_COPIES - 1, Math.floor((Math.max(maxZ, sb ? sb.maxZ : maxZ) + fz + MARGIN) / H));
         for (let kz = kz0; kz <= kz1; kz++) {
             for (let kx = kx0; kx <= kx1; kx++) {
                 const ox = kx * W - fx;
@@ -624,8 +658,9 @@ export class Forest {
                     const z0 = oz + Math.floor(c / nx) * h - MARGIN;
                     const x1 = x0 + w + 2 * MARGIN;
                     const z1 = z0 + h + 2 * MARGIN;
-                    if (x1 < minX || x0 > maxX || z1 < minZ || z0 > maxZ) continue;
-                    if (outside(planes, x0, low[c] - 1, z0, x1, high[c] + TALLEST, z1)) continue;
+                    const casts = sb !== null && !(x1 < sb.minX || x0 > sb.maxX || z1 < sb.minZ || z0 > sb.maxZ);
+                    if (!casts && (x1 < minX || x0 > maxX || z1 < minZ || z0 > maxZ)) continue;
+                    if (!casts && outside(planes, x0, low[c] - 1, z0, x1, high[c] + TALLEST, z1)) continue;
                     seen.push(c, ox, oz);
                 }
             }

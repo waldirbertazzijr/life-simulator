@@ -34,7 +34,7 @@ export class Panel {
     //            unfollow, followDescendant, followAnother, followTribe(id), follow(id),
     //            becomeLabel(id) → 'become them' | null, become(id), openPicker,
     //            play(tribeId), back(), stop(), look() (the character editor), setBlood(on),
-    //            saves() (the save menu: panel/saves.js) }
+    //            saves() (the save menu: panel/saves.js), setQuality('high' | 'medium' | 'low') }
     constructor(actions) {
         this.$ = (id) => document.getElementById(id);
         this.actions = actions;
@@ -94,6 +94,9 @@ export class Panel {
         });
         this.$('blood').addEventListener('click', () => actions.setBlood(!this.blood));
         this.$('saves-open').addEventListener('click', () => actions.saves());
+        for (const b of document.querySelectorAll('[data-quality]')) {
+            b.addEventListener('click', () => actions.setQuality(b.dataset.quality));
+        }
 
         // The seed field: type a number, Enter starts that world; Escape (or
         // clicking away) puts back the current one. Keys typed here are the
@@ -159,6 +162,14 @@ export class Panel {
         const b = this.$('blood');
         b.title = on ? 'Blood: on' : 'Blood: off';
         b.setAttribute('aria-pressed', String(on));
+    }
+
+    // The graphics setting (view3d/graphics.js), or null: the 2D view has none.
+    setQuality(quality) {
+        this.$('quality').hidden = quality === null;
+        for (const b of document.querySelectorAll('[data-quality]')) {
+            b.setAttribute('aria-pressed', String(b.dataset.quality === quality));
+        }
     }
 
     // Play and your person on the map: `play` = { can (the 3D view, not a

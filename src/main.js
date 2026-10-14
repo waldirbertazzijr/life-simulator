@@ -39,12 +39,23 @@ import { Home } from './home/home.js';
 import { HintStore, Hints } from './home/hints.js';
 import { Cinema } from './view3d/cinema.js';
 import { personName } from './play/names.js';
+import { QUALITIES, initQuality, getQuality, setQuality, onQuality, phoneLike } from './view3d/graphics.js';
 
 const VIEWS = ['map', 'follow', 'first'];
 const BLOOD_KEY = 'life-simulator.blood';
 
 const query = new URLSearchParams(location.search);
 const { renderer, canvas } = await createRenderer(document.getElementById('world'));
+
+// The graphics setting (the 3D view's shadows and light: view3d/graphics.js):
+// High on a desktop, Low on a phone, unless this browser keeps another.
+initQuality((() => {
+    try {
+        return window.localStorage;
+    } catch {
+        return null; // (no storage here: the setting lasts the visit)
+    }
+})(), phoneLike((q) => matchMedia(q).matches));
 const world = new Mirror(createHost());
 let frameMs = 0; // JavaScript time per frame spent drawing (smoothed)
 let mainMs = 0;  // all JavaScript time per frame on this thread (smoothed)
@@ -243,9 +254,16 @@ const panel = new Panel({
     saves() {
         saves.toggle(false);
     },
+    setQuality,
 });
 panel.setBlood(blood);
 renderer.setBlood?.(blood);
+const showQuality = (q) => {
+    renderer.setQuality?.(q);
+    panel.setQuality(renderer.setQuality ? q : null);
+};
+onQuality(showQuality);
+showQuality(getQuality());
 
 const input = new Input({ target: window, canvas, doc: document });
 const hud = new Hud(document);
@@ -324,8 +342,10 @@ const home = new Home({
             again: () => hintStore.again(), againShown: () => hintStore.seen.size > 0, againLabel: 'show them all again',
         },
         { id: 'blood', label: 'Blood', options: [['on', 'On'], ['off', 'Off']], get: () => (blood ? 'on' : 'off'), set: (v) => setBlood(v === 'on') },
-        // GRAPHICS (connect at merge): the High/Medium/Low setting (view3d/graphics.js) goes here, e.g.
-        // { id: 'graphics', label: 'Graphics', options: QUALITIES.map((q) => [q, q[0].toUpperCase() + q.slice(1)]), get: getQuality, set: setQuality },
+        // The 3D view's shadows and light (view3d/graphics.js; the panel has it too).
+        ...(renderer.setQuality ? [{
+            id: 'graphics', label: 'Graphics', options: QUALITIES.map((q) => [q, q[0].toUpperCase() + q.slice(1)]), get: getQuality, set: setQuality,
+        }] : []),
     ],
     // Into the chosen person's body, in Play mode.
     life(tribeId, id) {

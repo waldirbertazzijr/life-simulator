@@ -61,7 +61,10 @@ C.fog_pars_fragment = /* glsl */ `
 // view matrix is a rotation and a move: its transpose undoes the rotation).
 // The fog is mixed in after the colour is put in the screen's sRGB, and
 // fogColor comes in sRGB; the glow (linear, like the dome's) is added in
-// linear light, as the dome adds it.
+// linear light, as the dome adds it. Drawn into a render target instead
+// (the High setting's light effects: post.js), the colour and fogColor
+// come linear: the mix is then done in sRGB all the same, so the haze looks
+// as it does on the screen.
 C.fog_fragment = /* glsl */ `
 #ifdef USE_FOG
     #ifdef FOG_EXP2
@@ -69,14 +72,17 @@ C.fog_fragment = /* glsl */ `
     #else
         float fogFactor = smoothstep( fogNear, fogFar, vFogDepth );
     #endif
-    vec3 hazeColor = fogColor;
+    bool hazeOnScreen = linearToOutputTexel( vec4( 0.5 ) ).r > 0.6;
+    vec3 hazeFog = hazeOnScreen ? fogColor : sRGBTransferOETF( vec4( fogColor, 1.0 ) ).rgb;
+    vec3 hazeColor = hazeFog;
     if ( fogFactor > 0.0 && hazeGlow.r + hazeGlow.g + hazeGlow.b > 0.0 ) {
         vec3 hazeDir = ( vec4( vFogView, 0.0 ) * viewMatrix ).xyz;
         float hazeLen = length( hazeDir.xz );
         float toward = hazeLen > 1e-5 ? max( dot( hazeDir.xz / hazeLen, hazeSun.xz ), 0.0 ) : 0.0;
-        hazeColor = sRGBTransferOETF( vec4( sRGBTransferEOTF( vec4( fogColor, 1.0 ) ).rgb + hazeGlow * pow( toward, hazeSun.w ), 1.0 ) ).rgb;
+        hazeColor = sRGBTransferOETF( vec4( sRGBTransferEOTF( vec4( hazeFog, 1.0 ) ).rgb + hazeGlow * pow( toward, hazeSun.w ), 1.0 ) ).rgb;
     }
-    gl_FragColor.rgb = mix( gl_FragColor.rgb, hazeColor, fogFactor );
+    if ( hazeOnScreen ) gl_FragColor.rgb = mix( gl_FragColor.rgb, hazeColor, fogFactor );
+    else gl_FragColor.rgb = sRGBTransferEOTF( vec4( mix( sRGBTransferOETF( gl_FragColor ).rgb, hazeColor, fogFactor ), 1.0 ) ).rgb;
 #endif`;
 // Torchlight, after the lights three.js knows (lit materials only). A soft
 // wrap so a pool of light reads on every side of what it touches.

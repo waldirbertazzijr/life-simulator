@@ -317,6 +317,9 @@ export class Sky {
         this.shoot = { at: -1, next: 4, length: 0.6 };
         this.lastNow = 0;
         this.now = null; // the latest daylight() (for the fog, the weather and the checks)
+        // How much brighter than white the moon's disc is at night: 1, or
+        // more where the bloom makes it glow (the High setting: post.js).
+        this.glare = 1;
     }
 
     // Each frame: `w` is when()'s moment (almanac.js clockOf), `cal` the
@@ -363,7 +366,7 @@ export class Sky {
         else u.uMoonU.value.set(-md.z, 0, md.x).normalize();
         u.uMoonV.value.crossVectors(md, u.uMoonU.value).normalize();
         u.uMoonPhase.value = Math.acos(Math.max(-1, Math.min(1, sun.dot(md))));
-        lin(u.uMoonLight.value, [236, 234, 222], 0.55 + 0.45 * night);
+        lin(u.uMoonLight.value, [236, 234, 222], (0.55 + 0.45 * night) * (1 + (this.glare - 1) * night));
         lin(u.uMoonGlow.value, [150, 170, 210], 0.6 * moon.lit * night);
 
         // The stars' frame: a turn about the pole, once a day and a year's share more.

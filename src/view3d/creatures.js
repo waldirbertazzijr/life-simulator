@@ -34,6 +34,7 @@ import { GAIT, KINDS, POSE, POSES, Motion, VERTEX_PARS, VERTEX_MAIN, VERTEX_COLO
 import { loadModel, loadPerson, outfitOf, OUTFITS } from './models.js';
 import { BODIES, Looks, clothOf } from './looks.js';
 import { wrapDelta } from './util.js';
+import { depthTwin } from './shadows.js';
 
 // size: rough length in world units; minPx: in the map view, bodies grow with
 // distance so they stay at least this many pixels long; center: height of the
@@ -103,6 +104,13 @@ export function herdMaterial(kind, color) {
             .replace('#include <color_vertex>', VERTEX_COLOR);
     };
     material.customProgramCacheKey = () => (people ? 'creature-people' : 'creature');
+    // Its shadow moves as it does (shadows.js): the same vertex shader.
+    depthTwin(material, people ? 'creature-people-depth' : 'creature-depth', (shader) => {
+        Object.assign(shader.uniforms, uniforms);
+        shader.vertexShader = shader.vertexShader
+            .replace('#include <common>', `#include <common>\n${VERTEX_PARS}`)
+            .replace('#include <begin_vertex>', VERTEX_MAIN);
+    });
     // Another body (a model, models.js): its joints and proportions, and its
     // own colours under a white material.
     material.fit = ({ torso, root, body, hip, ownColors }) => {

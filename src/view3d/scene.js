@@ -36,12 +36,24 @@
 // two draw calls), with frogs among them (frogs.js: the frogs and their
 // ripples, two more). Both are scenery only: nothing in the world knows them.
 //
+// The graphics setting (graphics.js: High, Medium, Low; setQuality): Medium
+// and High add shadows (shadows.js: one more pass, the shadow map, with the
+// casters' draw calls); High adds the light's diffusion: a soft darkness
+// where things meet the ground (contact.js: one draw call), glints on the
+// snow, and the screen's passes (post.js: the light rays and the bloom).
+// Low is the view as it was before them.
+//
 // Items (package 3): what people hold and what lies about (items.js: one
 // mesh per kind, glints, flames, glows), the camps' piles
 // of wood, flint and hide (camps.js), arrows (thrown.js), and the marks of
 // work and skills (sparks.js: chips and sparks, a streak, a ring of dust).
 import * as THREE from 'three';
 import './haze.js'; // (first: it patches three.js's shaders before anything is compiled)
+import { Shadows } from './shadows.js'; // (patches them too)
+import { Post } from './post.js';
+import { Contact } from './contact.js';
+import { PRESETS, SUN_LIGHT_MIN, rayStrength } from './graphics.js';
+import { moonOf } from './almanac.js';
 import { CameraRig } from './camera.js';
 import { Sky } from './sky.js';
 import { Weather } from './weather.js';
@@ -58,7 +70,7 @@ import { Camps } from './camps.js';
 import { Marker } from './marker.js';
 import { OrderMarkers } from './order-marker.js';
 import { Lineup } from './poses.js';
-import { groundOf, smoothstep } from './util.js';
+import { groundOf, smoothstep, meshHeight } from './util.js';
 import { stubTerrain } from './terrain-stub.js';
 import { Lilies } from './lilies.js';
 import { Looks } from './looks.js';
@@ -74,6 +86,12 @@ import { Frogs } from './frogs.js';
 const FOG_NEAR = { ground: 0.5, map: 0.62 };
 const CLOUDED = 0.4;
 const NONE = Object.freeze([]);
+// With the light's diffusion (High): how much brighter than white the moon's
+// disc is at night (sky.js glare), and the snow's glints (terrain-mesh.js).
+const GLARE = 1.9;
+const GLINT = 5;
+// With shadows: how much more a low sun lights the grass (terrain-mesh.js).
+const GRASS_LIGHT = 0.45;
 
 // DEV ONLY: `?stubterrain` shows a made-up terrain while the engine has none.
 const STUB = new URLSearchParams(location.search).has('stubterrain');
@@ -111,11 +129,42 @@ export class View3D {
         this.orders = new OrderMarkers(this.scene); // a tribe's standing order (orders.js)
         this.marker = new Marker(this.scene);
         this.lineup = LINEUP === null ? null : new Lineup(LINEUP);
+        // The graphics setting (setQuality): shadows, the darkness where
+        // things meet the ground, and the screen's passes (made when needed).
+        this.shadows = new Shadows(this.gl, this.scene, this.sky.light);
+        this.contact = new Contact(this.scene);
+        this.post = null;
+        this.quality = 'low';
+        this.world = null;
+        this.toLight = new THREE.Vector3();
+        this.ahead = new THREE.Vector3();
+        this.lightColor = new THREE.Color();
+        this.gl.info.autoReset = false; // (a frame is several render calls with the passes: counted whole, in draw)
         // JavaScript milliseconds per frame, for the last frame and smoothed:
         // our own updates (camera, ground, tufts, creatures, camps, marker),
-        // and three.js's render call. The tufts keep their own finer numbers
-        // in this.tufts.stats (refills and the frames without one).
-        this.stats = { update: 0, render: 0, lastUpdate: 0, lastRender: 0 };
+        // and three.js's render call (with the passes). The tufts keep their
+        // own finer numbers in this.tufts.stats (refills and the frames
+        // without one). What the graphics card was given last frame: draw
+        // calls, triangles, the shadow map drawn or not, full-screen passes.
+        this.stats = { update: 0, render: 0, lastUpdate: 0, lastRender: 0, calls: 0, triangles: 0, shadowPass: 0, postPasses: 0 };
+    }
+
+    // The graphics setting: 'high', 'medium' or 'low' (graphics.js).
+    setQuality(quality) {
+        if (!PRESETS[quality]) return;
+        this.quality = quality;
+        const diffusion = PRESETS[quality].diffusion;
+        this.shadows.set(quality);
+        this.forest.shadowBox = this.shadows.on ? this.shadows.box : null;
+        if (diffusion && !this.post) this.post = new Post(this.gl, this.scene, this.rig.camera);
+        if (!diffusion && this.post) {
+            this.post.dispose();
+            this.post = null;
+        }
+        this.sky.glare = diffusion ? GLARE : 1;
+        this.ground.glint.value = diffusion ? GLINT : 0;
+        this.ground.grassLight.value = this.shadows.on ? GRASS_LIGHT : 0;
+        this.contact.set(diffusion, this.world, this.ground, this.forest);
     }
 
     get mode() {
@@ -127,8 +176,13 @@ export class View3D {
     }
 
     attach(world) {
+        this.world = world;
         this.terrain = world.terrain ?? (STUB ? stubTerrain(world) : null);
         this.heightAt = groundOf(this.terrain, world.width, world.height);
+        // The ground as drawn (its triangles: util.js), for what lies on it.
+        const T = this.terrain;
+        const out = [0, 0];
+        this.surfaceAt = T ? (x, y) => (meshHeight(T, x, y, out), out[0]) : () => 0;
         this.resize(world);
         this.ground.attach(world, this.terrain);
         this.forest.attach(world, this.terrain, this.ground);
@@ -144,10 +198,15 @@ export class View3D {
         this.camps.attach();
         this.orders.attach();
         this.rig.attach(world, this.terrain);
+        this.contact.set(!!this.post, world, this.ground, this.forest); // (the new world's trees)
+        this.shadows.flag();
         // Every material now, hidden ones too (the stars wait for the night,
         // the rain and snow for their weather): a first compile later would
-        // stall that frame.
+        // stall that frame. (With the screen's passes, as drawn into their
+        // render target.)
+        if (this.post) this.gl.setRenderTarget(this.post.scene);
         this.gl.compile(this.scene, this.rig.camera);
+        this.gl.setRenderTarget(null);
     }
 
     resize() {
@@ -156,6 +215,7 @@ export class View3D {
         this.gl.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
         this.gl.setSize(w, h);
         this.rig.resize(w, h);
+        this.post?.resize();
         this.lineup?.resize(w, h);
     }
 
@@ -177,6 +237,7 @@ export class View3D {
         const look = seasonLook(cal, world.seed, clockOf(world));
         this.look = look;
         this.sky.update(look.w, cal, look.overcast, view, this.scene, t0 / 1000, this.gl.getPixelRatio());
+        this.shadows.update(view, this.rig.camera, this.sky.now, look.w.sun.alt, look.overcast, this.rig.pose.fy);
         const clear = 1 - CLOUDED * look.overcast;
         this.scene.fog.far = view.fogFar * clear;
         this.scene.fog.near = view.fogFar * clear * (FOG_NEAR.ground + (FOG_NEAR.map - FOG_NEAR.ground) * view.mapness);
@@ -206,6 +267,7 @@ export class View3D {
         const hidden = inside ? target.pop.id[target.i] : 0;
         this.creatures.night = look.w.part === 'night';
         this.creatures.update(world, view, this.heightAt, hidden, this.effects);
+        this.contact.update(this.creatures, view, this.surfaceAt);
         this.items.update(world, view, this.heightAt, motion, hidden, motion.clock, 1 - smoothstep(-0.1, 0.1, look.w.sun.alt));
         this.effects.update(view);
         this.thrown.update(world, view, this.heightAt, motion.clock);
@@ -213,14 +275,40 @@ export class View3D {
         this.camps.update(world, view, this.heightAt);
         this.orders.update(world, view, this.heightAt);
         this.marker.update(world, view, this.heightAt, target, focus, senseRadius);
+        if (this.post) this.aimRays(look);
         const t1 = performance.now();
-        this.gl.render(this.scene, this.rig.camera);
+        this.gl.info.reset();
+        if (this.post) this.post.render();
+        else this.gl.render(this.scene, this.rig.camera);
         const t2 = performance.now();
         const s = this.stats;
         s.lastUpdate = t1 - t0 + (this.cameraMs || 0);
         s.lastRender = t2 - t1;
         s.update += (s.lastUpdate - s.update) * 0.05;
         s.render += (s.lastRender - s.render) * 0.05;
+        s.calls = this.gl.info.render.calls;
+        s.triangles = this.gl.info.render.triangles;
+        s.shadowPass = this.shadows.stats.drawn ? 1 : 0;
+        s.postPasses = this.post ? this.post.passes : 0;
+    }
+
+    // The light rays this frame (post.js): from the sky's light (the sun, or
+    // the moon at night: graphics.js), where it is on the screen.
+    aimRays(look) {
+        const d = this.sky.now;
+        const w = look.w;
+        const bySun = d.sun.intensity > SUN_LIGHT_MIN;
+        const moon = moonOf(w);
+        const camera = this.rig.camera;
+        const dir = bySun ? this.sky.sunDir : this.sky.moonDir;
+        const p = this.toLight.copy(dir).multiplyScalar(100).add(camera.position).project(camera);
+        const front = dir.dot(camera.getWorldDirection(this.ahead)) > 0.05;
+        const strength = rayStrength({
+            by: bySun ? 'sun' : 'moon', alt: bySun ? w.sun.alt : moon.alt, x: p.x, y: p.y, front, lit: moon.lit, overcast: look.overcast,
+        });
+        const c = bySun ? d.sun.color : d.moon.color;
+        this.lightColor.setRGB(c[0] / 255, c[1] / 255, c[2] / 255, THREE.SRGBColorSpace);
+        this.post.aim(strength, (p.x + 1) / 2, (p.y + 1) / 2, this.lightColor);
     }
 
     // The id of whoever is drawn under pixel (px, py) (within `radius` px, 16;

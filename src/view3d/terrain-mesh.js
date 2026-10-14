@@ -55,11 +55,13 @@ const GREEN = Float32Array.from({ length: 256 }, (_, i) => 1 - (1 - i / 255) ** 
 // at any distance (fwidth: how much the alpha changes from one pixel to the
 // next), so the line is sharp up close and not jagged far away.
 const SNOW_FRAGMENT = /* glsl */ `
+float lyingSnow = 0.0;
 #ifdef USE_MAP
     vec4 sampledDiffuseColor = texture2D( map, vMapUv );
     float edge = max( fwidth( sampledDiffuseColor.a ), 0.002 );
     float snow = 1.0 - smoothstep( 0.5 - edge, 0.5 + edge, sampledDiffuseColor.a );
     diffuseColor.rgb *= mix( sampledDiffuseColor.rgb, uSnow, snow );
+    lyingSnow = snow;
 #endif
 `;
 
@@ -71,7 +73,44 @@ const SEASON_SNOW = /* glsl */ `
     vec2 nuv = vGroundUv * uNoiseScale;
     float jitter = ( texture2D( uNoise, nuv ).r - 0.5 ) * 0.9 + ( texture2D( uNoise, nuv * 4.0 ).b - 0.5 ) * 0.35;
     float face = 0.3 + 0.7 * smoothstep( 0.6, 0.86, upward( normal ) );
-    diffuseColor.rgb = mix( diffuseColor.rgb, uSnowColor, smoothstep( 0.2, 0.55, snowAt( vGroundY, jitter ) ) * face );
+    float fallen = smoothstep( 0.2, 0.55, snowAt( vGroundY, jitter ) ) * face;
+    diffuseColor.rgb = mix( diffuseColor.rgb, uSnowColor, fallen );
+    lyingSnow = max( lyingSnow, fallen );
+}
+`;
+
+// With shadows (graphics.js, Medium and High): grass stands up to a low sun,
+// so a meadow catches more of its light than a bare, level face would, and
+// the long shadows of dawn and dusk lie dark across a lit field. Blades
+// standing across the face take the light that skims it: up to uGrassLight
+// of it (0: a level face, as on Low), so only a low light (under some 25°
+// on level ground) gains; behind the face's own horizon none.
+const GRASS_LIGHT = /* glsl */ `
+uniform float uGrassLight;
+void RE_Direct_Grass( const in IncidentLight directLight, const in vec3 geometryPosition, const in vec3 geometryNormal, const in vec3 geometryViewDir, const in vec3 geometryClearcoatNormal, const in LambertMaterial material, inout ReflectedLight reflectedLight ) {
+    float dotNL = saturate( dot( geometryNormal, directLight.direction ) );
+    float skims = sqrt( 1.0 - dotNL * dotNL ) * smoothstep( 0.0, 0.12, dotNL );
+    dotNL = max( dotNL, uGrassLight * skims );
+    vec3 irradiance = dotNL * directLight.color;
+    reflectedLight.directDiffuse += irradiance * BRDF_Lambert( material.diffuseColor );
+}
+#undef RE_Direct
+#define RE_Direct RE_Direct_Grass
+`;
+
+// Glints on the snow (the High setting, graphics.js: uGlint > 0): here and
+// there a speck of it, struck by the direct light (none in shadow), flashes
+// as the eye moves, bright enough for the bloom (post.js). Near only.
+const GLINT = /* glsl */ `
+if ( uGlint > 0.0 && lyingSnow > 0.05 ) {
+    float near = 1.0 - smoothstep( 45.0, 130.0, length( vViewPosition ) );
+    vec2 q = vGroundUv * uWorld / 0.2;
+    vec2 cell = floor( q );
+    float h = fract( sin( dot( cell, vec2( 127.1, 311.7 ) ) ) * 43758.5453 );
+    float flash = fract( h * 13.7 + dot( normalize( vViewPosition ), vec3( 3.1, 5.3, 2.7 ) ) * 3.0 );
+    float speck = 1.0 - smoothstep( 0.1, 0.35, length( q - cell - 0.5 ) );
+    float lit = dot( reflectedLight.directDiffuse, vec3( 0.3, 0.55, 0.15 ) );
+    outgoingLight += uSnowColor * ( step( 0.993, flash ) * speck * lyingSnow * near * lit * uGlint );
 }
 `;
 
@@ -167,16 +206,22 @@ export class Ground {
         noise.needsUpdate = true;
         // The noise tiles the world a whole number of times (so it wraps with it).
         this.season = { uNoise: { value: noise }, uNoiseScale: { value: new THREE.Vector2(1, 1) }, uSnowLine: SNOW_LINE, uSnowColor: SNOW_COLOR };
+        // The graphics setting's: how bright the snow's glints are, and how
+        // much more a low sun lights the grass (0: none, as on Low).
+        this.glint = { value: 0 };
+        this.grassLight = { value: 0 };
         this.material.onBeforeCompile = (shader) => {
             shader.uniforms.uSnow = { value: snow };
-            Object.assign(shader.uniforms, this.season);
+            Object.assign(shader.uniforms, this.season, { uGlint: this.glint, uGrassLight: this.grassLight, uWorld: this.ice.uWorld });
             shader.vertexShader = shader.vertexShader
                 .replace('#include <common>', '#include <common>\nvarying vec2 vGroundUv;\nvarying float vGroundY;')
                 .replace('#include <begin_vertex>', '#include <begin_vertex>\nvGroundUv = uv;\nvGroundY = position.y;');
             shader.fragmentShader = shader.fragmentShader
-                .replace('#include <common>', `#include <common>\nuniform vec3 uSnow;\nuniform sampler2D uNoise;\nuniform vec2 uNoiseScale;\nvarying vec2 vGroundUv;\nvarying float vGroundY;\n${SNOW_GLSL}`)
+                .replace('#include <common>', `#include <common>\nuniform vec3 uSnow;\nuniform sampler2D uNoise;\nuniform vec2 uNoiseScale;\nuniform float uGlint;\nuniform vec2 uWorld;\nvarying vec2 vGroundUv;\nvarying float vGroundY;\n${SNOW_GLSL}`)
+                .replace('#include <lights_lambert_pars_fragment>', `#include <lights_lambert_pars_fragment>\n${GRASS_LIGHT}`)
                 .replace('#include <map_fragment>', SNOW_FRAGMENT)
-                .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${SEASON_SNOW}`);
+                .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${SEASON_SNOW}`)
+                .replace('#include <opaque_fragment>', `${GLINT}\n#include <opaque_fragment>`);
         };
         this.material.customProgramCacheKey = () => 'ground';
         this.tiles = [];
