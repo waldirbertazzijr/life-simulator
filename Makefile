@@ -23,10 +23,10 @@ orders:
 	$(DOCKER) $(NODE) node headless/orders.mjs $(ARGS)
 
 # Behaviour fingerprint (must not change for a pure refactor), e.g. make fingerprint ARGS="--set human.enabled=false"
-# Baselines (all:), nothing spoils (stores keep, carcasses are eaten or cut up; a lively day: the camp
-# fire and chores, raids on richer neighbours, the beaten run):
-# default 06baa8bdd104699f; --set items.enabled=false 692ca24b567e2f2f (the world before items).
-# (Stage 4 package 1, the calendar: 2171be5131667e05, items off d26cc1c85f66306a.
+# Baselines (all:), survival (stage 4 package 2: the cold, the camp fire, cloaks, berries and fruit,
+# deep snow): default 165ce3f8b926d82b; --set items.enabled=false f8ce4d33145d7760 (the world before items).
+# (Nothing spoils, a lively day: 06baa8bdd104699f, items off 692ca24b567e2f2f.
+#  Stage 4 package 1, the calendar: 2171be5131667e05, items off d26cc1c85f66306a.
 #  Stage 3, before the calendar: 2a6f0633606fc95a, items off 5d18bd1739f3aee6.)
 fingerprint:
 	$(DOCKER) $(NODE) node tools/fingerprint.mjs $(ARGS)

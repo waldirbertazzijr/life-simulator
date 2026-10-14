@@ -238,7 +238,7 @@ export const params = {
         beaten: 0.5,         // below this share of its energy, one in a fight runs from it
         partySpacing: 15,    // social foragers close up when a tribe-mate is farther than this
         // Raids (aggressive tribes, on neighbours richer than they are)
-        raidRate: 0.0001,    // × aggression: per-step chance an adult with nothing to do for the tribe sets off on a raid
+        raidRate: 0.000165,  // × aggression: per-step chance an adult with nothing to do for the tribe sets off on a raid
         raidRange: 750,      // only camps this close, holding a full load and more a member, are worth raiding
         raidLoad: 150,       // most a raider can carry off
         guard: 0.3,          // each defender at the camp hurts the raider with this chance (×0.5–1 by sociality)
@@ -259,6 +259,46 @@ export const params = {
         splitDistance: 300,  // ...the daughter settling about this far off...
         room: 550,           // ...and no nearer than this to any other camp: a tribe needs land of its own
         cultureDrift: 0.08,  // how much a daughter tribe's culture differs from its parent's
+    },
+
+    // The cold (stage 4, package 2: src/warmth.js, src/cold.js). In winter,
+    // and on cold nights in high or tundra land, people out in it without
+    // warmth burn energy faster, and can freeze to death. The chill (0..1)
+    // and what keeps it off (a cloak, the camp's fire, a shelter, a torch)
+    // are warmth.js's; exposure = chill × (1 − warmth).
+    cold: {
+        enabled: true,
+        cost: 0.1,           // energy a step at full exposure (a person's own upkeep is ~0.02)...
+        comfort: 0.15,       // ...none up to this much (a cool spring dawn), rising from it
+        froze: 0.3,          // one who dies of hunger with at least this exposure froze to death
+        seek: 0.3,           // with this much exposure out there (without the fire), one comes home to the fire...
+        errand: 0.6,         // ...and an errand in the cold is cut short by up to this share (× exposure)
+        // How much each keeps off (warmth.js WARMTH, the page's copy).
+        cloak: 0.55,         // a plain cloak (a rare or legendary one × its warmth)
+        fire: 0.9,           // the camp's fire, burning well, within items.fireReach of its centre
+        shelter: 0.9,        // a hut (package 4)
+        torch: 0.15,         // a burning torch in hand
+    },
+
+    // Snow (src/snow.js): deep snow slows walking, people's and animals',
+    // to this pace in the deepest (× 1 − (1 − slow) × depth).
+    snow: {
+        slow: 0.7,
+    },
+
+    // Wild berry bushes and fruit trees (src/plants.js): placed once per
+    // world, by its seed and biomes; berries ripen in summer, fruit in
+    // autumn, each year again, and people pick them (gatherers' fast food).
+    // Grazers leave them be.
+    plants: {
+        enabled: true,
+        berries: 260,        // berry bushes at most (meadows by forest edges)...
+        fruit: 140,          // ...and fruit trees (meadows by wetland edges)
+        berryFood: 120,      // food on a ripe bush...
+        fruitFood: 200,      // ...on a ripe tree
+        pick: 1.5,           // food a step a picker takes
+        ripe: 0.05,          // a plant with less on it than this is not worth going to
+        sight: 80,           // a forager goes to a ripe plant this near (and within its home range)
     },
 
     // The person the page controls (src/player.js). These rules apply to the
@@ -338,12 +378,23 @@ export const params = {
         load: 8,
         spotReach: 500,      // a tribe goes no farther than this (by land) for them: where a load comes soonest
         initialWood: 6,      // wood in each starting camp (spears for the children who come of age)
+        initialHide: 30,     // hides in each starting camp (cloaks for its first winter: package 2)
         errand: 3000,        // steps a worker keeps at it before going home with what it has
         // A camp's fire burns wood through the night; a full camp's adults
         // keep its woodpile, and a stock of flint (tasks.js chores).
         fire: 7,             // wood a member the camp fire burns each night
-        woodpile: 2,         // nights of it a camp keeps in wood
+        woodpile: 2,         // nights of it a camp keeps in wood...
+        winterpile: 4,       // ...in autumn and winter
         flintStock: 0.5,     // flint a member it keeps
+        // The fire (tribes.js, cold.js): lit at night while there is wood, and
+        // by day when the camp's chill is at least fireDay (burning fireDayBurn
+        // of the night's rate); it burns low below fireLow wood a member, and
+        // warms people within fireReach of the camp's centre.
+        fireReach: 14,
+        fireDay: 0.3,
+        fireDayBurn: 0.25,
+        fireLow: 1,
+        fireCold: 0.5,       // in the cold it burns × (1 + this × the chill at camp)
         // Kinds (the plain spear is today's hunting: human.throwRange, hit, reload).
         arrowRange: 1.6,     // a bow: × the spear's reach (a hunter's throw; the player's arrows: × play.throwRange, heavyRange)...
         arrowSpeed: 1.6,     // ...its arrows fly × as fast as a thrown spear (play.throwSpeed, heavySpeed)...
@@ -371,7 +422,14 @@ export const params = {
             knife: { wood: 0, flint: 1, hide: 0 },
             basket: { wood: 2, flint: 0, hide: 0 },
             torch: { wood: 1, flint: 0, hide: 0 },
+            cloak: { wood: 0, flint: 0, hide: 3 },
         },
+        // The cloak (worn): it wears by the cold it keeps off, lasting
+        // cloakDays days of full chill (a rare one × rareUses / uses), and
+        // one that comes through `winters` hard winters on one bearer's
+        // back becomes a legend.
+        cloakDays: 12,
+        winters: 3,
         rareChance: 0.2,     // with a flint more: the chance of rare...
         rareGain: 0.04,      // ...more with each item the crafter has made...
         rareMax: 0.6,        // ...up to this

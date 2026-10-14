@@ -22,6 +22,7 @@
 //   rain, snowfall, overcast   the weather now (0..1).
 import { when, winterOf } from '../calendar.js';
 import { hash, smoothstep, clamp01 } from './util.js';
+import { snowLine } from '../snow.js';
 
 export const TREE_KINDS = ['pine', 'birch', 'oak', 'fruit'];
 
@@ -225,45 +226,21 @@ export function leafOf(kind, yearT, r) {
 
 // ---- Snow and ice ----
 
-// Snow line by the winter's hardness (mild, normal, hard): where it settles
-// (0 the shore .. 1 the highest peak; below 0, even the lowest land is
-// white); how long it takes to come down (of the winter), and how long the
-// melt takes (of the spring).
-const SNOW = { low: [0.5, 0.1, -0.3], build: [0.55, 0.4, 0.28], melt: [0.3, 0.45, 0.6], ice: [0.06, 0.13, 0.26] };
-const NONE = 1.2;  // a line above every peak: no snow (the snowfields of the snow biome stay)
-const PEAKS = 0.72; // the line by the end of autumn: the first snow on the high tops
+// The snow line, how much snow lies at a height and the fade's width are
+// shared with the simulation (src/snow.js: where people wade through snow
+// is where the page draws it); here for the page's readers as before.
+export { snowLine, snowAt, SNOW_FADE } from '../snow.js';
 
-// The snow line at the moment `w` (when()'s), given this winter's and the
-// last one's hardness (0..2; `last` -1: there was none, the world's first spring).
-export function snowLine(w, hard, last) {
-    switch (w.season) {
-        case 2: // autumn: the first snow on the peaks in its second half
-            return NONE + (PEAKS - NONE) * smoothstep(0.45, 1, w.seasonT);
-        case 3: { // winter: down over its first days, a little lower as it goes on
-            const low = SNOW.low[hard] - 0.12 * w.seasonT;
-            return PEAKS + (low - PEAKS) * smoothstep(0, SNOW.build[hard], w.seasonT);
-        }
-        case 0: { // spring: the melt, from where the winter left it
-            if (last < 0) return NONE;
-            const low = SNOW.low[last] - 0.12;
-            return low + (NONE - low) * smoothstep(0, SNOW.melt[last], w.seasonT);
-        }
-        default:
-            return NONE;
-    }
-}
+// How deep the lakes freeze in from the shore, by the winter's hardness
+// (mild, normal, hard).
+const ICE = [0.06, 0.13, 0.26];
 
 // How far into the lakes ice reaches from the shore (0..1 of 25 units deep).
 export function iceDepth(w, hard, last) {
-    if (w.season === 3) return SNOW.ice[hard] * smoothstep(0.1, 0.6, w.seasonT);
-    if (w.season === 0 && last >= 0) return SNOW.ice[last] * (1 - smoothstep(0, 0.25, w.seasonT));
+    if (w.season === 3) return ICE[hard] * smoothstep(0.1, 0.6, w.seasonT);
+    if (w.season === 0 && last >= 0) return ICE[last] * (1 - smoothstep(0, 0.25, w.seasonT));
     return 0;
 }
-
-// How much snow lies at height `h` (0 shore .. 1 peak) on a level face, for
-// a snow line `line` (the shader adds noise and the face's slope).
-export const SNOW_FADE = 0.14;
-export const snowAt = (line, h) => clamp01((h - line) / SNOW_FADE + 0.5);
 
 // ---- Weather ----
 

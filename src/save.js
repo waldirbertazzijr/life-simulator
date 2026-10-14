@@ -53,7 +53,7 @@ import { personName } from './play/names.js';
 import { livingIndexOf } from './util.js';
 
 export const SAVE_FORMAT = 'life-simulator-save';
-export const SAVE_VERSION = 1;
+export const SAVE_VERSION = 2;
 
 const KINDS = ['herbivore', 'carnivore', 'human'];
 const POP = { herbivore: 'herbivores', carnivore: 'carnivores', human: 'humans' };
@@ -66,6 +66,8 @@ const APART = new Set([
     // (A cache, World.stepHerbivores: headings with their cos and sin. A new
     // world's is empty, which changes nothing but how soon they are known.)
     'facing', 'facingCos', 'facingSin',
+    // (The snow underfoot, cold.js: worked out again from the time at the next step.)
+    'snowPace', 'snowAt', 'snowLine',
 ]);
 
 // A save that cannot be loaded: the message says why, for the player.
@@ -370,6 +372,8 @@ export function loadWorld(data, { paths = true } = {}) {
     world.tribeById.clear();
     for (const t of world.tribes) world.tribeById.set(t.id, t);
     world.events.length = 0;
+    world.snowAt = -1; // (the snow underfoot: built again at the next step, cold.js)
+    world.snowLine = NaN;
     world.herbivoreHash.build(world.herbivores);
     world.carnivoreHash.build(world.carnivores);
     world.humanHash.build(world.humans);

@@ -14,6 +14,7 @@
 import { STATE } from './population.js';
 import { tribeIdentity } from './identity.js';
 import { KIND, foundItems, splitItems, tribeEnded, newItem, hold } from './items.js';
+import { stepFire } from './cold.js';
 import { TAU, wrapDelta, wrapMod, clamp01 } from './util.js';
 
 // A new tribe, its camp at (x, y), of `culture` ({aggression, sociality});
@@ -48,6 +49,8 @@ export function foundTribe(world, x, y, culture, parent = null) {
         wood: 0,
         flint: 0,
         hide: 0,
+        // Its fire: 0 out, else how well it burns (0..1; cold.js stepFire).
+        fire: 0,
     };
     world.tribes.push(tribe);
     world.tribeById.set(tribe.id, tribe);
@@ -123,6 +126,7 @@ export function spawnPerson(world, tribe, x, y, energy, age, parent = -1) {
     pop.load[i] = 0;
     pop.hides[i] = 0;
     pop.crafted[i] = 0;
+    pop.cloak[i] = 0; // (no cloak yet: package 2)
     pop.state[i] = age >= P.maturity ? STATE.AT_CAMP : STATE.PLAYING;
     return i;
 }
@@ -158,7 +162,10 @@ export function seedTribes(world) {
             sociality: rng.next(),
         });
         tribe.store = P.initialStore;
-        if (world.itemsOn) tribe.wood = world.p.items.initialWood;
+        if (world.itemsOn) {
+            tribe.wood = world.p.items.initialWood;
+            tribe.hide = world.p.items.initialHide;
+        }
         for (let m = 0; m < P.perTribe; m++) {
             const adult = m < P.perTribe * 0.8;
             const age = adult ? P.maturity + rng.next() * (P.lifespan * 0.5 - P.maturity) : rng.next() * P.maturity;
@@ -177,11 +184,6 @@ export function seedTribes(world) {
 export function stepTribes(world) {
     const P = world.p.human;
     const pop = world.humans;
-    // The camp fire (items): through the night it burns items.fire wood a
-    // member, while there is any (a daily want of wood: tasks.js chores; the
-    // hook for the fire pit and its warmth).
-    const C = world.p.calendar;
-    const burn = world.itemsOn && world.night ? world.p.items.fire / (C.day - C.dawn - C.light - C.dusk) : 0;
     for (const t of world.tribes) {
         t.members = 0;
         t.adults = 0;
@@ -198,7 +200,10 @@ export function stepTribes(world) {
             continue;
         }
         if (t.order !== null && world.time + 1 >= t.order.until) t.order = null; // its last step: the order lapses (orders.js)
-        if (burn > 0 && t.wood > 0) t.wood = t.wood > burn * t.members ? t.wood - burn * t.members : 0;
+        // The camp fire (cold.js): lit at night, and by day in the cold,
+        // burning items.fire wood a member a night while there is any (a
+        // daily want of wood: tasks.js chores); it warms those near it.
+        stepFire(world, t);
         if (t.birthCooldown > 0) t.birthCooldown--;
         // A birth: in its season (world.breedP), with two adults, the store
         // able to spare it, and not too soon after the last.

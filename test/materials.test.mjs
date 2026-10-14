@@ -12,6 +12,7 @@ import { takeControl, applyInput, applyAct, playerSnapshot } from '../src/player
 import { issueOrder, heeded, setAside, ORDER_KINDS } from '../src/orders.js';
 import { TASK, KIND, handWork, yieldAt, richness, flatSpot, newItem, hold, unhold, heldLike } from '../src/items.js';
 import { BIOME } from '../src/terrain.js';
+import { campChill } from '../src/cold.js';
 
 const config = (set = {}) => {
     const p = structuredClone(defaults);
@@ -414,9 +415,11 @@ test('the camp fire burns items.fire wood a member through the night, and goes o
         if (!w.night) break; // (the step that ended the night was dawn's)
         const burnt = before - tribe.wood; // (nobody puts wood in at night: errands end at dusk)
         // (Members are counted as the step's tribes are reckoned: a birth or a
-        // death in the step can leave tribe.members one off by its end.)
-        const people = Math.round((burnt * night) / w.p.items.fire);
-        assert.ok(Math.abs(people - tribe.members) <= 1 && Math.abs(burnt - (w.p.items.fire * people) / night) < 1e-9, `a step's burning: ${burnt}`);
+        // death in the step can leave tribe.members one off by its end. In
+        // the cold it is fed more: × 1 + items.fireCold × the chill at camp.)
+        const cold = 1 + w.p.items.fireCold * campChill(w, tribe);
+        const people = Math.round((burnt * night) / (w.p.items.fire * cold));
+        assert.ok(Math.abs(people - tribe.members) <= 1 && Math.abs(burnt - ((w.p.items.fire * people) / night) * cold) < 1e-9, `a step's burning: ${burnt}`);
         steps++;
     }
     assert.ok(steps >= night - 2, `all night: ${steps} of ${night}`);

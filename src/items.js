@@ -34,7 +34,10 @@
 //
 // A person holds one weapon and one tool (the population's `weapon` and
 // `tool` columns, item ids, and `gear`, their two kinds as weapon × 8 + tool,
-// for the hot loops); the player also keeps a few spares (player.kit).
+// for the hot loops); the player also keeps a few spares (player.kit). And
+// one worn item (package 2): a cloak, in the `cloak` column (not in `gear`,
+// no spares), its trait warmth; it wears by the cold it keeps off, and its
+// legend deed is 'winters' (cold.js).
 //
 // What people do with items lives in humans.js, in guarded branches; the
 // work itself is in tasks.js: tasks (TASK: butchering a kill, an errand for
@@ -42,17 +45,21 @@
 // result in `job`; tribes decide what they need every few steps
 // (tallyTribes). The player's own acts with items are acts/gear.js.
 import { BIOME } from './terrain.js';
+import { ripeNear } from './plants.js';
 import { wrapDelta, wrapPos, indexOf } from './util.js';
 
 const GOLDEN = Math.PI * (3 - Math.sqrt(5));
 const FAR = 0x3fffffff; // terrain.js: a cell no land path reaches
 const LOG = 8;          // entries an item's story keeps (the first, and the latest)
 
-export const ITEM_KINDS = ['', 'spear', 'bow', 'club', 'knife', 'basket', 'torch'];
-export const KIND = { SPEAR: 1, BOW: 2, CLUB: 3, KNIFE: 4, BASKET: 5, TORCH: 6 };
+export const ITEM_KINDS = ['', 'spear', 'bow', 'club', 'knife', 'basket', 'torch', 'cloak'];
+export const KIND = { SPEAR: 1, BOW: 2, CLUB: 3, KNIFE: 4, BASKET: 5, TORCH: 6, CLOAK: 7 };
 export const WEAPONS = [KIND.SPEAR, KIND.BOW, KIND.CLUB];
 export const TOOLS = [KIND.KNIFE, KIND.BASKET, KIND.TORCH];
 export const isWeapon = (kind) => kind >= KIND.SPEAR && kind <= KIND.CLUB;
+// A worn item (package 2: the cloak), in a slot of its own: the
+// population's `cloak` column (an item id), not in `gear`.
+export const isWorn = (kind) => kind === KIND.CLOAK;
 export const TASK = { NONE: 0, BUTCHER: 1, WOOD: 2, FLINT: 3, CRAFT: 4 };
 
 // What a kind (a KIND code) costs to make: {wood, flint, hide}, from
@@ -76,7 +83,8 @@ export function spend(p, tribe, kind, sign = 1) {
 // The traits a rare item can have boosted, by kind.
 const WEAPON_TRAITS = ['range', 'accuracy', 'reload', 'durability'];
 const TOOL_TRAITS = ['effect', 'durability'];
-export const traitsOf = (kind) => (isWeapon(kind) ? WEAPON_TRAITS : TOOL_TRAITS);
+const WORN_TRAITS = ['warmth']; // (a cloak: rare ones are warmer; warmth.js cloakWarmth)
+export const traitsOf = (kind) => (isWeapon(kind) ? WEAPON_TRAITS : isWorn(kind) ? WORN_TRAITS : TOOL_TRAITS);
 
 // The player's weapon skills (§8.6): a legend's is its kind's, stronger, under
 // a name of its own (`word` of the legend's name).
@@ -85,7 +93,7 @@ export const SKILLS = [
     { name: 'Piercing throw', cost: 30, word: 'Flight' },
     { name: 'Volley', cost: 30, word: 'Rain' },
     { name: 'Ground slam', cost: 40, word: 'Quake' },
-    null, null, null,
+    null, null, null, null,
 ];
 
 // ---- Setting up ------------------------------------------------------------------------
@@ -101,8 +109,8 @@ export function initItems(world) {
     world.legendNames = new Set();
     // What items did, for the checks (headless/check.mjs).
     world.itemStats = world.itemsOn ? {
-        crafted: [0, 0, 0, 0, 0, 0, 0], rare: 0, broke: [0, 0, 0, 0, 0, 0, 0], vanished: 0,
-        legends: { famous: 0, kills: 0, generations: 0, defender: 0, outlived: 0 },
+        crafted: [0, 0, 0, 0, 0, 0, 0, 0], rare: 0, broke: [0, 0, 0, 0, 0, 0, 0, 0], vanished: 0,
+        legends: { famous: 0, kills: 0, generations: 0, defender: 0, outlived: 0, winters: 0 },
         picked: 0, inherited: 0, raided: 0, butchered: 0, butcherDeaths: {}, errands: { wood: 0, flint: 0 },
         eatenAt: [0, 0, 0, 0, 0], // people eaten, by the task they were at (TASK)...
         eatenArm: [0, 0, 0, 0],   // ...and the weapon they held (KIND; 0: none)
@@ -216,11 +224,16 @@ export function flatSpot(world, tribe, mat) {
 // tundra (without biomes: on rocky ground); TASK.NONE elsewhere, where E
 // gathers food. A flat world has no ground to tell by (wood and flint are a
 // little anywhere), so, as for its errands, at `tribe`'s own spots: within
-// materials.patch of one. Items off: always NONE. The simulation decides with
+// materials.patch of one. Items off: always NONE. But first, by a ripe berry
+// bush or fruit tree (within items.pickReach, items on or off): 'fruit',
+// and E picks it (package 2: plants.js). The simulation decides with
 // this (acts/hands.js), and the page shows what E will do with it, on the
 // Mirror's copy of the land (play/context.js): both have terrain, grass, p,
 // width, height, and tribes with an id and a camp.
 export function handWork(world, x, y, tribe) {
+    // (A ripe berry bush or fruit tree within items.pickReach comes first,
+    // items or none: plants.js. The page's Mirror keeps the plants too.)
+    if (world.plants && ripeNear(world, x, y, world.p.items.pickReach) >= 0) return 'fruit';
     if (world.p.items.enabled !== true) return TASK.NONE;
     if (world.terrain !== null) {
         if (richness(world, x, y, TASK.WOOD) === 1) return TASK.WOOD;
@@ -241,14 +254,28 @@ export function handWork(world, x, y, tribe) {
 // items.wood or items.flint where the ground is rich, less where it is poor.
 export const yieldAt = (world, x, y, mat) => (mat === TASK.WOOD ? world.p.items.wood : world.p.items.flint) * richness(world, x, y, mat);
 
+// How much use a new item of `kind` has in it: uses (a rare one more; a
+// durable one × its mult), a torch's steps of burning, a cloak's steps of
+// full chill (items.cloakDays days; a rare one × rareUses / uses); a
+// legend's never ends. (`p`: the parameters.)
+export function wearMax(p, kind, rarity, trait) {
+    const I = p.items;
+    if (rarity === 2) return Infinity;
+    let max = kind === KIND.TORCH ? I.torch
+        : kind === KIND.CLOAK ? I.cloakDays * p.calendar.day * (rarity === 1 ? I.rareUses / I.uses : 1)
+        : rarity === 1 ? I.rareUses : I.uses;
+    if (trait === 'durability') max *= I.rare;
+    return max;
+}
+
 // A new item of `kind`, made by `maker` (an id, 0: nobody in particular) in
-// `tribe` (its id). Rare items come with a trait already rolled.
+// `tribe` (its id). Rare items come with a trait already rolled. (A cloak
+// also counts the hard winters it has come through on one bearer's back,
+// `winters`, and who wore it as the latest began, `wintered`: cold.js.)
 export function newItem(world, kind, rarity, trait, maker, tribe) {
     const I = world.p.items;
     const mult = rarity === 0 ? 1 : rarity === 1 ? I.rare : I.legendary;
-    let max = kind === KIND.TORCH ? I.torch : rarity === 1 ? I.rareUses : I.uses;
-    if (trait === 'durability') max *= mult;
-    if (rarity === 2) max = Infinity;
+    const max = wearMax(world.p, kind, rarity, trait);
     const { time } = world;
     const t = world.tribeById.get(tribe);
     const item = {
@@ -257,6 +284,10 @@ export function newItem(world, kind, rarity, trait, maker, tribe) {
         camp: 0, last: 0, raiders: 0, expires: kind === KIND.TORCH && rarity < 2 ? time + max : 0, rev: 0,
         log: [{ time, text: t ? `Made among the ${t.name}` : 'Made', by: maker }],
     };
+    if (kind === KIND.CLOAK) {
+        item.winters = 0;
+        item.wintered = 0;
+    }
     world.items.set(item.id, item);
     return item;
 }
@@ -289,7 +320,7 @@ export function better(world, a, b, npc) {
 // Person i's held item in the slot `item` would go to (or null).
 export function heldLike(world, i, kind) {
     const pop = world.humans;
-    const id = isWeapon(kind) ? pop.weapon[i] : pop.tool[i];
+    const id = isWeapon(kind) ? pop.weapon[i] : isWorn(kind) ? pop.cloak[i] : pop.tool[i];
     return id ? world.items.get(id) ?? null : null;
 }
 
@@ -302,6 +333,8 @@ export function hold(world, i, item, inherited = false) {
     if (isWeapon(item.kind)) {
         pop.weapon[i] = item.id;
         pop.gear[i] = item.kind * 8 + (pop.gear[i] & 7);
+    } else if (isWorn(item.kind)) {
+        pop.cloak[i] = item.id; // (worn: not in `gear`)
     } else {
         pop.tool[i] = item.id;
         pop.gear[i] = (pop.gear[i] >> 3) * 8 + item.kind;
@@ -338,6 +371,8 @@ export function unhold(world, i, item) {
     } else if (pop.tool[i] === item.id) {
         pop.tool[i] = 0;
         pop.gear[i] = (pop.gear[i] >> 3) * 8;
+    } else if (pop.cloak[i] === item.id) {
+        pop.cloak[i] = 0;
     }
 }
 
@@ -417,7 +452,7 @@ export function breakItem(world, item, i = -1) {
     if (item.bearer !== 0) {
         if (i < 0 || pop.id[i] !== item.bearer) i = indexOf(pop, item.bearer);
         const inHand = i >= 0 && (pop.weapon[i] === item.id || pop.tool[i] === item.id);
-        if (inHand) unhold(world, i, item);
+        if (inHand || (i >= 0 && pop.cloak[i] === item.id)) unhold(world, i, item);
         const pl = world.player;
         if (pl !== null && pl.id === item.bearer) unkit(pl, item.id);
         world.events.push({
@@ -425,7 +460,7 @@ export function breakItem(world, item, i = -1) {
             x: i >= 0 ? pop.x[i] : item.x, y: i >= 0 ? pop.y[i] : item.y, time: world.time,
         });
         // The player takes up a spare at once (if it broke in hand).
-        if (pl !== null && pl.id === item.bearer && inHand && pl.kit) {
+        if (pl !== null && pl.id === item.bearer && inHand && pl.kit && !isWorn(item.kind)) {
             const spares = isWeapon(item.kind) ? pl.kit.weapons : pl.kit.tools;
             if (spares.length) hold(world, i, world.items.get(spares.shift()));
         }
@@ -744,6 +779,7 @@ export function bequeath(world, i) {
     const list = [];
     if (pop.weapon[i]) list.push(world.items.get(pop.weapon[i]));
     if (pop.tool[i]) list.push(world.items.get(pop.tool[i]));
+    if (pop.cloak[i]) list.push(world.items.get(pop.cloak[i]));
     if (pl !== null && pl.id === id && pl.kit) {
         for (const k of [...pl.kit.weapons, ...pl.kit.tools]) list.push(world.items.get(k));
         pl.kit.weapons.length = 0;
@@ -752,6 +788,7 @@ export function bequeath(world, i) {
     pop.weapon[i] = 0;
     pop.tool[i] = 0;
     pop.gear[i] = 0;
+    pop.cloak[i] = 0;
     if (list.length === 0) return;
     const tribe = world.tribeById.get(pop.tribe[i]);
     const x = pop.x[i];
@@ -802,6 +839,7 @@ const NOUNS = [
     ['Tooth', 'Edge', 'Claw', 'Fang', 'Shard', 'Sliver'],
     ['Bounty', 'Nest', 'Cradle', 'Plenty', 'Hoard', 'Harvest'],
     ['Ember', 'Flame', 'Dawn', 'Glow', 'Spark', 'Blaze', 'Eye'],
+    ['Mantle', 'Pelt', 'Hearth', 'Shroud', 'Fleece', 'Embrace', 'Winter'],
 ];
 const pick = (rng, list) => list[Math.floor(rng.next() * list.length)];
 const ORDINALS = ['zeroth', 'first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth'];

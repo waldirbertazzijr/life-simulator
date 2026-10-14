@@ -47,7 +47,11 @@
 //                                            `spears` (x, y, vx, vy, progress, kind each: kind an ITEM_KINDS
 //                                            code, 1 a spear, 2 an arrow), and `carcasses`, the player's
 //                                            spears in flight and kills not yet butchered (spears.js);
-//                                            items: `items`, `newItems`, `goneItems` (Packer.packItems)
+//                                            items: `items`, `newItems`, `goneItems` (Packer.packItems);
+//                                            berry bushes and fruit trees: `newPlants` {x, y, kind} once,
+//                                            then `fruit` (a Uint8Array, 0..255 a plant) when it changed
+//                                            (Packer.packPlants); `player` also says the cloak worn, the
+//                                            cold felt (0..1) and whether it is warm (by a lit fire)
 //        reply {id, value}
 //
 // Snapshots are pulled, not pushed: the main thread asks for one each frame
@@ -90,8 +94,9 @@ export const STRIDE = COLUMNS.length + 1; // values per individual, with prev
 // What a snapshot carries of each living tribe, as numbers: id, members,
 // adults, store, births; where its camp is (it can move: orders.js); its
 // standing order: a code (an index into ORDER_KINDS, 0 for none) and its x,
-// y; and the wood, flint and hide in its store (items.js).
-export const TRIBE_STRIDE = 13;
+// y; the wood, flint and hide in its store (items.js); and its fire (0 out,
+// else how well it burns, 0..1: cold.js).
+export const TRIBE_STRIDE = 14;
 
 // What a snapshot carries of each item (items.js), as numbers: id, bearer (a
 // person's id, 0 if it lies on the ground), x, y (where it lies, when it
@@ -343,6 +348,8 @@ export class Packer {
         this.seen = new Set();      // ...and in this one
         this.free = [];             // buffers handed back, to reuse
         this.time = -1;             // the world time last packed
+        this.plantsSent = -1;       // how many plants were described (-1: none yet)
+        this.fruitRev = -1;         // and as of which change their fruit was sent
     }
 
     reset() {
@@ -354,6 +361,8 @@ export class Packer {
         this.itemRev.clear();
         this.sent.clear();
         this.time = -1;
+        this.plantsSent = -1;
+        this.fruitRev = -1;
     }
 
     recycle(buffers) {
@@ -412,7 +421,7 @@ export class Packer {
             const o = t.order;
             tribes.push(t.id, t.members, t.adults, t.store, t.births, t.camp.x, t.camp.y,
                 o === null ? 0 : ORDER_KINDS.indexOf(o.kind), o === null ? 0 : o.x, o === null ? 0 : o.y,
-                t.wood, t.flint, t.hide);
+                t.wood, t.flint, t.hide, t.fire);
         }
         const fallen = [];
         for (const t of world.fallen) fallen.push(t.id, t.ended);
@@ -429,7 +438,29 @@ export class Packer {
             }
         }
         const { items, newItems, goneItems } = this.packItems(world);
-        return { buffer, size, counts, grassLength: g.length, time: world.time, fresh, tribes, fallen, newTribes, items, newItems, goneItems };
+        const out = { buffer, size, counts, grassLength: g.length, time: world.time, fresh, tribes, fallen, newTribes, items, newItems, goneItems };
+        this.packPlants(world, out);
+        return out;
+    }
+
+    // Berry bushes and fruit trees (plants.js): where each stands and what
+    // it is, once (`newPlants`: {x, y, kind}, again only if their number
+    // changes), and how much fruit is on each (`fruit`: a Uint8Array, 0..255
+    // of a full crop) when it has changed.
+    packPlants(world, out) {
+        const plants = world.plants;
+        if (!plants) return;
+        if (this.plantsSent !== plants.n) {
+            this.plantsSent = plants.n;
+            this.fruitRev = -1;
+            out.newPlants = { x: plants.x.slice(0, plants.n), y: plants.y.slice(0, plants.n), kind: plants.kind.slice(0, plants.n) };
+        }
+        if (this.fruitRev !== plants.rev) {
+            this.fruitRev = plants.rev;
+            const fruit = new Uint8Array(plants.n);
+            for (let j = 0; j < plants.n; j++) fruit[j] = Math.round(plants.fruit[j] * 255);
+            out.fruit = fruit;
+        }
     }
 
     // Items: every live one as numbers (ITEM_STRIDE each); described when

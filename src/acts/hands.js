@@ -9,7 +9,8 @@
 //   butcher   a step's cutting at a carcass, into the pouch
 //   gather    a step's gathering from the ground underfoot: food from the
 //             grass, or (with items) wood in forest and flint on rock, into
-//             the load (material)
+//             the load (material); by a ripe berry bush or fruit tree, its
+//             fruit, into the pouch (fruit)
 //   eat       from the pouch
 //   store     at the rack: everything carried into the tribe's store
 //   take      at the rack, with empty hands: food for the road
@@ -22,6 +23,7 @@
 import { STATE } from '../population.js';
 import { strike, aimAt } from '../spears.js';
 import { KIND, TASK, weaponStats, wearItem, carryOf, handWork, yieldAt } from '../items.js';
+import { ripeNear, pick } from '../plants.js';
 import { wrapDelta, wrapPos, livingIndexOf } from '../util.js';
 
 export const AIM = { x: 0, y: 0 };
@@ -125,7 +127,11 @@ export function gather(world, i) {
         pl.gather = false;
         return;
     }
-    pl.work = world.itemsOn ? handWork(world, pop.x[i], pop.y[i], world.tribeById.get(pop.tribe[i])) : TASK.NONE;
+    pl.work = handWork(world, pop.x[i], pop.y[i], world.tribeById.get(pop.tribe[i])); // (items off: NONE, or 'fruit')
+    if (pl.work === 'fruit') {
+        fruit(world, i);
+        return;
+    }
     if (pl.work !== TASK.NONE) {
         material(world, i, pl.work);
         return;
@@ -143,6 +149,24 @@ export function gather(world, i) {
     g[gi] -= take;
     const c = pop.carry[i] + take * P.plantEnergy;
     pop.carry[i] = c > most ? most : c; // hands are full; the rest is left behind
+}
+
+// A step's picking at the nearest ripe berry bush or fruit tree within
+// items.pickReach (plants.js), as a forager picks: plants.pick food (more
+// with a basket) into the pouch, until the hands are full or it is bare.
+function fruit(world, i) {
+    const P = world.p.human;
+    const pl = world.player;
+    const pop = world.humans;
+    const bag = world.itemsOn ? carryOf(world, pop, i) : 1;
+    const room = P.carryMax * bag - pop.carry[i];
+    const j = ripeNear(world, pop.x[i], pop.y[i], world.p.items.pickReach);
+    if (j < 0 || room <= 1e-9) {
+        pl.gather = false;
+        return;
+    }
+    const want = world.p.plants.pick * bag;
+    pop.carry[i] += pick(world, j, want < room ? want : room);
 }
 
 // A step's chopping (mat TASK.WOOD) or knapping (FLINT), as an errand's

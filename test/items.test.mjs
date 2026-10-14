@@ -156,7 +156,7 @@ test('every adult starts with a plain spear; children with nothing', () => {
         spears++;
     }
     assert.equal(spears, w.p.human.tribes * w.p.human.perTribe * 0.8);
-    assert.deepEqual(ITEM_KINDS, ['', 'spear', 'bow', 'club', 'knife', 'basket', 'torch']);
+    assert.deepEqual(ITEM_KINDS, ['', 'spear', 'bow', 'club', 'knife', 'basket', 'torch', 'cloak']);
 });
 
 // ---- Materials -------------------------------------------------------------------------
@@ -360,10 +360,10 @@ test('wear: a normal item breaks after 40 uses, a rare one after 60 (75 if durab
 
 // ---- Crafting ---------------------------------------------------------------------------
 
-test('costs (params.items.costs, by name): spear 2 wood, bow 3 wood and a hide, club 2 wood, knife a flint, basket 2 wood, torch 1 wood', () => {
+test('costs (params.items.costs, by name): spear 2 wood, bow 3 wood and a hide, club 2 wood, knife a flint, basket 2 wood, torch 1 wood, cloak 3 hides', () => {
     const p = config();
     assert.deepEqual(Object.keys(p.items.costs), ITEM_KINDS.slice(1));
-    assert.deepEqual(ITEM_KINDS.slice(1).map((k) => Object.values(p.items.costs[k])), [[2, 0, 0], [3, 0, 1], [2, 0, 0], [0, 1, 0], [2, 0, 0], [1, 0, 0]]);
+    assert.deepEqual(ITEM_KINDS.slice(1).map((k) => Object.values(p.items.costs[k])), [[2, 0, 0], [3, 0, 1], [2, 0, 0], [0, 1, 0], [2, 0, 0], [1, 0, 0], [0, 0, 3]]);
     assert.deepEqual(Object.keys(p.items.costs.bow), ['wood', 'flint', 'hide']);
     assert.equal(costOf(p, KIND.KNIFE), p.items.costs.knife);
     const t = { wood: 3, flint: 0, hide: 0 };
@@ -523,6 +523,7 @@ test('a big kill: tribe-mates near help carry it, and the camp fetches the rest 
     for (let i = 0; i < w.humans.n; i++) [w.humans.task[i], w.humans.work[i], w.humans.goal[i]] = [TASK.NONE, 0, 0];
     const t = w.tribes[0];
     t.store = 0; // (a camp that could use the meat)
+    t.hide = 0;  // (none yet: items.initialHide)
     const P = w.p.human;
     const all = adults(w);
     const [hunter, mate] = all;
@@ -880,6 +881,7 @@ test('crafting by hand: at camp, from the store, items.craftSteps; into the kit;
     const id = control(w);
     t.wood = 5;
     t.flint = 1;
+    t.hide = 0;  // (none: items.initialHide)
     t.store = 0; // (a hungry camp: the others make nothing, all being armed)
     act(w, 'craft', { kind: 'bow', flint: true });
     w.step();

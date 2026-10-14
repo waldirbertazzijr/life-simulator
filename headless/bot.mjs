@@ -23,6 +23,13 @@
 // night must be sleeping (STATE.SLEEPING), until the simulation wakes it at
 // dawn; on its first night it stirs once (a step's move), which must wake it.
 //
+// Survival (stage 4, package 2): God sessions begin in summer and Play
+// sessions late in autumn (--from-start: the first dawn of spring). It
+// crafts a cloak first when it wears none (and must have it on at once),
+// goes to a ripe berry bush or fruit tree near and picks it (no faster than
+// plants.pick a step), and in a cold spell stands by the camp's fire a while
+// (where it must be warm, and colder out in it).
+//
 // It fails (exit code 1) on an exception, more than 1% of its moves turned
 // down, anyone alive with no energy, a snapshot.player field missing, food
 // moving as it should not (the pouch out of bounds, a store that is not all
@@ -56,8 +63,15 @@ const FIELDS = {
     reload: 'number', butchering: 'number',
     weapon: 'number', tool: 'number', kit: 'object', crafting: 'object', skill: 'number',
     wood: 'number', flint: 'number', loadMax: 'number',
+    cloak: 'number', cold: 'number', warm: 'boolean',
 };
-const GATHERING = new Set([false, 'food', 'wood', 'flint']);
+const GATHERING = new Set([false, 'food', 'wood', 'flint', 'fruit']);
+// Survival (stage 4, package 2): God sessions begin in summer (the berries),
+// Play sessions late in autumn (the fruit, then the first of the winter: the
+// cold, the fires by day, cloaks), unless --from-start.
+const START = { god: 108000 / 4 + 4500, play: (108000 / 4) * 2 + 4 * 4500 };
+const RIPE_NOTICE = 150; // a ripe berry bush or fruit tree this near: it goes to pick it
+const FIRE_STAND = 90;   // in a cold spell, it stands by the fire this long
 // Out of every MATERIAL_EVERY steps, from MATERIAL_AT for MATERIAL_FOR, it
 // goes for wood (then, the next time, flint) at its tribe's spot.
 const MATERIAL_EVERY = 3000;
@@ -73,7 +87,7 @@ const STAMINA = { max: 100, sprint: 1, roll: 20, light: 10, regen: 2, rest: 7 };
 const NOTICE = 120;    // grazers the bot goes after are at most this far
 const CREEP = 25;      // and it creeps up on them from this close
 const DANGER = 6;      // a predator this close: roll away
-const PROBE_AT = 200;  // the step of the deliberate teleport, which must be turned down
+const PROBE_AT = 200;  // the step (into the session) of the deliberate teleport, which must be turned down
 const AWAY = 500;      // steps on autopilot, halfway through
 const CALLS = ['rally', 'hunt', 'gather', 'defend', 'move', 'wood', 'flint']; // given in turn...
 const CALL_EVERY = 600;                                      // ...this often
@@ -95,9 +109,30 @@ function parseArgs(argv) {
             opts.seeds = m ? Array.from({ length: +m[2] - +m[1] + 1 }, (_, k) => +m[1] + k) : v.split(',').map(Number);
         } else if (a === '--steps') opts.steps = +next();
         else if (a === '--set') opts.sets.push(next());
+        else if (a === '--from-start') opts.fromStart = true;
         else throw new Error(`unknown argument: ${a}`);
     }
     return opts;
+}
+
+// The nearest berry bush or fruit tree with fruit worth picking (plants.js)
+// within r of (x, y): its index and offset, or null.
+function ripePlant(w, x, y, r, skip) {
+    const pl = w.plants;
+    if (!pl) return null;
+    let best = null;
+    let bestD2 = r * r;
+    for (let j = 0; j < pl.n; j++) {
+        if (pl.fruit[j] < w.p.plants.ripe * 2 || skip.has(j)) continue;
+        const dx = wrapDelta(pl.x[j] - x, w.width);
+        const dy = wrapDelta(pl.y[j] - y, w.height);
+        const d2 = dx * dx + dy * dy;
+        if (d2 < bestD2) {
+            bestD2 = d2;
+            best = { j, dx, dy, d: Math.sqrt(d2) };
+        }
+    }
+    return best;
 }
 
 // The nearest living member of `pop` to (x, y), within r: its index and offset, or null.
@@ -166,7 +201,7 @@ function choose(w, mode, rng) {
     return best < 0 ? 0 : pop.id[best];
 }
 
-function play(params, seed, mode, steps) {
+function play(params, seed, mode, steps, fromStart = false) {
     const stats = {
         seed, mode, controlled: 0, moves: 0, rejected: 0, bites: 0, dodges: 0, heirs: 0, deaths: 0,
         rests: 0, auto: 0, probe: '—', end: '—', problems: [],
@@ -182,6 +217,10 @@ function play(params, seed, mode, steps) {
         // Materials by hand: chopped, knapped, put in the store; Gather wood
         // and flint orders the tribe took.
         chopped: 0, knapped: 0, woodStored: 0, flintStored: 0, matOrders: 0,
+        // Survival: cloaks made and put on, fruit picked (food), steps warm by
+        // a lit fire, spells stood by the fire in the cold (and how the cold
+        // fell there), the coldest it felt.
+        cloaks: 0, worn: 0, fruit: 0, warmSteps: 0, stood: 0, thawed: 0, coldest: 0,
     };
     const problem = (what) => {
         if (stats.problems.length < 10) stats.problems.push(what);
@@ -193,6 +232,12 @@ function play(params, seed, mode, steps) {
     const want = () => sim.handle({ type: 'want', recycle: snap ? [snap.buffer] : null });
     sim.handle({ type: 'start', gen: 1, seed, aspect: 1.6, params });
     const w = sim.world; // read-only, as the page reads its Mirror
+    if (!fromStart) {
+        // (The world as if it began in another season: START.)
+        w.time = START[mode];
+        w.clock();
+    }
+    const t0 = w.time;
     const P = w.p.human;
     const Q = w.p.play;
     const T = w.terrain;
@@ -207,11 +252,11 @@ function play(params, seed, mode, steps) {
     };
 
     // The body, as the page has it.
-    const body = { id: 0, x: 0, y: 0, heading: 0, crouch: false, stamina: STAMINA.max, idle: 0, rolling: 0, rx: 0, ry: 0, resting: false, rested: 0, night: -1, stir: false, stirAt: -1, turns: 0, bedtime: false };
+    const body = { id: 0, x: 0, y: 0, heading: 0, crouch: false, stamina: STAMINA.max, idle: 0, rolling: 0, rx: 0, ry: 0, resting: false, rested: 0, night: -1, stir: false, stirAt: -1, turns: 0, bedtime: false, standing: 0, coldAt: 0, stoodAt: -1e9 };
     // The hands: when each was last asked for (a step), the carcass being
     // butchered, what the person held before this step (for the checks),
     // and each kill's meat when first seen, with what butchering it gave.
-    const hands = { attackAt: -99, butcher: 0, butcherAt: -99, storeAt: -99, gatherAt: -99, eatAt: -99, pre: null, meat: new Map(), cut: new Map() };
+    const hands = { attackAt: -99, butcher: 0, butcherAt: -99, storeAt: -99, gatherAt: -99, eatAt: -99, pre: null, meat: new Map(), cut: new Map(), plant: -1, plantAt: 0, plants: new Set() };
     // Items: when each was last tried (a step), and what a cycle should bring.
     const kit = { craftAt: -999, pickAt: -99, cycleAt: 0, skillAt: -999, toolAt: -99, expect: 0, expectId: 0, tried: new Set(), dropped: false };
     const itemsOn = w.itemsOn;
@@ -250,6 +295,7 @@ function play(params, seed, mode, steps) {
             body.rolling = 0;
             body.resting = false;
             body.turns = 0;
+            body.standing = 0;
             mine.add(p.id);
         }
         probing = false;
@@ -291,6 +337,12 @@ function play(params, seed, mode, steps) {
                 if (w.now.part === 'dawn') stats.woke++;
                 else if (body.stir && w.night && body.stirAt === w.time - 1) stats.stirred++;
             }
+            // The fire (package 2): within its reach while it burns, warm.
+            const fd = Math.hypot(wrapDelta(tribe.camp.x - p.x, w.width), wrapDelta(tribe.camp.y - p.y, w.height));
+            if (tribe.fire > 0 && fd < w.p.items.fireReach - 0.5 && !p.warm) problem(`step ${w.time}: by a lit fire (${tribe.fire.toFixed(2)}, ${fd.toFixed(1)} off), not warm`);
+            if (p.warm) stats.warmSteps++;
+            if (p.cold > stats.coldest) stats.coldest = p.cold;
+            if (!(p.cold >= 0 && p.cold <= 1)) problem(`step ${w.time}: cold ${p.cold}`);
         }
         // Items: what it holds, whether it is in camp.
         const tool = itemsOn && p.tool ? w.items.get(p.tool) : undefined;
@@ -303,7 +355,9 @@ function play(params, seed, mode, steps) {
         }
         kit.expect = 0;
         const craftable = () => {
-            // A tool if it has none; else a spare weapon, a spare tool; whatever the store affords.
+            // A cloak first if it wears none (package 2); a tool if it has
+            // none; else a spare weapon, a spare tool; whatever the store affords.
+            if (p.cloak === 0 && tribe.hide >= costOf(w.p, KIND.CLOAK).hide) return KIND.CLOAK;
             const kinds = p.tool === 0 ? [KIND.TORCH, KIND.KNIFE, KIND.BASKET]
                 : p.kit.weapons.length < 2 ? [KIND.SPEAR, KIND.BOW, KIND.CLUB]
                 : p.kit.tools.length < 2 ? [KIND.KNIFE, KIND.TORCH, KIND.BASKET] : [];
@@ -356,6 +410,30 @@ function play(params, seed, mode, steps) {
             }
         } else if (itemsOn && p.crafting) {
             v = 0; // making something: a move would stop it
+        } else if (body.standing > 0 || (!evening && p.cold >= w.p.cold.comfort && tribe.fire > 0 && w.time > body.stoodAt + 600)) {
+            // A cold spell (package 2): to the fire, and stand by it a while;
+            // the cold it feels there must be less than out in it.
+            if (body.standing === 0) {
+                body.standing = FIRE_STAND;
+                body.coldAt = p.cold;
+                body.stoodAt = w.time;
+                stats.stood++;
+            }
+            const dx = wrapDelta(tribe.camp.x - body.x, w.width);
+            const dy = wrapDelta(tribe.camp.y - body.y, w.height);
+            const d = Math.hypot(dx, dy) || 1;
+            if (d > 4) {
+                if (T !== null) {
+                    T.way(tribe.paths, body.x, body.y, dx, dy, d);
+                    ux = T.ux;
+                    uy = T.uy;
+                } else {
+                    ux = dx / d;
+                    uy = dy / d;
+                }
+                v = Math.min(d - 3, top * P.cruise);
+            } else if (--body.standing === 0 && p.cold < body.coldAt) stats.thawed++;
+            if (evening || tribe.fire === 0) body.standing = 0; // (bedtime, or the fire out: on with the day)
         } else if (evening) {
             // Dusk and night: home, and to sleep at camp ("Rest at camp").
             const dx = wrapDelta(tribe.camp.x - body.x, w.width);
@@ -419,6 +497,13 @@ function play(params, seed, mode, steps) {
             const cdy = wrapDelta(tribe.camp.y - body.y, w.height);
             const campD = Math.hypot(cdx, cdy) || 1;
             const lying = itemsOn && w.time > kit.pickAt + 20 ? lyingNear(w, body.x, body.y, p, kit.tried) : null;
+            // A ripe berry bush or fruit tree near (package 2): to it, and pick.
+            // (One it cannot get to in a while, past water or a cliff, it leaves be.)
+            const ripe = p.carry < STORE_AT ? ripePlant(w, body.x, body.y, RIPE_NOTICE, hands.plants) : null;
+            if (ripe && ripe.j !== hands.plant) {
+                hands.plant = ripe.j;
+                hands.plantAt = w.time;
+            } else if (ripe && p.gathering !== 'fruit' && w.time > hands.plantAt + 400) hands.plants.add(ripe.j);
             // Materials (items): in a spell for wood (or flint), to the
             // tribe's spot for it, if the ground there gives it by hand; a
             // full load, or one left when the spell is over, home to the rack.
@@ -487,6 +572,21 @@ function play(params, seed, mode, steps) {
                         uy = sdy / sd;
                     }
                     v = Math.min(sd, top * P.cruise);
+                }
+            } else if (ripe && (gathering || !prey)) {
+                // A ripe plant, in a spell of gathering (or nothing to hunt):
+                // by it (well within items.pickReach), E held, the simulation
+                // says it picks fruit (handWork); else on the way there.
+                if (ripe.d < w.p.items.pickReach - 2) {
+                    if (p.gathering === 'fruit') v = 0;
+                    else if (w.time > hands.gatherAt + 5) {
+                        send({ type: 'act', seq: ++seq, action: 'gather', on: true });
+                        hands.gatherAt = w.time;
+                    }
+                } else {
+                    ux = ripe.dx / ripe.d;
+                    uy = ripe.dy / ripe.d;
+                    v = Math.min(ripe.d - 2, top * P.cruise);
                 }
             } else if (prey && !gathering) {
                 ux = prey.dx / (prey.d || 1);
@@ -595,7 +695,7 @@ function play(params, seed, mode, steps) {
 
         // The deliberate teleport: far beyond any allowance, never applied.
         let { x, y } = body;
-        if (w.time === PROBE_AT) {
+        if (w.time === t0 + PROBE_AT) {
             x = wrapPos(body.x + 40, w.width);
             probing = true;
         }
@@ -620,8 +720,11 @@ function play(params, seed, mode, steps) {
         for (const e of snap.events) {
             if (e.type === 'bite' && mine.has(e.id)) stats.bites++;
             else if (e.type === 'dodge' && mine.has(e.id)) stats.dodges++;
-            else if (e.type === 'heir') stats.heirs++;
-            else if (e.type === 'death' && e.kind === 'human' && mine.has(e.id)) stats.deaths++;
+            else if (e.type === 'heir') {
+                stats.heirs++;
+                // (Nobody leaves the world without a death: one gone with NaN energy would.)
+                if (!snap.events.some((d) => d.type === 'death' && d.id === e.from)) problem(`step ${w.time}: an heir to ${e.from}, who did not die`);
+            } else if (e.type === 'death' && e.kind === 'human' && mine.has(e.id)) stats.deaths++;
             else if (e.type === 'released' || e.type === 'over') ended = e.type;
             else if (e.type in stats.answers && e.tribe === snap.player?.tribe) {
                 stats.answers[e.type]++;
@@ -694,6 +797,11 @@ function play(params, seed, mode, steps) {
             if (!hands.cut.has(cutting)) stats.carcasses++; // (a kill it cut up, all of it or a pouch at a time)
             stats.butchered += gain;
             hands.cut.set(cutting, (hands.cut.get(cutting) ?? 0) + gain);
+        } else if (pre.gathering === 'fruit' || p.gathering === 'fruit') {
+            // Picking (package 2): no faster than plants.pick (× a basket's carry).
+            stats.fruit += gain;
+            const most = w.p.plants.pick * (itemsOn ? p.loadMax / w.p.items.load : 1);
+            if (gain > most + 1e-9) problem(`step ${w.time}: picked ${gain} in a step, at most ${most}`);
         } else if (pre.gathering || p.gathering) stats.gathered += gain;
     };
 
@@ -722,8 +830,17 @@ function play(params, seed, mode, steps) {
     // bigger than it may be, no material in store below nothing.
     const items = (p) => {
         for (const e of snap.events) {
-            if (e.type === 'crafted' && mine.has(e.by)) stats.crafted++;
-            else if (e.type === 'picked' && mine.has(e.by) && kit.tried.has(e.item)) stats.picked++;
+            if (e.type === 'crafted' && mine.has(e.by)) {
+                stats.crafted++;
+                if (e.kind === KIND.CLOAK && p && !p.auto) {
+                    // A cloak (package 2) made by hand: put on at once. (On
+                    // autopilot the tribe's crafter makes one for the camp's
+                    // goods, unless it is better than the one it wears.)
+                    stats.cloaks++;
+                    if (p.id === e.by && p.cloak === e.item) stats.worn++;
+                    else if (p.id === e.by) problem(`step ${w.time}: made cloak ${e.item}, wearing ${p.cloak}`);
+                }
+            } else if (e.type === 'picked' && mine.has(e.by) && kit.tried.has(e.item)) stats.picked++;
             else if (e.type === 'skill' && mine.has(e.id)) stats.skills++;
             else if (e.type === 'tool' && mine.has(e.id)) stats.tools++;
             else if (e.type === 'broke' && mine.has(e.bearer)) stats.broke++;
@@ -734,11 +851,15 @@ function play(params, seed, mode, steps) {
         if (!p || p.over || !p.id) return;
         const K = w.p.items.kit;
         if (p.kit.weapons.length > K || p.kit.tools.length > K) problem(`step ${w.time}: a kit of ${p.kit.weapons.length} weapons, ${p.kit.tools.length} tools`);
-        for (const id of [p.weapon, p.tool, ...p.kit.weapons, ...p.kit.tools]) {
+        for (const id of [p.weapon, p.tool, p.cloak, ...p.kit.weapons, ...p.kit.tools]) {
             if (!id) continue;
             const item = w.items.get(id);
-            if (!item || item.bearer !== p.id) problem(`step ${w.time}: item ${id} in hand or kit is ${item ? `borne by ${item.bearer}` : 'gone'}`);
+            if (!item || item.bearer !== p.id) {
+                problem(`step ${w.time}: item ${id} (${item ? item.kind : '?'}) in hand, worn or in the kit of ${p.id}${p.auto ? ' (autopilot)' : ''} is ${item ? `borne by ${item.bearer}` : 'gone'}`
+                    + ` [weapon ${p.weapon}, tool ${p.tool}, cloak ${p.cloak}, kit ${p.kit.weapons}/${p.kit.tools}; events ${snap.events.map((e) => `${e.type}:${e.item ?? e.id ?? ''}`).join(' ')}]`);
+            }
         }
+        if (p.cloak && w.items.get(p.cloak)?.kind !== KIND.CLOAK) problem(`step ${w.time}: wearing ${p.cloak}, not a cloak`);
     };
 
     // Leave the body to the AI (on) or take it back (off); back by hand, the
@@ -815,7 +936,7 @@ const all = [];
 for (const seed of opts.seeds) {
     for (const mode of ['god', 'play']) {
         const t0 = performance.now();
-        const s = play(structuredClone(params), seed, mode, opts.steps);
+        const s = play(structuredClone(params), seed, mode, opts.steps, opts.fromStart);
         s.ms = performance.now() - t0;
         all.push(s);
         console.log(
@@ -835,6 +956,8 @@ for (const seed of opts.seeds) {
             console.log(`        materials: ${s.chopped.toFixed(1)} wood chopped, ${s.knapped.toFixed(1)} flint knapped; stored ${s.woodStored.toFixed(1)} wood, `
                 + `${s.flintStored.toFixed(1)} flint; ${s.matOrders} Gather wood/flint orders taken`);
         }
+        console.log(`        survival: ${s.cloaks} cloaks made, ${s.worn} put on; ${s.fruit.toFixed(0)} fruit picked; ${s.warmSteps} steps warm by a fire; `
+            + `stood by it ${s.stood} times in the cold (${s.thawed} warmer there); the coldest it felt ${s.coldest.toFixed(2)}`);
         for (const msg of s.problems) console.log(`        ✗ ${msg}`);
     }
 }
@@ -846,9 +969,14 @@ const bad = all.filter((s) => s.problems.length);
 const sum = (k) => all.reduce((t, s) => t + s[k], 0);
 const ITEM_WORK = ['crafted', 'picked', 'cycled', 'skills', 'tools', 'chopped', 'knapped', 'woodStored', 'flintStored', 'matOrders'];
 const NIGHT = ['nights', 'asleep', 'woke', 'stirred'];
-const idle = ['kills', 'carcasses', 'stored', ...NIGHT, ...(params.items.enabled ? ITEM_WORK : [])].filter((k) => !(sum(k) > 0));
+// Survival (package 2): fruit picked, warm by a fire, stood by it in the
+// cold and warmer there; with items, cloaks made and put on. (Not from the
+// first spring, --from-start: no fruit, no cold.)
+const SURVIVAL = opts.fromStart ? [] : ['fruit', 'warmSteps', 'stood', 'thawed', ...(params.items.enabled ? ['cloaks', 'worn'] : [])];
+const idle = ['kills', 'carcasses', 'stored', ...NIGHT, ...SURVIVAL, ...(params.items.enabled ? ITEM_WORK : [])].filter((k) => !(sum(k) > 0));
 if (idle.length) console.log(`        ✗ no ${idle.join(', no ')} in any session`);
 console.log(`\n${all.length - bad.length}/${all.length} sessions clean · ${sum('kills')} kills, ${sum('carcasses')} butchered, `
     + `${sum('stored').toFixed(0)} food stored · ${NIGHT.map((k) => `${sum(k)} ${k}`).join(', ')}${params.items.enabled ? ` · items: ${ITEM_WORK.map((k) => `${+sum(k).toFixed(1)} ${k}`).join(', ')}` : ''} · `
+    + `survival: ${['cloaks', 'worn', 'fruit', 'warmSteps', 'stood', 'thawed'].map((k) => `${+sum(k).toFixed(0)} ${k}`).join(', ')} · `
     + `${(all.reduce((a, s) => a + s.ms, 0) / 1000).toFixed(1)} s\n`);
 process.exit(bad.length || idle.length ? 1 : 0);

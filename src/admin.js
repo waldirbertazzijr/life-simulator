@@ -22,7 +22,7 @@ import { setParam } from './sim.js';
 import { applyAct } from './player.js';
 import { spawnPerson } from './tribes.js';
 import { personName, yearOf } from './play/names.js'; // (a year as the page counts ages)
-import { ITEM_KINDS, KIND, isWeapon, newItem, hold, heldLike, putDown, forge, fraction, carryOf } from './items.js';
+import { ITEM_KINDS, KIND, isWeapon, isWorn, traitsOf, wearMax, newItem, hold, heldLike, putDown, forge, fraction, carryOf } from './items.js';
 import { TAU, wrapDelta, wrapMod, livingIndexOf } from './util.js';
 
 const MAX_SKIP = 50000;  // steps a skip may run at once
@@ -32,7 +32,7 @@ const MAX_EVENTS = 2000; // as sim.js: events kept for the next snapshot at most
 const RARITIES = ['normal', 'rare', 'legendary'];
 const WEAPON_TRAITS = ['range', 'accuracy', 'reload', 'durability'];
 const TOOL_TRAITS = ['effect', 'durability'];
-const TRAITS = ['range', 'accuracy', 'reload', 'effect', 'durability'];
+const TRAITS = ['range', 'accuracy', 'reload', 'effect', 'durability', 'warmth'];
 const SLOTS = ['weapon', 'tool'];
 const MATERIALS = ['food', 'wood', 'flint', 'hide'];
 const SPECIES = ['herbivore', 'carnivore', 'person'];
@@ -48,7 +48,7 @@ export const COMMANDS = {
         about: 'an item: into your hand if it is empty, else your kit, else at your feet',
         more: [
             `kinds: ${ITEM_KINDS.slice(1).join(' ')}`,
-            `traits: weapons ${WEAPON_TRAITS.join(' ')}; tools ${TOOL_TRAITS.join(' ')} (rare rolls one if none is given)`,
+            `traits: weapons ${WEAPON_TRAITS.join(' ')}; tools ${TOOL_TRAITS.join(' ')}; a cloak warmth (rare rolls one if none is given)`,
             'a legendary item gets its name and history as legends do (deed: admin)',
         ],
     },
@@ -217,7 +217,7 @@ function kindArg(word) {
 
 function traitArg(kind, word) {
     const t = String(word).toLowerCase();
-    const allowed = isWeapon(kind) ? WEAPON_TRAITS : TOOL_TRAITS;
+    const allowed = traitsOf(kind);
     if (!allowed.includes(t)) refuse(`a ${ITEM_KINDS[kind]}'s traits are ${allowed.join(', ')}`);
     return t;
 }
@@ -256,9 +256,16 @@ function forgeHere(world, item, by) {
 function place(world, f, item) {
     const { pop, i } = f;
     const pl = world.player;
-    if (heldLike(world, i, item.kind) === null) {
+    const held = heldLike(world, i, item.kind);
+    if (held === null) {
         hold(world, i, item);
-        return 'in your hand';
+        return isWorn(item.kind) ? 'on your back' : 'in your hand';
+    }
+    if (isWorn(item.kind)) {
+        // (A cloak: on, the old one off at your feet.)
+        putDown(world, i, held);
+        hold(world, i, item);
+        return 'on your back';
     }
     const spares = f.player && pl.kit ? (isWeapon(item.kind) ? pl.kit.weapons : pl.kit.tools) : null;
     if (spares !== null && spares.length < world.p.items.kit) {
@@ -276,7 +283,7 @@ function place(world, f, item) {
 
 // A trait for a rare `kind`, rolled.
 function rollTrait(world, kind) {
-    const list = isWeapon(kind) ? WEAPON_TRAITS : TOOL_TRAITS;
+    const list = traitsOf(kind);
     return list[Math.floor(world.rng.next() * list.length)];
 }
 
@@ -284,8 +291,7 @@ function rollTrait(world, kind) {
 function makeRare(world, item, trait) {
     const I = world.p.items;
     const left = fraction(world, item);
-    let max = item.kind === KIND.TORCH ? I.torch : I.rareUses;
-    if (trait === 'durability') max *= I.rare;
+    const max = wearMax(world.p, item.kind, 1, trait);
     item.rarity = 1;
     item.trait = trait;
     item.mult = I.rare;

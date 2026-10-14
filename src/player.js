@@ -56,6 +56,7 @@ import { ITEM_KINDS, SKILLS, TASK, putDown, spend, handWork } from './items.js';
 import { wrapDelta, wrapPos, livingIndexOf } from './util.js';
 import { attack, eat, store, take, gather, butcher, inCamp, loadMax } from './acts/hands.js';
 import { useSkill, useTool, pickUp, cycle, drop, startCrafting, finishCrafting, stopCrafting } from './acts/gear.js';
+import { feel, COLD, coldCost, deathBy, wearCloak, inShelter, byFire } from './cold.js';
 
 // Take over the person `id` in `mode` ('god' or 'play'), or let go with id 0.
 // False, with nothing changed, if there is no such person alive.
@@ -225,6 +226,7 @@ export function stepPlayer(world, i) {
     const rolling = time < pl.rollUntil;
     focus[i] = 0;
     if (timer[i] > 0) timer[i]--; // spear "reload"
+    feel(world, i, tribe); // the cold where it stands, as anyone (cold.js COLD)
 
     // Move to where the page has the body, if it could have got there: no
     // farther than top speed allows in the steps since the last accepted move
@@ -294,6 +296,7 @@ export function stepPlayer(world, i) {
         e += take;
     }
     e -= P.baseCost * upkeep[i] + moveCost;
+    if (COLD.exposure > world.p.cold.comfort) e -= coldCost(world); // (the cold, as anyone)
     if (e < P.starving * P.maxEnergy) lifespan[i]--; // (hunger ages, as anyone)
     if (e > P.maxEnergy) e = P.maxEnergy;
     carry[i] = c;
@@ -317,10 +320,11 @@ export function stepPlayer(world, i) {
     if (pl.spirit > Q.spiritMax) pl.spirit = Q.spiritMax;
 
     if (e <= 0) {
-        world.die(pop, i, 'starvation');
+        world.die(pop, i, deathBy(world)); // (starvation, or it froze)
         return;
     }
     energy[i] = e;
+    if (world.itemsOn && COLD.chill > 0 && pop.cloak[i]) wearCloak(world, i);
 }
 
 // At the end of each step (World.step): if the controlled person has died,
@@ -405,8 +409,10 @@ function heirOf(world, id, tribe) {
     return best;
 }
 
-// What the hands gather, by TASK (NONE: food), as snapshot.player says it.
+// What the hands gather, by TASK (NONE: food), as snapshot.player says it
+// (and by a ripe plant, items.js handWork's 'fruit').
 const GATHERED = ['food', 'food', 'wood', 'flint', 'food'];
+const gathered = (work) => (work === 'fruit' ? 'fruit' : GATHERED[work]);
 
 // Is individual i of `pop` the controlled person? (On autopilot too.)
 export function isControlled(world, pop, i) {
@@ -444,7 +450,7 @@ export function playerSnapshot(world) {
         // underfoot: items.js handWork), or not (false); butchering a carcass
         // (its id, 0: not).
         reload: alive ? pop.timer[i] : 0,
-        gathering: pl.gather && alive ? GATHERED[world.itemsOn ? handWork(world, pop.x[i], pop.y[i], world.tribeById.get(pop.tribe[i])) : TASK.NONE] : false,
+        gathering: pl.gather && alive ? gathered(handWork(world, pop.x[i], pop.y[i], world.tribeById.get(pop.tribe[i]))) : false,
         butchering: pl.butcher,
         // The wood and flint it carries, and the most it can (items.load, × a basket's carry).
         wood: pl.wood,
@@ -458,7 +464,18 @@ export function playerSnapshot(world) {
         kit: { weapons: pl.kit.weapons.slice(), tools: pl.kit.tools.slice() },
         crafting: pl.crafting === null ? null : { kind: pl.crafting.kind, until: pl.crafting.until },
         skill: 0,
+        // The cold (package 2, cold.js): the cloak worn (an item id, 0: none),
+        // the exposure now (0..1: the chill less what keeps it off), and
+        // whether it stands by a lit fire or under a roof.
+        cloak: alive ? pop.cloak[i] : 0,
+        cold: 0,
+        warm: false,
     };
+    if (alive) {
+        const tribe = world.tribeById.get(pop.tribe[i]);
+        out.cold = feel(world, i, tribe);
+        out.warm = byFire(world, i, tribe) > 0 || inShelter(world, i);
+    }
     if (alive && pop.weapon[i]) {
         const weapon = world.items.get(pop.weapon[i]);
         const skill = weapon ? SKILLS[weapon.kind] : null;

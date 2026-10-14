@@ -5,8 +5,9 @@
 //   craft    make an item at camp (startCrafting): the materials are taken
 //            from the store now, and it is done after items.craftSteps
 //            (finishCrafting), into the empty hand, else the kit, else the
-//            camp's goods; a move stops it (stopCrafting) and the materials
-//            go back
+//            camp's goods (a cloak, kind 7: put on, the old one laid among
+//            the camp's goods); a move stops it (stopCrafting) and the
+//            materials go back
 //   skill    the weapon's skill, for Spirit (SKILLS in items.js)
 //   tool     the tool in hand: a knife cuts (or, by a carcass, butchers), a
 //            torch drives off predators near, a basket gathers
@@ -19,7 +20,7 @@
 // columns, items.js).
 import { STATE } from '../population.js';
 import { strike, aimAt } from '../spears.js';
-import { KIND, SKILLS, isWeapon, weaponStats, hold, unhold, lay, putDown, wearItem, heldLike, affords, spend } from '../items.js';
+import { KIND, SKILLS, isWeapon, isWorn, weaponStats, hold, unhold, lay, putDown, wearItem, heldLike, affords, spend } from '../items.js';
 import { craft } from '../tasks.js';
 import { wrapDelta } from '../util.js';
 import { AIM, ARM, aim, loose, inFront, inCamp } from './hands.js';
@@ -167,7 +168,8 @@ export function pickUp(world, i, a) {
     const dy = wrapDelta(item.y - pop.y[i], world.height);
     if (dx * dx + dy * dy > I.pickReach * I.pickReach) return;
     const held = heldLike(world, i, item.kind);
-    if (held) {
+    if (held && isWorn(held.kind)) putDown(world, i, held); // (a cloak: the old one off, where it stands)
+    else if (held) {
         const spares = isWeapon(held.kind) ? pl.kit.weapons : pl.kit.tools;
         if (spares.length < I.kit) {
             unhold(world, i, held);
@@ -218,7 +220,7 @@ export function startCrafting(world, i, a) {
     const pl = world.player;
     const pop = world.humans;
     const kind = a.kind;
-    if (pl.crafting !== null || !(kind >= KIND.SPEAR && kind <= KIND.TORCH) || pop.age[i] < P.maturity || !inCamp(world, pl.id)) return;
+    if (pl.crafting !== null || !(kind >= KIND.SPEAR && kind <= KIND.CLOAK) || pop.age[i] < P.maturity || !inCamp(world, pl.id)) return;
     const tribe = world.tribeById.get(pop.tribe[i]);
     if (!affords(world.p, tribe, kind)) return;
     spend(world.p, tribe, kind);
@@ -233,7 +235,8 @@ export function startCrafting(world, i, a) {
     pl.butcher = 0;
 }
 
-// Done: into the empty hand, else the kit, else among the camp's goods.
+// Done: into the empty hand, else the kit, else among the camp's goods. (A
+// cloak: put on, the one worn before laid among the camp's goods.)
 export function finishCrafting(world, i) {
     const pl = world.player;
     const pop = world.humans;
@@ -241,6 +244,12 @@ export function finishCrafting(world, i) {
     pl.crafting = null;
     const tribe = world.tribeById.get(pop.tribe[i]);
     const item = craft(world, i, c.kind, c.flint, tribe);
+    if (isWorn(item.kind)) {
+        const worn = heldLike(world, i, item.kind);
+        if (worn) putDown(world, i, worn);
+        hold(world, i, item);
+        return;
+    }
     const spares = isWeapon(item.kind) ? pl.kit.weapons : pl.kit.tools;
     if (heldLike(world, i, item.kind) === null) hold(world, i, item);
     else if (spares.length < world.p.items.kit) {

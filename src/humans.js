@@ -20,6 +20,8 @@ import {
     guards, raided, raiderKilled,
 } from './items.js';
 import { stepTask, job, campItems, wildPickup, fetch } from './tasks.js';
+import { feel, COLD, coldCost, deathBy, wearCloak, tooCold, FIRE_CLEAR, WARM_NEAR, WARM_FAR } from './cold.js';
+import { ripeFor, pick, TO } from './plants.js';
 import { wrapDelta, wrapMod } from './util.js';
 
 // The way to a tribe's camp, (ddx, ddy) away at distance d: straight there on
@@ -121,7 +123,7 @@ export function driveOff(world, j) {
 // speed, how far it sees, and the way home (campDx, campDy), campD long.
 const me = {
     s: 0, e: 0, c: 0, dx: 0, dy: 0, v: 0,
-    adult: false, armed: true, top: 0, sense: 0, campDx: 0, campDy: 0, campD: 0,
+    adult: false, armed: true, top: 0, sense: 0, campDx: 0, campDy: 0, campD: 0, bag: 1,
 };
 
 // One step of every person: the controlled one as the page has it
@@ -137,6 +139,9 @@ const me = {
 //   Defend camp (adults)        keepToCamp, on guard
 //   dusk and night              bedtime: home, and asleep at night (but
 //                               a craft at camp goes on)
+//   a cold spell                warmUp: home to the fire (cold.js: too
+//                               cold out there for what it wears, the
+//                               fire lit, and food at home or a full belly)
 //   on a raid                   raid
 //   a child                     keepToCamp, playing
 //   a task for the tribe        doTask: wood, flint, or crafting (items)
@@ -145,7 +150,13 @@ const me = {
 //                               (raidTarget)
 //   enough food at home         keepToCamp, resting (the hungry eat there;
 //                               at camp, a full camp's chores: tasks.js)
-//   otherwise                   forage: hunt, or gather plants
+//   otherwise                   forage: pick a ripe berry bush or fruit
+//                               tree, hunt, or gather plants
+//
+// The cold (cold.js): as its step begins, each feels the chill where it
+// stands, less what keeps it off (its cloak, its camp's fire, a torch); that
+// exposure costs energy (cold.cost a step at 1), wears its cloak, and one
+// who dies of it froze.
 export function stepHumans(world) {
     const P = world.p.human;
     const pop = world.humans;
@@ -160,6 +171,8 @@ export function stepHumans(world) {
     const itemsOn = world.itemsOn; // items (items.js): what people hold, and their tasks
     const { gear, task } = pop;
     const evening = world.night || world.dusk; // home at dusk, asleep at night (bedtime)
+    const C = world.p.cold;
+    const coldOn = C.enabled;
 
     for (let i = 0; i < n; i++) {
         if (energy[i] <= 0) continue; // killed earlier this step
@@ -203,6 +216,8 @@ export function stepHumans(world) {
         me.campDx = campDx;
         me.campDy = campDy;
         me.campD = campD;
+        me.bag = bag;
+        feel(world, i, tribe); // the cold where it stands (into COLD: cold.js)
 
         const threat = predators.nearest(x[i], y[i], me.sense);
         const stranger = threat < 0 && adult ? people.strangerNear(x[i], y[i], P.meetRadius, i, tribeOf, tribeOf[i]) : -1;
@@ -213,6 +228,7 @@ export function stepHumans(world) {
         else if (rally !== null && rally.ids.has(id[i])) rallied(world, rally, i, tribe);
         else if (adult && order !== null && order.kind === 'defend') keepToCamp(world, i, tribe, STATE.GUARDING);
         else if (evening && !(itemsOn && task[i] === TASK.CRAFT)) bedtime(world, i, tribe);
+        else if (coldOn && tooCold(world, tribe) && (tribe.store > 0 || me.e >= P.hunger * P.maxEnergy)) warmUp(world, i, tribe);
         else if (goal[i] && me.c < trip) {
             if (!raid(world, i)) continue; // (struck down by the camp's defenders)
         } else if (!adult) keepToCamp(world, i, tribe, STATE.PLAYING);
@@ -232,15 +248,17 @@ export function stepHumans(world) {
 
         const v = me.v;
         let e = me.e - (P.baseCost * upkeep[i] + P.moveCost * v * v);
+        if (COLD.exposure > C.comfort) e -= coldCost(world); // (the cold)
         if (e < P.starving * P.maxEnergy) lifespan[i]--; // (hunger ages)
         if (e > P.maxEnergy) e = P.maxEnergy;
         carry[i] = me.c;
         state[i] = me.s;
         if (e <= 0) {
-            world.die(pop, i, 'starvation');
+            world.die(pop, i, deathBy(world)); // (starvation, or it froze)
             continue;
         }
         energy[i] = e;
+        if (itemsOn && COLD.chill > 0 && pop.cloak[i]) wearCloak(world, i);
     }
 }
 
@@ -352,6 +370,43 @@ function rallied(world, rally, i, tribe) {
 function keepToCamp(world, i, tribe, s) {
     me.s = s;
     if (me.campD > world.p.human.campRadius * 0.6) headHome(world, i, tribe);
+    else ring(world, i, FIRE_CLEAR, Infinity);
+}
+
+// The fire pit at the camp's centre (package 2; the page draws it, radius
+// 1.6): nobody stands in it. At camp, one nearer than FIRE_CLEAR steps out
+// of it; one warming by it keeps to a ring from WARM_NEAR to WARM_FAR
+// (cold.js).
+const GOLDEN = Math.PI * (3 - Math.sqrt(5));
+
+// Person i at camp (me.campDx, campDy: the way to its centre), between
+// `near` and `far` of the centre: if it is not, a step that way (a walk,
+// no farther than it needs).
+function ring(world, i, near, far) {
+    const dx = me.campDx;
+    const dy = me.campDy;
+    const d = Math.sqrt(dx * dx + dy * dy);
+    if (d >= near && d <= far) return;
+    const pace = me.top * world.p.human.cruise;
+    if (d < near) {
+        // Out of the fire: away from the centre (from the very centre, on a bearing of its own).
+        if (d > 1e-9) {
+            me.dx = -dx / d;
+            me.dy = -dy / d;
+        } else {
+            const a = world.humans.id[i] * GOLDEN;
+            me.dx = Math.cos(a);
+            me.dy = Math.sin(a);
+        }
+        const need = near - d + 0.25;
+        me.v = need < pace ? need : pace;
+    } else {
+        // In to the ring: toward the centre, to its middle.
+        me.dx = dx / d;
+        me.dy = dy / d;
+        const need = d - (near + far) / 2;
+        me.v = need < pace ? need : pace;
+    }
 }
 
 // Dusk and night: home (a raid is called off, an errand brings home what it
@@ -367,7 +422,30 @@ function bedtime(world, i, tribe) {
     if (me.campD > world.p.human.campRadius * 0.6) {
         me.s = STATE.HOMEWARD;
         headHome(world, i, tribe);
-    } else me.s = world.night ? STATE.SLEEPING : STATE.AT_CAMP;
+    } else {
+        me.s = world.night ? STATE.SLEEPING : STATE.AT_CAMP;
+        ring(world, i, FIRE_CLEAR, Infinity); // (not in the fire)
+    }
+}
+
+// A cold spell (cold.js: too cold out there for what it wears): home to the
+// fire, and by it until the spell is over. A raid is called off, an errand
+// brings home what it has; a craft at camp goes on.
+function warmUp(world, i, tribe) {
+    const pop = world.humans;
+    pop.goal[i] = 0;
+    if (world.itemsOn && pop.task[i] !== TASK.NONE) {
+        if (pop.task[i] !== TASK.CRAFT) pop.work[i] = world.p.items.errand; // (an errand: done)
+        doTask(world, i, tribe);
+        return;
+    }
+    if (me.campD > world.p.human.campRadius * 0.6) {
+        me.s = STATE.HOMEWARD;
+        headHome(world, i, tribe);
+    } else {
+        me.s = STATE.WARMING;
+        ring(world, i, WARM_NEAR, WARM_FAR); // (in a ring around the fire)
+    }
 }
 
 // Hands full: home with it.
@@ -452,7 +530,26 @@ function forage(world, i, tribe, order) {
         return;
     }
     const ground = order !== null && order.kind === 'hunt' ? order : null;
+    // (A ripe berry bush or fruit tree in sight: fast food, before a hunt. Not under Hunt here.)
+    if (world.plants !== null && ground === null && pickPlant(world, i, tribe)) return;
     if ((order !== null && order.kind === 'gather') || !me.armed || !hunt(world, i, tribe, ground)) gatherPlants(world, i, tribe, ground);
+}
+
+// The nearest ripe berry bush or fruit tree within plants.sight (plants.js
+// ripeFor): to it, and pick (plants.pick a step, more with a basket). False
+// if there is none.
+const PICK_REACH = 2;
+function pickPlant(world, i, tribe) {
+    const j = ripeFor(world, i, tribe);
+    if (j < 0) return false;
+    me.s = STATE.GATHERING;
+    if (TO.d > PICK_REACH) {
+        me.dx = TO.dx / TO.d;
+        me.dy = TO.dy / TO.d;
+        const pace = me.top * world.p.human.cruise;
+        me.v = pace < TO.d - 1 ? pace : TO.d - 1;
+    } else me.c += pick(world, j, world.p.plants.pick * me.bag);
+    return true;
 }
 
 // The nearest grazer in sight, if it is on the hunting ground (near home,
@@ -578,12 +675,14 @@ function gatherPlants(world, i, tribe, ground) {
     }
 }
 
-// The move: on its way (me.dx, dy) at its pace (me.v). Water or a cliff
-// ahead, it veers along it.
+// The move: on its way (me.dx, dy) at its pace (me.v), slower in deep snow
+// (cold.js snowPace; the effort is the same). Water or a cliff ahead, it
+// veers along it.
 function move(world, i) {
     const { x, y, heading } = world.humans;
     const { terrain } = world;
-    const v = me.v;
+    const snow = world.snowPace;
+    const v = snow === null ? me.v : me.v * snow[world.grass.index(x[i], y[i])];
     let dx = me.dx;
     let dy = me.dy;
     let nx = wrapMod(x[i] + dx * v, world.width);

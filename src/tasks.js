@@ -13,14 +13,16 @@
 // and items lost too long (stepItems, from World.step).
 import { STATE } from './population.js';
 import {
-    KIND, TASK, ITEM_KINDS, TOOLS, isWeapon, costOf, traitsOf, newItem, fraction, better, heldLike, hold, unhold, lay,
+    KIND, TASK, ITEM_KINDS, TOOLS, isWeapon, isWorn, costOf, traitsOf, newItem, fraction, better, heldLike, hold, unhold, lay,
     campSpot, wearItem, yieldAt, affords, spend, sweep, carryOf,
 } from './items.js';
+import { COLD, bite, tooCold, cloakSeasons, FIRE_CLEAR } from './cold.js';
 import { wrapDelta } from './util.js';
 
 const TALLY = 10;  // steps between a tribe's reckonings of what it needs
 const SWEEP = 50;  // steps between sweeps for burnt-out torches and items left too long
 const STROKE = 30; // a chop or a knap event at most this often, per worker
+const GOLDEN = Math.PI * (3 - Math.sqrt(5));
 
 // ---- Tasks -------------------------------------------------------------------------------
 
@@ -93,7 +95,10 @@ function butcherStep(world, i, tribe, e, c) {
     job.s = STATE.BUTCHERING;
     const before = cc.done;
     cc.done += fast ? 2 : 1;
-    const share = ((fast ? 2 : 1) * cc.total) / cc.steps;
+    // (The player's own kills, fetched by its camp, have no `steps` of their
+    // own: play.butcherSteps, as the player cuts them. Without, the share was
+    // NaN, and the one cutting it vanished with NaN energy.)
+    const share = ((fast ? 2 : 1) * cc.total) / (cc.steps ?? Q.butcherSteps);
     let meat = share > cc.meat ? cc.meat : share;
     let eat = meat * (1 - tribe.sociality);
     if (eat > P.maxEnergy - e) eat = P.maxEnergy - e;
@@ -200,8 +205,10 @@ function errandStep(world, i, tribe, task, campDx, campDy, campD) {
     const pace = P.speed * pop.speedGene[i] * P.cruise;
     const wood = task === TASK.WOOD;
     const spot = wood ? tribe.woodSpot : tribe.flintSpot;
-    if (spot === null || pop.load[i] >= I.load || pop.work[i] >= I.errand) {
-        if (spot === null) pop.work[i] = I.errand;
+    // (In the cold, a shorter errand: less of a load, sooner home. cold.js COLD.)
+    const short = COLD.exposure > world.p.cold.comfort ? 1 - world.p.cold.errand * bite(world) : 1;
+    if (spot === null || pop.load[i] >= I.load * short || pop.work[i] >= I.errand * short) {
+        if (spot === null || (short < 1 && pop.load[i] < I.load)) pop.work[i] = I.errand; // (done: the camp takes the load in)
         job.s = STATE.HOMEWARD;
         wayTo(world, tribe, x, y, campDx, campDy, campD);
         job.v = pace;
@@ -231,6 +238,15 @@ function craftStep(world, i, tribe, campDx, campDy, campD) {
         wayTo(world, tribe, pop.x[i], pop.y[i], campDx, campDy, campD);
         job.v = P.speed * pop.speedGene[i] * P.cruise;
         return;
+    }
+    // (Not in the fire pit at the centre: a step out of it, at work all the while.)
+    const d = Math.sqrt(campDx * campDx + campDy * campDy);
+    if (d < FIRE_CLEAR) {
+        const a = pop.id[i] * GOLDEN;
+        job.dx = d > 1e-9 ? -campDx / d : Math.cos(a);
+        job.dy = d > 1e-9 ? -campDy / d : Math.sin(a);
+        const pace = P.speed * pop.speedGene[i] * P.cruise;
+        job.v = FIRE_CLEAR + 0.25 - d < pace ? FIRE_CLEAR + 0.25 - d : pace;
     }
     if (--pop.work[i] <= 0) finishCraft(world, i, tribe);
 }
@@ -303,12 +319,27 @@ export function campItems(world, i, tribe) {
         pop.task[i] = TASK.NONE;
         pop.work[i] = 0;
     }
-    if (pop.age[i] < world.p.human.maturity) return;
+    if (pop.age[i] < world.p.human.maturity) {
+        if (tribe.goods.length && !pop.cloak[i]) campPickup(world, i, tribe, true); // (a child takes a cloak)
+        return;
+    }
     if (tribe.goods.length) campPickup(world, i, tribe);
     if (pop.task[i] !== TASK.NONE || pop.goal[i] !== 0 || world.night || world.dusk) return; // (no new task after dusk)
-    if (world.carcasses.size) fetch(world, i, tribe);
-    if (pop.task[i] === TASK.NONE && tribe.want !== 0) assign(world, i, tribe);
-    if (pop.task[i] === TASK.NONE && tribe.store >= world.p.human.storeTarget * tribe.members) chore(world, i, tribe);
+    const cold = tooCold(world, tribe); // (a cold spell, for what it wears: nothing out there, only crafting by the fire)
+    if (world.carcasses.size && !cold) fetch(world, i, tribe);
+    if (pop.task[i] === TASK.NONE && tribe.want !== 0) assign(world, i, tribe, cold);
+    if (pop.task[i] !== TASK.NONE || cold) return;
+    if (tribe.store >= world.p.human.storeTarget * tribe.members) chore(world, i, tribe);
+    else firewood(world, i, tribe);
+}
+
+// The fire's wood in autumn and winter, whatever the store holds (a tribe
+// that lets its fire go out in the cold freezes): below items.winterpile
+// nights of it, up to half the adults go for wood.
+function firewood(world, i, tribe) {
+    const I = world.p.items;
+    if (world.now.season < 2 || tribe.woodSpot === null || tribe.wood >= I.fire * I.winterpile * tribe.members) return;
+    if (tribe.chopping < 1 + Math.floor(tribe.adults / 2)) startErrand(world, i, tribe, TASK.WOOD);
 }
 
 // Chores: an adult at camp with nothing the tribe needs done, its store
@@ -319,18 +350,21 @@ export function campItems(world, i, tribe) {
 function chore(world, i, tribe) {
     const I = world.p.items;
     const A = tribe.adults;
-    if (tribe.wood < I.fire * I.woodpile * tribe.members && tribe.woodSpot !== null && tribe.chopping < 1 + Math.floor((A * 2) / 3)) {
+    const nights = world.now.season >= 2 ? I.winterpile : I.woodpile; // (in autumn and winter, more: the cold)
+    if (tribe.wood < I.fire * nights * tribe.members && tribe.woodSpot !== null && tribe.chopping < 1 + Math.floor((A * 2) / 3)) {
         startErrand(world, i, tribe, TASK.WOOD);
     } else if (tribe.flint < I.flintStock * tribe.members && tribe.flintSpot !== null && tribe.quarrying < 1 + Math.floor(A / 6)) {
         startErrand(world, i, tribe, TASK.FLINT);
     }
 }
 
-// From the camp's goods, the first thing better than what person i holds.
-function campPickup(world, i, tribe) {
+// From the camp's goods, the first thing better than what person i holds
+// (`cloaks`: only a cloak, for a child).
+function campPickup(world, i, tribe, cloaks = false) {
     const goods = tribe.goods;
     for (let k = 0; k < goods.length; k++) {
         const item = world.items.get(goods[k]);
+        if (cloaks && item.kind !== KIND.CLOAK) continue;
         const held = heldLike(world, i, item.kind);
         if (!better(world, item, held, true)) continue;
         if (held) {
@@ -375,7 +409,7 @@ export function wildPickup(world, i) {
 // make what it wants if the store has the materials (taken now, a flint more
 // for a chance of rare while items.spare are kept back); otherwise go for the wood
 // or flint it lacks. A few at a time.
-function assign(world, i, tribe) {
+function assign(world, i, tribe, cold = false) {
     const I = world.p.items;
     const pop = world.humans;
     const kind = tribe.want;
@@ -392,6 +426,8 @@ function assign(world, i, tribe) {
         pop.make[i] = make;
         tribe.crafting++;
         if (--tribe.wanted <= 0) tribe.want = 0;
+    } else if (cold) {
+        // (A cold spell: no errand out.)
     } else if (tribe.needWood && tribe.woodSpot !== null && tribe.chopping < 1 + Math.floor(adults / 8)) {
         startErrand(world, i, tribe, TASK.WOOD);
     } else if (tribe.needFlint && tribe.flintSpot !== null && tribe.quarrying < 1) {
@@ -423,6 +459,7 @@ export function startErrand(world, i, tribe, task) {
 export function stepItems(world) {
     if (world.time % SWEEP === 0) sweep(world);
     if (world.time % TALLY === 0) tallyTribes(world);
+    cloakSeasons(world); // (cloaks through the hard winters: cold.js)
 }
 
 // What each tribe needs: its adults without a weapon fit to use (none, or
@@ -443,6 +480,7 @@ export function tallyTribes(world) {
         t.armed = 0;
         t.unarmed = 0;
         t.tooled = 0;
+        t.cloaked = 0;
         t.crafting = 0;
         t.chopping = 0;
         t.quarrying = 0;
@@ -455,6 +493,9 @@ export function tallyTribes(world) {
         if (task === TASK.CRAFT) t.crafting++;
         else if (task === TASK.WOOD) t.chopping++;
         else if (task === TASK.FLINT) t.quarrying++;
+        // (Cloaks: everyone's, children's too.)
+        const k = pop.cloak[i] ? items.get(pop.cloak[i]) : undefined;
+        if (k !== undefined && fraction(world, k) >= I.worn) t.cloaked++;
         if (pop.age[i] < P.maturity) continue;
         if (pl !== null && pl.crafting && pl.id === pop.id[i]) t.kinds[pl.crafting.kind]++; // (what the player is making)
         const w = pop.weapon[i] ? items.get(pop.weapon[i]) : undefined;
@@ -469,14 +510,18 @@ export function tallyTribes(world) {
             t.tooled++;
         }
     }
+    // (Autumn and winter: cloaks for all, before tools, from the hides.)
+    const cold = world.p.cold.enabled && world.now.season >= 2;
     for (const t of world.tribes) {
         let weapons = 0;
         let tools = 0;
+        let cloaks = 0;
         for (const id of t.goods) {
             const item = items.get(id);
             if (fraction(world, item) < I.worn) continue;
             t.kinds[item.kind]++;
             if (isWeapon(item.kind)) weapons++;
+            else if (isWorn(item.kind)) cloaks++;
             else tools++;
         }
         // (A hungry camp, one whose store could not pay for a birth, makes
@@ -487,7 +532,11 @@ export function tallyTribes(world) {
         const needT = A - t.tooled - tools;
         let want = 0;
         let wanted = 0;
-        if (needW > 0) {
+        const needC = cold ? t.members - t.cloaked - cloaks : 0;
+        if (needC > 0 && t.hide >= world.p.items.costs.cloak.hide && t.unarmed <= weapons) {
+            want = KIND.CLOAK;
+            wanted = needC;
+        } else if (needW > 0) {
             want = weaponFor(world.p, t, A);
             wanted = needW;
         } else if (needT > 0 && t.store >= I.tools * (P.birthCost + P.reserve * t.members)) {

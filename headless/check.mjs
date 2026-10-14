@@ -18,6 +18,7 @@ import { World } from '../src/world.js';
 import { ITEM_KINDS } from '../src/items.js';
 import { STATE, STATE_LABEL } from '../src/population.js';
 import { SEASONS, WINTERS, winterOf } from '../src/calendar.js';
+import { feel } from '../src/cold.js';
 
 const KINDS = ['herbivore', 'carnivore', 'human'];
 
@@ -27,6 +28,7 @@ const KINDS = ['herbivore', 'carnivore', 'human'];
 // and last count, its births and deaths by cause, the tribes, and the
 // winter's severity. Births are what the counts cannot otherwise explain.
 function seasonBook(world) {
+    const wrap = (d, size) => (d > size / 2 ? d - size : d < -size / 2 ? d + size : d);
     const c = world.p.calendar;
     const length = c.day * c.seasonDays;
     const pops = { herbivore: world.herbivores, carnivore: world.carnivores, human: world.humans };
@@ -34,7 +36,15 @@ function seasonBook(world) {
     let cur = null;
     const open = (k) => {
         cur = { k, year: Math.floor(k / 4) + 1, season: k % 4, winter: winterOf(c, world.seed, Math.floor(k / 4) + 1), sum: {}, min: {}, end: {}, fat: {}, grass: 0, under: 0, low: 0, samples: 0, born: {}, died: {}, start: {}, deaths: {}, tribes: 0,
-            store: 0, storeMax: 0, perMember: 0, carcasses: 0, carcassMax: 0, lying: 0 };
+            store: 0, storeMax: 0, perMember: 0, carcasses: 0, carcassMax: 0, lying: 0,
+            // Survival (package 2): people at the start; cloaks made (and the
+            // count at the start), worn (share of people, and of adults);
+            // food picked from berry bushes and fruit trees; the fires at
+            // night (tribe-steps lit, out); the exposure people feel; hides
+            // and wood a tribe.
+            people0: world.humans.n, cloaks0: world.itemStats ? world.itemStats.crafted[7] ?? 0 : 0, cloaks: 0, cloaked: 0, cloakedAdults: 0,
+            picked0: world.plantStats?.picked ?? 0, picked: 0, fireLit: 0, fireOut: 0, exposure: 0, warming: 0, hides: 0, wood: 0,
+            frozeAt: [0, 0, 0, 0, 0] }; // (the frozen: at camp, away, cloaked, at camp with the fire out, children)
         for (const kind of KINDS) {
             cur.start[kind] = pops[kind].n;
             cur.deaths[kind] = { ...world.deaths[kind] };
@@ -57,6 +67,8 @@ function seasonBook(world) {
             cur.end[kind] = pops[kind].n;
         }
         cur.tribes = world.tribes.length;
+        cur.cloaks = (world.itemStats ? world.itemStats.crafted[7] ?? 0 : 0) - cur.cloaks0;
+        cur.picked = (world.plantStats?.picked ?? 0) - cur.picked0;
         delete cur.deaths;
         delete cur.start;
         out.push(cur);
@@ -69,6 +81,18 @@ function seasonBook(world) {
             if (k !== cur.k) {
                 close();
                 open(k);
+            }
+            // (The fires, night by night.)
+            if (world.night) for (const t of world.tribes) cur[t.fire > 0 ? 'fireLit' : 'fireOut']++;
+            // (Where the frozen died: at camp or away, with a cloak or not, the camp's fire out or not.)
+            for (const e of world.events) {
+                if (e.type !== 'death' || e.cause !== 'froze') continue;
+                const t = world.tribeById.get(e.tribe);
+                const home = t && Math.hypot(wrap(t.camp.x - e.x, world.width), wrap(t.camp.y - e.y, world.height)) < world.p.human.campRadius;
+                cur.frozeAt[home ? 0 : 1]++;
+                if (e.cloak) cur.frozeAt[2]++;
+                if (home && t.fire === 0) cur.frozeAt[3]++;
+                if (e.child) cur.frozeAt[4]++;
             }
         },
         sample() {
@@ -99,6 +123,36 @@ function seasonBook(world) {
             cur.carcasses += n;
             if (n > cur.carcassMax) cur.carcassMax = n;
             for (const cc of world.carcasses.values()) cur.lying += cc.meat;
+            // The cold: cloaks worn, the exposure felt (cold.js feel), people
+            // warming by the fire; hides and wood in store.
+            const pop = world.humans;
+            let cloaked = 0;
+            let cloakedAdults = 0;
+            let adults = 0;
+            let exposure = 0;
+            let warming = 0;
+            for (let i = 0; i < pop.n; i++) {
+                const adult = pop.age[i] >= world.p.human.maturity;
+                if (adult) adults++;
+                if (pop.cloak[i]) {
+                    cloaked++;
+                    if (adult) cloakedAdults++;
+                }
+                exposure += feel(world, i, world.tribeById.get(pop.tribe[i]));
+                if (pop.state[i] === STATE.WARMING) warming++;
+            }
+            cur.cloaked += pop.n ? cloaked / pop.n : 0;
+            cur.cloakedAdults += adults ? cloakedAdults / adults : 0;
+            cur.exposure += pop.n ? exposure / pop.n : 0;
+            cur.warming += pop.n ? warming / pop.n : 0;
+            let hides = 0;
+            let wood = 0;
+            for (const t of world.tribes) {
+                hides += t.hide;
+                wood += t.wood;
+            }
+            cur.hides += world.tribes.length ? hides / world.tribes.length : 0;
+            cur.wood += world.tribes.length ? wood / world.tribes.length : 0;
             for (const kind of KINDS) {
                 const pop = pops[kind];
                 const v = pop.n;
@@ -116,7 +170,7 @@ function seasonBook(world) {
                 s.grass = s.samples ? s.grass / s.samples : 0;
                 s.under = s.samples ? s.under / s.samples : 0;
                 s.low = s.samples ? s.low / s.samples : 0;
-                for (const key of ['store', 'perMember', 'carcasses', 'lying']) s[key] = s.samples ? s[key] / s.samples : 0;
+                for (const key of ['store', 'perMember', 'carcasses', 'lying', 'cloaked', 'cloakedAdults', 'exposure', 'warming', 'hides', 'wood']) s[key] = s.samples ? s[key] / s.samples : 0;
                 s.mean = {};
                 for (const kind of KINDS) {
                     s.mean[kind] = s.samples ? s.sum[kind] / s.samples : s.end[kind];
@@ -540,6 +594,34 @@ function seasonReport(sums, f) {
                 ` · carcasses ${f(avg(xs.map((x) => x.carcasses)), 1)} (max ${Math.max(...xs.map((x) => x.carcassMax))}, meat ${f(avg(xs.map((x) => x.lying)))})`);
         }
         if (yearly.length) console.log(`  year by year, a seed:\n    ${yearly.join('\n    ')}`);
+        // Survival (package 2): people through each kind of winter (lost:
+        // the share of those at its start no longer there at its end;
+        // froze, starved: deaths a winter); cloaks made and worn, by
+        // season; berries and fruit picked; the fires at night; the cold
+        // people feel; hides and wood a tribe.
+        const by = (key, d = 2, scale = 1) => SEASONS.map((n, s) => `${n.slice(0, 3)} ${f(scale * avg(pick.filter((x) => x.season === s).map((x) => x[key] ?? 0)), d)}`).join(' · ');
+        if (pick.some((x) => x.people0 !== undefined)) {
+            const winters = WINTERS.map((name, w) => {
+                const xs = all.filter((x) => x.season === 3 && x.winter === w && x.people0 > 0);
+                if (!xs.length) return null;
+                const lost = avg(xs.map((x) => 1 - x.end.human / x.people0));
+                const worst = Math.max(...xs.map((x) => 1 - x.end.human / x.people0));
+                const froze = avg(xs.map((x) => x.died.human.froze ?? 0));
+                const starved = avg(xs.map((x) => x.died.human.starvation ?? 0));
+                return `${name} ×${xs.length}: lost ${f(100 * lost, 1)}% (worst ${f(100 * worst, 1)}%), froze ${f(froze, 1)}, starved ${f(starved, 1)}`;
+            }).filter(Boolean);
+            console.log(`  survival: people through the winters ${winters.join(' · ')}`);
+            const nights = (x) => x.fireLit + x.fireOut || 1;
+            console.log(`            cloaks made a season ${by('cloaks', 1)} · worn (people) ${by('cloaked', 0, 100)}% · (adults) ${by('cloakedAdults', 0, 100)}%`);
+            console.log(`            berries and fruit picked a season (food) ${by('picked', 0)} · fires out at night ` +
+                SEASONS.map((n, s) => `${n.slice(0, 3)} ${f(100 * avg(pick.filter((x) => x.season === s).map((x) => x.fireOut / nights(x))), 1)}%`).join(' · '));
+            const fz = [0, 1, 2, 3, 4].map((k) => all.filter((x) => x.season === 3 && x.winter === 2 && x.frozeAt).reduce((s, x) => s + x.frozeAt[k], 0));
+            const hardN = all.filter((x) => x.season === 3 && x.winter === 2).length || 1;
+            const y1 = all.filter((x) => x.season === 3 && x.year === 1 && x.frozeAt);
+            console.log(`            the frozen, a hard winter: at camp ${f(fz[0] / hardN, 1)} (the fire out ${f(fz[3] / hardN, 1)}), away ${f(fz[1] / hardN, 1)}; cloaked ${f(fz[2] / hardN, 1)}, children ${f(fz[4] / hardN, 1)}` +
+                ` · first winters: froze ${y1.map((x) => x.died.human.froze ?? 0).join(', ') || '—'} (of ${y1.map((x) => x.people0).join(', ')})`);
+            console.log(`            exposure felt ${by('exposure', 3)} · warming by the fire ${by('warming', 1, 100)}% · hides a tribe ${by('hides', 0)} · wood a tribe ${by('wood', 0)}`);
+        }
     }
 }
 

@@ -10,13 +10,15 @@
 // items.js), its progress, and the kind it makes; wood or flint carried home,
 // and hides; and how many items each has made. The last, the seasons (stage
 // 4): a reserve of fat, laid on in the good months and drawn on in the lean
-// ones, and the step an animal last gave birth.
+// ones, and the step an animal last gave birth. And people's worn cloak (an
+// item id, 0: none; package 2).
 const FLOAT_FIELDS = [
     'x', 'y', 'heading', 'energy', 'age', 'lifespan', 'speedGene', 'senseGene', 'upkeep',
     'id', 'parent', 'lineage', 'generation', 'children', 'kills', 'focus',
     'tribe', 'carry', 'goal',
     'weapon', 'tool', 'gear', 'task', 'work', 'make', 'load', 'hides', 'crafted',
     'fat', 'bred',
+    'cloak',
 ];
 const INT_FIELDS = ['timer', 'state'];
 
@@ -35,6 +37,8 @@ export const STATE = {
     CHOPPING: 23, QUARRYING: 24, CRAFTING: 25,
     // the night (stage 4): asleep at camp
     SLEEPING: 26,
+    // the cold (stage 4, package 2): by the camp's fire, warming up
+    WARMING: 27,
 };
 export const STATE_LABEL = [
     'grazing', 'looking for grass', 'fleeing', 'looking for prey', 'chasing', 'eating', 'catching its breath', 'full, ambling',
@@ -44,6 +48,7 @@ export const STATE_LABEL = [
     'butchering',
     'chopping wood', 'quarrying flint', 'crafting',
     'sleeping',
+    'warming by the fire',
 ];
 
 // One species, stored as parallel arrays. An individual is an index.

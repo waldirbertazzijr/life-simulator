@@ -335,9 +335,10 @@ test("store adds to your tribe's store, and takes from it, never below nothing",
     assert.equal(tribe.wood, wood + 50);
     assert.match(r.text, new RegExp(`^the ${tribe.name}'s wood: ${wood} → ${wood + 50}$`));
     run(w, 'store FLINT 7');
+    const hide = tribe.hide; // (a starting camp's hides: items.initialHide)
     run(w, 'store hide 2.5');
     assert.equal(tribe.flint, 7);
-    assert.equal(tribe.hide, 2.5);
+    assert.equal(tribe.hide, hide + 2.5);
     const food = tribe.store;
     run(w, 'store food -40');
     assert.ok(Math.abs(tribe.store - (food - 40)) < 1e-9);

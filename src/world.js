@@ -32,6 +32,8 @@ import { Spears, stepSpears, carrion, CARRION, eatCarcass } from './spears.js';
 import { fighting } from './orders.js';
 import { initItems, bequeath, shielded, creditHolder, TASK } from './items.js';
 import { stepItems } from './tasks.js';
+import { clockCold } from './cold.js';
+import { placePlants, stepPlants } from './plants.js';
 import { spared, keepLife } from './admin.js';
 import { TAU } from './util.js';
 
@@ -118,9 +120,22 @@ export class World {
         // summit (null on a flat world): grazers look for lower, warmer
         // ground in winter.
         this.lowland = this.terrain ? this.heights() : null;
+        // The cold (cold.js, from clock()): the moment's, before the ground
+        // is known (warmth.js coldNow); and the snow underfoot, as the pace
+        // on each grass patch (null on a flat world), as of step `snowAt`,
+        // for the snow line `snowLine`.
+        this.chillAir = 0;
+        this.chillHigh = 0;
+        this.snowPace = null;
+        this.snowAt = -1;
+        this.snowLine = NaN;
 
         // The moment (calendar.js) and what follows from it: see clock().
         this.clock();
+        // Wild berry bushes and fruit trees (plants.js; null: none), and how
+        // much food people have picked from them.
+        this.plants = placePlants(this);
+        this.plantStats = { picked: 0 };
         this.seedPopulation(this.herbivores, params.herbivore);
         this.seedPopulation(this.carnivores, params.carnivore);
         if (params.human.enabled) seedTribes(this);
@@ -184,6 +199,7 @@ export class World {
         this.breedC = C.birthChance * seasonal(now, C.births[0], C.births[1], C.births[2], C.births[3], 0.1);
         const Hu = this.p.human;
         this.breedP = Hu.birthChance * seasonal(now, Hu.births[0], Hu.births[1], Hu.births[2], Hu.births[3], 0.1);
+        clockCold(this); // the cold, and the snow underfoot (cold.js)
     }
 
     // What individual i of `pop` is worth to whoever eats it: its stomach, its
@@ -250,6 +266,7 @@ export class World {
         this.events.push({
             type: 'death', kind, id: pop.id[i], x: pop.x[i], y: pop.y[i], heading: pop.heading[i], cause, by, time: this.time,
             tribe: pop === this.humans ? pop.tribe[i] : 0, child: pop.age[i] < this.p[kind].maturity,
+            cloak: pop === this.humans ? pop.cloak[i] : 0, // (the cloak a person wore: an item id, 0 none)
         });
         if (this.itemsOn && pop === this.humans) {
             // What it held is handed down or left lying (items.js); and a death
@@ -356,6 +373,7 @@ export class World {
         if (this.humans.n) stepHumans(this);
         if (this.spears.n) stepSpears(this);            // the player's, in flight (spears.js)
         this.grass.regrow(this.regrowth); // (grass.regrowth, by the season: clock)
+        if (this.plants !== null) stepPlants(this);     // berries and fruit ripen and fall (plants.js)
         this.herbivores.compact();
         this.carnivores.compact();
         this.humans.compact();
@@ -396,6 +414,7 @@ export class World {
         // The season and the hour.
         const cold = this.cold;
         const biteMax = P.bite * (1 - P.snowBite * cold);
+        const snow = this.snowPace; // (the pace in the snow on each patch: cold.js; null on a flat world)
         const fatCap = this.fatCap;
         const drawAt = P.draw * P.maxEnergy;
         // Births, the more readily the better the pasture: the land's grass
@@ -547,13 +566,15 @@ export class World {
             }
 
             if (v > 0) {
-                let nx = x[i] + dx * v;
-                let ny = y[i] + dy * v;
+                // (Deep snow slows the going, not the effort: cold.js snowPace.)
+                const sv = snow === null ? v : v * snow[gi >= 0 ? gi : grass.index(x[i], y[i])];
+                let nx = x[i] + dx * sv;
+                let ny = y[i] + dy * sv;
                 if (nx < 0) nx += W; else if (nx >= W) nx -= W;
                 if (ny < 0) ny += H; else if (ny >= H) ny -= H;
                 if (terrain !== null && terrain.blocked(nx, ny)) {
                     // Water or a cliff ahead: veer along it (or turn back if boxed in).
-                    if (terrain.move(x[i], y[i], dx, dy, v, terrain.side(dx, dy, heading[i], rng))) h = Math.atan2(terrain.uy, terrain.ux);
+                    if (terrain.move(x[i], y[i], dx, dy, sv, terrain.side(dx, dy, heading[i], rng))) h = Math.atan2(terrain.uy, terrain.ux);
                     else h += Math.PI;
                     nx = terrain.x;
                     ny = terrain.y;
@@ -628,6 +649,8 @@ export class World {
         const roam = 1 + (night ? P.roamNight : 0) + P.roamWinter * this.cold;
         const drawAt = P.draw * P.maxEnergy;
         const breed = this.breedC;
+        const snow = this.snowPace; // (the pace in the snow on each patch: cold.js; null on a flat world)
+        const grass = this.grass;
         // (Counting rivals and prey only as far as the answer needs: more
         // than `rivals`, at least `prey`.)
         const tooMany = Math.floor(P.rivals) + 1;
@@ -640,7 +663,9 @@ export class World {
             }
             const sg = speedGene[i];
             const vg = senseGene[i];
-            const top = P.speed * sg;
+            // (Deep snow slows the going, not the effort: cold.js snowPace.)
+            const s = snow === null ? 1 : snow[grass.index(x[i], y[i])];
+            const top = P.speed * sg * s;
             let e = energy[i];
             let f = fat[i];
             let h = heading[i];
@@ -759,7 +784,8 @@ export class World {
             }
             heading[i] = h;
 
-            e -= P.baseCost * upkeep[i] + P.moveCost * v * v;
+            const w = s === 1 ? v : v / s; // (the effort: the pace it would have had on bare ground)
+            e -= P.baseCost * upkeep[i] + P.moveCost * w * w;
             // What a full stomach cannot hold goes to fat (as much as it can
             // carry; the rest is wasted); hungry, it draws on it.
             if (e > P.maxEnergy) {
